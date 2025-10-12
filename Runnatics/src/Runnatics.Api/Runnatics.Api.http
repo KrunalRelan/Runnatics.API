@@ -1,0 +1,6 @@
+@Runnatics.Api_HostAddress = http://localhost:5286
+
+GET {{Runnatics.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -4,16 +4,16 @@ using Runnatics.Models.Client.Responses;
 
 namespace Runnatics.Services.Interface
 {
-    public interface IAuthenticationService
+    public interface IAuthenticationService : ISimpleServiceBase
     {
-        Task<ResponseBase<AuthenticationResponse>> RegisterOrganizationAsync(RegisterOrganizationRequest request);
-        Task<ResponseBase<AuthenticationResponse>> LoginAsync(LoginRequest request);
-        Task<ResponseBase<InvitationResponse>> InviteUserAsync(InviteUserRequest request, Guid organizationId, Guid invitedBy);
-        Task<ResponseBase<AuthenticationResponse>> AcceptInvitationAsync(AcceptInvitationRequest request);
-        Task<ResponseBase<string>> ChangePasswordAsync(Guid userId, ChangePasswordRequest request);
-        Task<ResponseBase<string>> ForgotPasswordAsync(ForgotPasswordRequest request);
-        Task<ResponseBase<string>> ResetPasswordAsync(ResetPasswordRequest request);
-        Task<ResponseBase<string>> RevokeUserAccessAsync(Guid userId, Guid revokedBy);
-        Task<ResponseBase<string>> UpdateUserRoleAsync(Guid userId, string newRole, Guid updatedBy);
+        Task<AuthenticationResponse>RegisterOrganizationAsync(RegisterOrganizationRequest request);
+        Task<AuthenticationResponse>LoginAsync(LoginRequest request);
+        Task<InvitationResponse>InviteUserAsync(InviteUserRequest request, Guid organizationId, Guid invitedBy);
+        Task<AuthenticationResponse>AcceptInvitationAsync(AcceptInvitationRequest request);
+        Task<string>ChangePasswordAsync(Guid userId, ChangePasswordRequest request);
+        Task<string>ForgotPasswordAsync(ForgotPasswordRequest request);
+        Task<string>ResetPasswordAsync(ResetPasswordRequest request);
+        Task<string>RevokeUserAccessAsync(Guid userId, Guid revokedBy);
+        Task<string>UpdateUserRoleAsync(Guid userId, string newRole, Guid updatedBy);
     }
 }

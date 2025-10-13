@@ -8,6 +8,11 @@ namespace Runnatics.Data.EF.Config
     {
         public virtual void Configure(EntityTypeBuilder<User> builder)
         {
+            builder.ToTable("Users");
+            // Properties
+            builder.Property(e => e.Id)
+                .IsRequired();
+
             builder.Property(e => e.OrganizationId)
                 .IsRequired();
 

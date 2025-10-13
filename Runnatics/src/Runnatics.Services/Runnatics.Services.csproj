@@ -5,6 +5,10 @@
     <ProjectReference Include="..\Runnatics.Repositories.Interface\Runnatics.Repositories.Interface.csproj" />
     <ProjectReference Include="..\Runnatics.Models.Data\Runnatics.Models.Data.csproj" />
     <ProjectReference Include="..\Runnatics.Models.Client\Runnatics.Models.Client.csproj" />
+    <ProjectReference Include="..\Runnatics.Data.EF\Runnatics.Data.EF.csproj" />
+    <ProjectReference Include="..\Runnatics.Common\Runnatics.Common.csproj" />
+    <ProjectReference Include="..\Runnatics.UnitOfWork\Runnatics.UnitOfWork.csproj" />
+    
   </ItemGroup>
 
   <ItemGroup>

@@ -5,6 +5,9 @@ namespace Runnatics.Models.Data.Entities
 {
     public class User
     {
+        [Key]
+        public Guid Id { get; set; }
+        
         [Required]
         public Guid OrganizationId { get; set; }
 

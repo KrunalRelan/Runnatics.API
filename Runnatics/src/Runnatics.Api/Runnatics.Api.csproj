@@ -23,6 +23,7 @@
     <ProjectReference Include="..\Runnatics.Services\Runnatics.Services.csproj" />
     <ProjectReference Include="..\Runnatics.Services.Interface\Runnatics.Services.Interface.csproj" />
     <ProjectReference Include="..\Runnatics.Data.EF\Runnatics.Data.EF.csproj" />
+    <ProjectReference Include="..\Runnatics.Repositories.EF\Runnatics.Repositories.EF.csproj" />
     <ProjectReference Include="..\Runnatics.Infrastructure\Runnatics.Infrastructure.csproj" />
     <ProjectReference Include="..\Runnatics.Infrastructure.Interface\Runnatics.Infrastructure.Interface.csproj" />
     <ProjectReference Include="..\Runnatics.Models.Client\Runnatics.Models.Client.csproj" />

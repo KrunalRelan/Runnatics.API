@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Runnatics.Data.EF;
-// using Runnatics.Repositories.EF;
+using Runnatics.Repositories.EF;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services;
 using Runnatics.Services.Interface;
@@ -116,15 +116,15 @@ builder.Services.AddCors(options =>
 });
 
 // Register repositories
-// builder.Services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
-// builder.Services.AddScoped(typeof(IUnitOfWork<>), typeof(UnitOfWork<>));
-// builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactory<>));
+builder.Services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
+builder.Services.AddScoped(typeof(IUnitOfWork<>), typeof(UnitOfWork<>));
+builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactory<>));
 
 // Register services
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
-// Add AutoMapper if you're using it
-// builder.Services.AddAutoMapper(typeof(Program));
+// Add AutoMapper
+builder.Services.AddAutoMapper(typeof(Program));
 
 // Add logging
 builder.Services.AddLogging(logging =>

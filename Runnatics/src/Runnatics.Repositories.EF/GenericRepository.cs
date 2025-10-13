@@ -27,24 +27,25 @@ namespace Runnatics.Repositories.EF
             return entities;
         }
 
-        public async Task<T> DeleteAsync(int id)
+        public async Task<T> DeleteAsync(Guid id)
         {
             var entity = await _dbSet.FindAsync(id);
             if (entity != null)
             {
                 _dbSet.Remove(entity);
+                return entity;
             }
-            return entity;
+            throw new InvalidOperationException($"Entity with id {id} not found.");
         }
 
-        public async Task DeleteRangeAsync(List<int> ids)
+        public async Task DeleteRangeAsync(List<Guid> ids)
         {
             var keyProperty = context.Model.FindEntityType(typeof(T))?.FindPrimaryKey()?.Properties.FirstOrDefault();
             if (keyProperty == null)
                 throw new InvalidOperationException("No primary key defined for entity.");
 
             var entities = await _dbSet.Where(e =>
-                ids.Contains((int)typeof(T).GetProperty(keyProperty.Name)!.GetValue(e)!)).ToListAsync();
+                ids.Contains((Guid)typeof(T).GetProperty(keyProperty.Name)!.GetValue(e)!)).ToListAsync();
             _dbSet.RemoveRange(entities);
         }
 
@@ -58,9 +59,9 @@ namespace Runnatics.Repositories.EF
             return await _dbSet.FirstOrDefaultAsync(filter);
         }
 
-        public async Task<T?> GetByIdAsync(int id)
+        public async Task<T> GetByIdAsync(Guid id)
         {
-            return await _dbSet.FindAsync(id);
+            return await _dbSet.FindAsync(id) ?? throw new InvalidOperationException($"Entity with id {id} not found.");
         }
 
         public IQueryable<T> GetQuery(Expression<Func<T, bool>>? filter = null,
@@ -88,7 +89,7 @@ namespace Runnatics.Repositories.EF
             return query;
         }
 
-        public async Task<PagingList<T>> SearchAsync(Expression<Func<T, bool>> filter = null,
+        public async Task<PagingList<T>> SearchAsync(Expression<Func<T, bool>>? filter = null,
                                                int? pageSize = null,
                                                int? pageNumber = 1,
                                                SortDirection sortDirection = SortDirection.Ascending,

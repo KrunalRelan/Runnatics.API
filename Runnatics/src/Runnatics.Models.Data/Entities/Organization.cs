@@ -67,9 +67,7 @@ namespace Runnatics.Models.Data.Entities
         [StringLength(100)]
         public string? City { get; set; }
 
-        // Status
-        public bool IsActive { get; set; } = true;
-
+             
         public bool IsVerified { get; set; } = false;
 
         [Required]
@@ -99,7 +97,7 @@ namespace Runnatics.Models.Data.Entities
 
         // Computed Properties (not mapped to database)
         [NotMapped]
-        public int TotalUsers => Users?.Count(u => u.IsActive && !u.AuditProperties.IsDeleted) ?? 0;
+        public int TotalUsers => Users?.Count(u => u.AuditProperties.IsActive && !u.AuditProperties.IsDeleted) ?? 0;
 
         [NotMapped]
         public int ActiveEvents => Events?.Count(e => e.AuditProperties.IsActive && !e.AuditProperties.IsDeleted) ?? 0;

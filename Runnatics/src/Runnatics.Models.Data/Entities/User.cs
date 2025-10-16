@@ -28,8 +28,6 @@ namespace Runnatics.Models.Data.Entities
         [MaxLength(50)]
         public string Role { get; set; } = string.Empty; // Admin, Ops, Support, ReadOnly
 
-        public bool IsActive { get; set; } = true;
-
         public DateTime? LastLoginAt { get; set; }
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
         // Navigation Properties

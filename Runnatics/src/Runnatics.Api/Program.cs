@@ -67,11 +67,6 @@ builder.Services.AddDbContextPool<RaceSyncDbContext>(options =>
 {
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"), sqlOptions =>
     {
-        sqlOptions.EnableRetryOnFailure(
-            maxRetryCount: 5,
-            maxRetryDelay: TimeSpan.FromSeconds(30),
-            errorNumbersToAdd: null);
-        
         // Command timeout for long-running queries
         sqlOptions.CommandTimeout(30);
     });

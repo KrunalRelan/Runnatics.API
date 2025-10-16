@@ -45,7 +45,7 @@ namespace Runnatics.Services
                                              .FirstOrDefaultAsync(); // Assuming InvitationToken is the User ID for simplicity
 
 
-                if (user == null || user.IsActive)
+                if (user == null || user.AuditProperties.IsActive)
                 {
                     this.ErrorMessage = "Invalid or expired invitation";
                     _logger.LogError("Invalid or expired invitation for token: {Token}", request.InvitationToken);
@@ -53,7 +53,7 @@ namespace Runnatics.Services
                 }
 
                 user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
-                user.IsActive = true;
+                user.AuditProperties.IsActive = true;
                 user.AuditProperties.UpdatedBy = user.Id; // Assuming user accepts their own invitation
                 user.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 await _repository.SaveChangesAsync();
@@ -117,7 +117,7 @@ namespace Runnatics.Services
             {
                 // Find user by email
                 var user = _repository.GetRepository<User>()
-                                            .GetQuery(u => u.Email == request.Email && u.IsActive)
+                                            .GetQuery(u => u.Email == request.Email && u.AuditProperties.IsActive)
                                             .FirstOrDefault();
 
                 if (user == null)
@@ -132,7 +132,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                if (!user.IsActive || user.Organization == null || !user.Organization.AuditProperties.IsDeleted)
+                if (!user.AuditProperties.IsActive || user.Organization == null || !user.Organization.AuditProperties.IsDeleted)
                 {
                     _logger.LogError("User account is inactive for email: {Email}", request.Email);
                     return null;
@@ -222,10 +222,8 @@ namespace Runnatics.Services
                 {
                     Id = Guid.NewGuid(),
                     Name = request.Name,
+                    Slug = GenerateSlug(request.Domain), // Generate slug from domain
                     Domain = request.Domain,
-                    Email = request.Email,
-                    PhoneNumber = request.PhoneNumber,
-                    //Website = request.Website,
                     SubscriptionPlan = request.SubscriptionPlan ?? "starter",
                     AuditProperties = new AuditProperties
                     {
@@ -248,7 +246,6 @@ namespace Runnatics.Services
                     Email = request.AdminEmail,
                     Role = UserRole.Admin.ToString(),
                     PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.AdminPassword),
-                    IsActive = true,
                     AuditProperties = new AuditProperties
                     {
                         CreatedDate = DateTime.UtcNow,
@@ -293,7 +290,7 @@ namespace Runnatics.Services
             try
             {
                 var user = _repository.GetRepository<Models.Data.Entities.User>()
-                                        .GetQuery(u => u.Id == userId && u.IsActive)
+                                        .GetQuery(u => u.Id == userId && u.AuditProperties.IsActive)
                                         .FirstOrDefault();
 
                 if (user == null)
@@ -303,7 +300,7 @@ namespace Runnatics.Services
                     return this.ErrorMessage;
                 }
 
-                user.IsActive = false;
+                user.AuditProperties.IsActive = false;
                 user.AuditProperties.UpdatedBy = revokedBy;
                 user.AuditProperties.UpdatedDate = DateTime.UtcNow;
 
@@ -329,7 +326,7 @@ namespace Runnatics.Services
                     return await Task.FromResult(this.ErrorMessage);
                 }
                 var user = _repository.GetRepository<Models.Data.Entities.User>()
-                                        .GetQuery(u => u.Id == userId && u.IsActive)
+                                        .GetQuery(u => u.Id == userId && u.AuditProperties.IsActive)
                                         .FirstOrDefault();
 
                 if (user == null)
@@ -414,12 +411,17 @@ namespace Runnatics.Services
             await repo.AddAsync(session);
             await _repository.SaveChangesAsync();
         }
-        private static string GenerateSlug(string name)
+        private static string GenerateSlug(string input)
         {
-            return name.ToLowerInvariant()
+            if (string.IsNullOrWhiteSpace(input))
+                return string.Empty;
+
+            return input.ToLowerInvariant()
                 .Replace(" ", "-")
+                .Replace("_", "-")
                 .Replace("'", "")
                 .Replace("\"", "")
+                .Replace(".", "-")
                 .Trim('-');
         }
 

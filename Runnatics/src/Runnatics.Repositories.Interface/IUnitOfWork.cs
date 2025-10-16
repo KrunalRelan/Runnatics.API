@@ -1,9 +1,22 @@
 using Microsoft.EntityFrameworkCore;
+
 namespace Runnatics.Repositories.Interface
 {
-    public interface IUnitOfWork<C> where C : DbContext
+    public interface IUnitOfWork<C> : IDisposable where C : DbContext
     {
-        Task SaveChangesAsync();
+        // Repository access
         IGenericRepository<T> GetRepository<T>() where T : class;
+        
+        // Unit of Work methods
+        Task<int> SaveChangesAsync();
+        
+        // Transaction management
+        Task BeginTransactionAsync();
+        Task CommitTransactionAsync();
+        Task RollbackTransactionAsync();
+        
+        // Multi-tenant context
+        void SetTenantId(Guid organizationId);
+        Guid? GetCurrentTenantId();
     }
 }

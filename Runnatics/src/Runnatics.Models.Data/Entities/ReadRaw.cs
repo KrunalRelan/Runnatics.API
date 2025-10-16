@@ -31,6 +31,6 @@ namespace Runnatics.Models.Data.Entities
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;
         public virtual ReaderDevice ReaderDevice { get; set; } = null!;
-        public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = new List<ReadNormalized>();
+        public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = [];
     }
 }

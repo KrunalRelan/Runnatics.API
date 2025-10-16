@@ -7,6 +7,8 @@ namespace Runnatics.Models.Data.Entities
 
     public class SplitTime
     {
+        [Key]
+        public Guid Id { get; set; }
         public Guid EventId { get; set; }
         public Guid ParticipantId { get; set; }
         public Guid CheckpointId { get; set; }

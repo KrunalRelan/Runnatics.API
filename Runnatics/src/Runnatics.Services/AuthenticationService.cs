@@ -116,7 +116,7 @@ namespace Runnatics.Services
             try
             {
                 // Find user by email
-                var user = _repository.GetRepository<Models.Data.Entities.User>()
+                var user = _repository.GetRepository<User>()
                                             .GetQuery(u => u.Email == request.Email && u.IsActive)
                                             .FirstOrDefault();
 
@@ -155,6 +155,7 @@ namespace Runnatics.Services
                 user.LastLoginAt = DateTime.UtcNow;
 
                 await _repository.SaveChangesAsync();
+
                 var token = GenerateJwtToken(user, organization);
 
                 var refreshToken = GenerateRefreshToken();
@@ -179,9 +180,107 @@ namespace Runnatics.Services
             }
         }
 
-        public Task<AuthenticationResponse> RegisterOrganizationAsync(RegisterOrganizationRequest request)
+        public async Task<AuthenticationResponse> RegisterOrganizationAsync(RegisterOrganizationRequest request)
         {
-            throw new NotImplementedException();
+            try
+            {
+                var organizationRepo = _repository.GetRepository<Organization>();
+                var userRepo = _repository.GetRepository<User>();
+
+                var existingOrganization = organizationRepo
+                                    .GetQuery(o => o.Name == request.Name)
+                                    .FirstOrDefault();
+
+                var existingUser = userRepo
+                            .GetQuery(u => u.Email == request.AdminEmail)
+                            .FirstOrDefault();
+                if (existingUser != null)
+                {
+                    this.ErrorMessage = "User with the same email already exists.";
+                    return await Task.FromResult<AuthenticationResponse>(null);
+                }
+
+                await _repository.BeginTransactionAsync();
+
+                if (existingOrganization != null)
+                {
+                    this.ErrorMessage = "Organization with the same name already exists.";
+                    return await Task.FromResult<AuthenticationResponse>(null);
+                }
+                existingOrganization = organizationRepo
+                                    .GetQuery(o => o.Domain == request.Domain)
+                                    .FirstOrDefault();
+
+                // Check if organization with the same name or domain already exists
+                if (existingOrganization != null)
+                {
+                    this.ErrorMessage = "Organization with the same domain already exists.";
+                    return await Task.FromResult<AuthenticationResponse>(null);
+                }
+
+                var organization = new Organization
+                {
+                    Id = Guid.NewGuid(),
+                    Name = request.Name,
+                    Domain = request.Domain,
+                    Email = request.Email,
+                    PhoneNumber = request.PhoneNumber,
+                    Website = request.Website,
+                    SubscriptionPlan = request.SubscriptionPlan ?? "starter",
+                    AuditProperties = new AuditProperties
+                    {
+                        CreatedDate = DateTime.UtcNow,
+                        CreatedBy = request.CreatedBy,
+                        IsActive = true,
+                        IsDeleted = false
+                    }
+                };
+
+                await organizationRepo.AddAsync(organization);
+
+                // Create admin user
+                var adminUser = new User
+                {
+                    Id = Guid.NewGuid(),
+                    OrganizationId = organization.Id,
+                    FirstName = request.AdminFirstName,
+                    LastName = request.AdminLastName,
+                    Email = request.AdminEmail,
+                    Role = UserRole.Admin.ToString(),
+                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.AdminPassword),
+                    IsActive = true,
+                    AuditProperties = new AuditProperties
+                    {
+                        CreatedDate = DateTime.UtcNow,
+                        CreatedBy = request.CreatedBy,
+                        IsActive = true,
+                        IsDeleted = false
+                    }
+                };
+                await userRepo.AddAsync(adminUser);
+                await _repository.SaveChangesAsync();
+                await _repository.CommitTransactionAsync();
+                var token = GenerateJwtToken(adminUser, organization);
+                var refreshToken = GenerateRefreshToken();
+                await SaveRefreshTokenAsync(adminUser.Id, refreshToken, false);
+                var response = new AuthenticationResponse
+                {
+                    Token = token,
+                    RefreshToken = refreshToken,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(30), // Example expiration time
+                    User = _mapper.Map<UserResponse>(adminUser),
+                    Organization = _mapper.Map<OrganizationResponse>(organization),
+                };
+                return response;
+
+            }
+            catch (System.Exception ex)
+            {
+               _logger.LogError(ex, "Error during organization registration for request: {Request}", request);
+               this.ErrorMessage = "Error during organization registration.";
+               await _repository.RollbackTransactionAsync();
+               return await Task.FromResult<AuthenticationResponse>(null);
+            }
         }
 
         public Task<string> ResetPasswordAsync(ResetPasswordRequest request)

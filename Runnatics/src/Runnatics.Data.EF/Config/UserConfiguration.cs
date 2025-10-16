@@ -53,6 +53,29 @@ namespace Runnatics.Data.EF.Config
                 .WithOne(us => us.User)
                 .HasForeignKey(us => us.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure AuditProperties as owned entity
+            builder.OwnsOne(o => o.AuditProperties, ap =>
+            {
+                ap.Property(p => p.CreatedBy)
+                    .IsRequired();
+
+                ap.Property(p => p.CreatedDate)
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+
+                ap.Property(p => p.UpdatedBy);
+
+                ap.Property(p => p.UpdatedDate);
+
+                ap.Property(p => p.IsDeleted)
+                    .HasDefaultValue(false)
+                    .IsRequired();
+
+                ap.Property(p => p.IsActive)
+                    .HasDefaultValue(true)
+                    .IsRequired();
+            });
         }
     }
 }

@@ -79,8 +79,30 @@ namespace Runnatics.Data.EF.Config
             builder.HasIndex(e => e.EventId);
             
             builder.HasIndex(e => e.CheckpointId);
-            
+
             builder.HasIndex(e => e.AssignedAt);
+
+            builder.OwnsOne(o => o.AuditProperties, ap =>
+            {
+                ap.Property(p => p.CreatedBy)
+                    .IsRequired();
+
+                ap.Property(p => p.CreatedDate)
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+
+                ap.Property(p => p.UpdatedBy);
+
+                ap.Property(p => p.UpdatedDate);
+
+                ap.Property(p => p.IsDeleted)
+                    .HasDefaultValue(false)
+                    .IsRequired();
+
+                ap.Property(p => p.IsActive)
+                    .HasDefaultValue(true)
+                    .IsRequired();
+            });
         }
     }
 }

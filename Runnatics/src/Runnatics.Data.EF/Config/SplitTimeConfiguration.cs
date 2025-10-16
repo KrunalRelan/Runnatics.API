@@ -83,8 +83,30 @@ namespace Runnatics.Data.EF.Config
             builder.HasIndex(e => e.SplitTimeMs);
             
             builder.HasIndex(e => e.Rank);
-            
+
             builder.HasIndex(e => e.ReadNormalizedId);
+            
+            builder.OwnsOne(o => o.AuditProperties, ap =>
+            {
+                ap.Property(p => p.CreatedBy)
+                    .IsRequired();
+
+                ap.Property(p => p.CreatedDate)
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+
+                ap.Property(p => p.UpdatedBy);
+
+                ap.Property(p => p.UpdatedDate);
+
+                ap.Property(p => p.IsDeleted)
+                    .HasDefaultValue(false)
+                    .IsRequired();
+
+                ap.Property(p => p.IsActive)
+                    .HasDefaultValue(true)
+                    .IsRequired();
+            });
         }
     }
 }

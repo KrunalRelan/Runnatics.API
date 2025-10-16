@@ -225,7 +225,7 @@ namespace Runnatics.Services
                     Domain = request.Domain,
                     Email = request.Email,
                     PhoneNumber = request.PhoneNumber,
-                    Website = request.Website,
+                    //Website = request.Website,
                     SubscriptionPlan = request.SubscriptionPlan ?? "starter",
                     AuditProperties = new AuditProperties
                     {
@@ -277,8 +277,8 @@ namespace Runnatics.Services
             catch (System.Exception ex)
             {
                _logger.LogError(ex, "Error during organization registration for request: {Request}", request);
-               this.ErrorMessage = "Error during organization registration.";
-               await _repository.RollbackTransactionAsync();
+                this.ErrorMessage = "Error during organization registration.";
+               
                return await Task.FromResult<AuthenticationResponse>(null);
             }
         }

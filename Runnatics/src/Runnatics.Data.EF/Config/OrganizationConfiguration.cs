@@ -59,6 +59,28 @@ namespace Runnatics.Data.EF.Config
                 .WithOne(ev => ev.Organization)
                 .HasForeignKey(ev => ev.OrganizationId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+           builder.OwnsOne(o => o.AuditProperties, ap =>
+           {
+               ap.Property(p => p.CreatedBy)
+                   .IsRequired();
+
+               ap.Property(p => p.CreatedDate)
+                   .HasDefaultValueSql("GETUTCDATE()")
+                   .IsRequired();
+
+               ap.Property(p => p.UpdatedBy);
+
+               ap.Property(p => p.UpdatedDate);
+
+               ap.Property(p => p.IsDeleted)
+                   .HasDefaultValue(false)
+                   .IsRequired();
+
+               ap.Property(p => p.IsActive)
+                   .HasDefaultValue(true)
+                   .IsRequired();
+           });
         }
     }
 }

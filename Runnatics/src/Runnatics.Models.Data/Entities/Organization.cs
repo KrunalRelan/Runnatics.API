@@ -14,6 +14,10 @@ namespace Runnatics.Models.Data.Entities
         public string Name { get; set; }
 
         [Required]
+        [StringLength(100)]
+        public string Slug { get; set; }
+
+        [Required]
         [StringLength(30)]
         public string Domain { get; set; }
 
@@ -24,17 +28,20 @@ namespace Runnatics.Models.Data.Entities
 
         [Phone]
         [StringLength(20)]
-        public string PhoneNumber { get; set; }
+        public string? PhoneNumber { get; set; }
 
         [Url]
         [StringLength(255)]
-        public string Website { get; set; }
+        public string? Website { get; set; }
 
         [StringLength(255)]
-        public string LogoUrl { get; set; }
+        public string? LogoUrl { get; set; }
 
         [StringLength(500)]
-        public string Description { get; set; }
+        public string? Description { get; set; }
+
+        // JSON settings
+        public string? Settings { get; set; }
 
         // Subscription Information
         [Required]
@@ -55,15 +62,19 @@ namespace Runnatics.Models.Data.Entities
         public string Currency { get; set; } = "USD";
 
         [StringLength(100)]
-        public string Country { get; set; }
+        public string? Country { get; set; }
 
         [StringLength(100)]
-        public string City { get; set; }
+        public string? City { get; set; }
 
         // Status
         public bool IsActive { get; set; } = true;
 
         public bool IsVerified { get; set; } = false;
+
+        [Required]
+        [StringLength(20)]
+        public string Status { get; set; } = "Active";
 
         // Limits based on subscription
         public int MaxEvents { get; set; } = 5;
@@ -81,6 +92,10 @@ namespace Runnatics.Models.Data.Entities
         public virtual ICollection<Event> Events { get; set; } = new List<Event>();
 
         public virtual ICollection<UserInvitation> UserInvitations { get; set; } = new List<UserInvitation>();
+
+        public virtual ICollection<Participant> Participants { get; set; } = new List<Participant>();
+
+        public virtual ICollection<Chip> Chips { get; set; } = new List<Chip>();
 
         // Computed Properties (not mapped to database)
         [NotMapped]

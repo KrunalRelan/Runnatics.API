@@ -8,8 +8,10 @@ namespace Runnatics.Data.EF.Config
     {
         public virtual void Configure(EntityTypeBuilder<Notification> builder)
         {
-            // Using AuditProperties.CreatedBy as the primary key since there's no explicit Id
-            builder.HasKey(e => new { e.AuditProperties.CreatedBy, e.AuditProperties.CreatedDate, e.Type, e.Recipient });
+            builder.ToTable("Notifications");
+            
+            // Use the proper Id field as primary key
+            builder.HasKey(e => e.Id);
 
             builder.Property(e => e.EventId);
 
@@ -86,8 +88,30 @@ namespace Runnatics.Data.EF.Config
             builder.HasIndex(e => e.SentAt);
             
             builder.HasIndex(e => e.EventId);
-            
+
             builder.HasIndex(e => e.Type);
+
+            builder.OwnsOne(o => o.AuditProperties, ap =>
+            {
+                ap.Property(p => p.CreatedBy)
+                    .IsRequired();
+
+                ap.Property(p => p.CreatedDate)
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+
+                ap.Property(p => p.UpdatedBy);
+
+                ap.Property(p => p.UpdatedDate);
+
+                ap.Property(p => p.IsDeleted)
+                    .HasDefaultValue(false)
+                    .IsRequired();
+
+                ap.Property(p => p.IsActive)
+                    .HasDefaultValue(true)
+                    .IsRequired();
+            });
         }
     }
 }

@@ -50,6 +50,28 @@ namespace Runnatics.Data.EF.Config
                 .WithMany(ev => ev.Checkpoints)
                 .HasForeignKey(e => e.EventId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            builder.OwnsOne(o => o.AuditProperties, ap =>
+            {
+                ap.Property(p => p.CreatedBy)
+                    .IsRequired();
+
+                ap.Property(p => p.CreatedDate)
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+
+                ap.Property(p => p.UpdatedBy);
+
+                ap.Property(p => p.UpdatedDate);
+
+                ap.Property(p => p.IsDeleted)
+                    .HasDefaultValue(false)
+                    .IsRequired();
+
+                ap.Property(p => p.IsActive)
+                    .HasDefaultValue(true)
+                    .IsRequired();
+            });
         }
     }
 }

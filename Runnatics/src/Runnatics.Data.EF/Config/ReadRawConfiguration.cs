@@ -54,10 +54,32 @@ namespace Runnatics.Data.EF.Config
                 .HasForeignKey(e => e.EventId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            builder.HasOne(e => e.ReaderDevice)
-                .WithMany(rd => rd.ReadRaws)
-                .HasForeignKey(e => e.ReaderDeviceId)
-                .OnDelete(DeleteBehavior.Restrict);
+                        builder.HasOne(e => e.ReaderDevice)
+                            .WithMany(rd => rd.ReadRaws)
+                            .HasForeignKey(e => e.ReaderDeviceId)
+                            .OnDelete(DeleteBehavior.Restrict);
+
+                builder.OwnsOne(o => o.AuditProperties, ap =>
+                {
+                        ap.Property(p => p.CreatedBy)
+                        .IsRequired();
+
+                                ap.Property(p => p.CreatedDate)
+                        .HasDefaultValueSql("GETUTCDATE()")
+                        .IsRequired();
+
+                                ap.Property(p => p.UpdatedBy);
+
+                                ap.Property(p => p.UpdatedDate);
+
+                                ap.Property(p => p.IsDeleted)
+                        .HasDefaultValue(false)
+                        .IsRequired();
+
+                                ap.Property(p => p.IsActive)
+                        .HasDefaultValue(true)
+                        .IsRequired();
+                });
         }
     }
 }

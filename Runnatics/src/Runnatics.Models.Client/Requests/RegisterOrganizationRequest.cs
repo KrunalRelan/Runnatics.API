@@ -21,8 +21,8 @@ namespace Runnatics.Models.Client.Requests
         [Phone(ErrorMessage = "Invalid phone number format")]
         public string PhoneNumber { get; set; }
 
-        [Url(ErrorMessage = "Invalid website URL format")]
-        public string Website { get; set; }
+        // [Url(ErrorMessage = "Invalid website URL format")]
+        // public string Website { get; set; }
 
         // Admin User Details
         [Required(ErrorMessage = "Admin first name is required")]
@@ -39,7 +39,7 @@ namespace Runnatics.Models.Client.Requests
 
         [Required(ErrorMessage = "Password is required")]
         [StringLength(100, MinimumLength = 8, ErrorMessage = "Password must be between 8-100 characters")]
-        [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]",
+        [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$",
             ErrorMessage = "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character")]
         public string AdminPassword { get; set; }
 

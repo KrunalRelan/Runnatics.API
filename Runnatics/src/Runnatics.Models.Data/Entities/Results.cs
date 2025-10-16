@@ -6,6 +6,8 @@ namespace Runnatics.Models.Data.Entities
 
     public class Results
     {
+        [Key]
+        public Guid Id { get; set; } = Guid.NewGuid();
         public Guid EventId { get; set; }
         public Guid ParticipantId { get; set; }
         public Guid RaceCategoryId { get; set; }

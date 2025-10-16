@@ -5,6 +5,9 @@ namespace Runnatics.Models.Data.Entities
 {
     public class Checkpoint
     {
+        [Key]
+        public Guid Id { get; set; } = Guid.NewGuid();
+        
         [Required]
         public Guid EventId { get; set; }
 

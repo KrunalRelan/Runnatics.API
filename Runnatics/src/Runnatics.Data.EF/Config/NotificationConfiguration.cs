@@ -9,9 +9,11 @@ namespace Runnatics.Data.EF.Config
         public virtual void Configure(EntityTypeBuilder<Notification> builder)
         {
             builder.ToTable("Notifications");
-            
-            // Use the proper Id field as primary key
+
             builder.HasKey(e => e.Id);
+        
+            builder.Property(e => e.Id)
+             .ValueGeneratedOnAdd();
 
             builder.Property(e => e.EventId);
 

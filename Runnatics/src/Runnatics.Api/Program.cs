@@ -62,13 +62,26 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Add Entity Framework
-builder.Services.AddDbContext<RaceSyncDbContext>(options =>
+// Add Entity Framework with connection pooling optimizations
+builder.Services.AddDbContextPool<RaceSyncDbContext>(options =>
 {
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"), sqlOptions =>
+    {
+        sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(30),
+            errorNumbersToAdd: null);
+        
+        // Command timeout for long-running queries
+        sqlOptions.CommandTimeout(30);
+    });
+    
+    // Performance optimizations
+    options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking); // Default to no tracking for better performance
+    options.EnableServiceProviderCaching(); // Cache service providers
     options.EnableSensitiveDataLogging(builder.Environment.IsDevelopment());
     options.EnableDetailedErrors(builder.Environment.IsDevelopment());
-});
+}, poolSize: 128); // DbContext pool size for better performance
 
 // Add JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("JWT");

@@ -9,7 +9,7 @@ namespace Runnatics.Models.Data.Entities
     {
         [Key]
         public Guid Id { get; set; }
-        
+
         [Required]
         public Guid OrganizationId { get; set; }
 
@@ -51,6 +51,7 @@ namespace Runnatics.Models.Data.Entities
         public virtual ICollection<RaceCategory> RaceCategories { get; set; } = new List<RaceCategory>();
         public virtual ICollection<Checkpoint> Checkpoints { get; set; } = new List<Checkpoint>();
         public virtual ICollection<Participant> Participants { get; set; } = new List<Participant>();
+        public virtual ICollection<ChipAssignment> ChipAssignments { get; set; } = new List<ChipAssignment>();
         public virtual ICollection<ReadRaw> ReadRaws { get; set; } = new List<ReadRaw>();
         public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = new List<ReadNormalized>();
         public virtual ICollection<SplitTime> SplitTimes { get; set; } = new List<SplitTime>();

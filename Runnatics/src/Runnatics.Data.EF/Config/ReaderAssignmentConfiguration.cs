@@ -8,7 +8,11 @@ namespace Runnatics.Data.EF.Config
     {
         public virtual void Configure(EntityTypeBuilder<ReaderAssignment> builder)
         {
-            builder.HasKey(e => new { e.EventId, e.CheckpointId, e.ReaderDeviceId });
+            builder.ToTable("ReaderAssignments");
+            builder.HasKey(e => e.Id);
+            builder.Property(e => e.Id)
+                   .ValueGeneratedOnAdd()
+                   .IsRequired();
 
             builder.Property(e => e.EventId)
                 .IsRequired();

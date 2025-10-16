@@ -8,6 +8,9 @@ namespace Runnatics.Models.Data.Entities
     using System.ComponentModel.DataAnnotations;
     public class RaceCategory
     {
+        [Key]
+        public Guid Id { get; set; } = Guid.NewGuid();
+        
         [Required]
         public Guid EventId { get; set; }
 

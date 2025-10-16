@@ -7,6 +7,8 @@ namespace Runnatics.Models.Data.Entities
 
     public class ReaderAssignment
     {
+        [Key]
+        public Guid Id { get; set; } = Guid.NewGuid();
         public Guid EventId { get; set; }
         public Guid CheckpointId { get; set; }
         public Guid ReaderDeviceId { get; set; }

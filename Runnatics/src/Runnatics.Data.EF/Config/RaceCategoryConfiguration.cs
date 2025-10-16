@@ -10,6 +10,10 @@ namespace Runnatics.Data.EF.Config
         {
             builder.ToTable("RaceCategories");
 
+            builder.HasKey(e => e.Id);
+            builder.Property(e => e.Id)
+                   .ValueGeneratedOnAdd()
+                   .IsRequired();
             // Properties
             builder.Property(e => e.EventId)
                 .IsRequired();

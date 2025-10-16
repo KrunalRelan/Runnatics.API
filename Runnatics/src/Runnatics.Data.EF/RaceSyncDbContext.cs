@@ -37,7 +37,7 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new ParticipantConfiguration());
             modelBuilder.ApplyConfiguration(new CheckpointConfiguration());
             modelBuilder.ApplyConfiguration(new ChipConfiguration());
-            //            modelBuilder.ApplyConfiguration(new ChipAssignmentConfiguration());
+            modelBuilder.ApplyConfiguration(new ChipAssignmentConfiguration());
             modelBuilder.ApplyConfiguration(new ReaderDeviceConfiguration());
             modelBuilder.ApplyConfiguration(new ReaderAssignmentConfiguration());
             modelBuilder.ApplyConfiguration(new ReadRawConfiguration());
@@ -45,6 +45,7 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new SplitTimeConfiguration());
             modelBuilder.ApplyConfiguration(new ResultConfiguration());
             modelBuilder.ApplyConfiguration(new NotificationConfiguration());
+            modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here
         }

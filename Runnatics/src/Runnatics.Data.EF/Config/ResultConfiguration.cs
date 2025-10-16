@@ -3,11 +3,16 @@ namespace Runnatics.Data.EF.Config
     using Microsoft.EntityFrameworkCore;
     using Microsoft.EntityFrameworkCore.Metadata.Builders;
     using Runnatics.Models.Data.Entities;
-        public class ResultConfiguration : IEntityTypeConfiguration<Results>
+    public class ResultConfiguration : IEntityTypeConfiguration<Results>
+    {
+        public void Configure(EntityTypeBuilder<Results> builder)
         {
-            public void Configure(EntityTypeBuilder<Results> builder)
-            {
             builder.ToTable("Results");
+
+            builder.HasKey(e => e.Id);
+            builder.Property(e => e.Id)
+                     .ValueGeneratedOnAdd()
+                        .IsRequired();
 
             // Properties
             builder.Property(e => e.EventId)

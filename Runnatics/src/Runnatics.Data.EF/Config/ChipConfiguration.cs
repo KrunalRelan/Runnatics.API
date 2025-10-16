@@ -8,7 +8,9 @@ namespace Runnatics.Data.EF.Config
         public void Configure(EntityTypeBuilder<Chip> builder)
         {
             builder.ToTable("Participants");
-
+            builder.HasKey(e => e.Id);
+            builder.Property(e => e.Id)
+             .ValueGeneratedOnAdd();
             // Properties
             builder.ToTable("Chips");
 

@@ -10,7 +10,10 @@ namespace Runnatics.Data.EF.Config
         {
             builder.ToTable("Users");
             // Properties
+            builder.HasKey(e => e.Id);
+            
             builder.Property(e => e.Id)
+                .ValueGeneratedOnAdd()
                 .IsRequired();
 
             builder.Property(e => e.OrganizationId)

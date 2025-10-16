@@ -9,7 +9,9 @@ namespace Runnatics.Data.EF.Config
         public void Configure(EntityTypeBuilder<Checkpoint> builder)
         {
             builder.ToTable("Checkpoints");
-
+            builder.HasKey(e => e.Id);
+            builder.Property(e => e.Id)
+             .ValueGeneratedOnAdd();
             // Properties
             builder.Property(e => e.EventId)
                 .IsRequired();
@@ -51,23 +53,19 @@ namespace Runnatics.Data.EF.Config
                 .HasForeignKey(e => e.EventId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            builder.OwnsOne(o => o.AuditProperties, ap =>
+            // Configure AuditProperties as owned entity
+            builder.OwnsOne(e => e.AuditProperties, ap =>
             {
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-
-                ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
-
-                ap.Property(p => p.UpdatedBy);
-
-                ap.Property(p => p.UpdatedDate);
-
                 ap.Property(p => p.IsDeleted)
                     .HasDefaultValue(false)
                     .IsRequired();
-
+                ap.Property(p => p.CreatedDate)
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+                ap.Property(p => p.CreatedBy)
+                    .IsRequired();
+                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedDate);
                 ap.Property(p => p.IsActive)
                     .HasDefaultValue(true)
                     .IsRequired();

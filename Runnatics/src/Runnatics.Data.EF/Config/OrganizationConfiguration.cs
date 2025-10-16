@@ -10,9 +10,12 @@ namespace Runnatics.Data.EF.Config
         {
             builder.ToTable("Organizations");
 
+            builder.HasKey(e => e.Id);
+
             // Properties
             builder.Property(e => e.Id)
-                .IsRequired();
+                .ValueGeneratedOnAdd()
+                .IsRequired();          
                 
             builder.Property(e => e.Name)
                 .HasMaxLength(255)

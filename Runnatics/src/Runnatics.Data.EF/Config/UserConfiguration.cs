@@ -9,76 +9,76 @@ namespace Runnatics.Data.EF.Config
         public virtual void Configure(EntityTypeBuilder<User> builder)
         {
             builder.ToTable("Users");
-            // Properties
+            
             builder.HasKey(e => e.Id);
             
+            // Map to actual database columns (Pascal case)
             builder.Property(e => e.Id)
+                .HasColumnName("Id")
                 .ValueGeneratedOnAdd()
                 .IsRequired();
 
             builder.Property(e => e.OrganizationId)
+                .HasColumnName("OrganizationId")
                 .IsRequired();
 
             builder.Property(e => e.Email)
-                .HasMaxLength(255)
+                .HasColumnName("Email")
+                .HasMaxLength(510)
                 .IsRequired();
 
             builder.Property(e => e.PasswordHash)
-                .HasMaxLength(255);
+                .HasColumnName("PasswordHash")
+                .HasMaxLength(510);
 
             builder.Property(e => e.FirstName)
-                .HasMaxLength(100);
+                .HasColumnName("FirstName")
+                .HasMaxLength(200);
 
             builder.Property(e => e.LastName)
-                .HasMaxLength(100);
+                .HasColumnName("LastName")
+                .HasMaxLength(200);
 
             builder.Property(e => e.Role)
-                .HasMaxLength(50)
+                .HasColumnName("Role")
+                .HasMaxLength(100)
                 .IsRequired();
 
-            builder.Property(e => e.LastLoginAt);
+            builder.Property(e => e.LastLoginAt)
+                .HasColumnName("LastLoginAt");
 
-            // Indexes
-            builder.HasIndex(e => e.OrganizationId)
-                .HasDatabaseName("IX_Users_OrganizationId");
-
-            builder.HasIndex(e => new { e.OrganizationId, e.Email })
-                .IsUnique()
-                .HasDatabaseName("IX_Users_OrganizationId_Email");
-
-            // Relationships
-            builder.HasOne(e => e.Organization)
-                .WithMany(o => o.Users)
-                .HasForeignKey(e => e.OrganizationId)
-                .OnDelete(DeleteBehavior.Restrict);
-
-            builder.HasMany(e => e.UserSessions)
-                .WithOne(us => us.User)
-                .HasForeignKey(us => us.UserId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            // Configure AuditProperties as owned entity
-            builder.OwnsOne(o => o.AuditProperties, ap =>
+            // Configure AuditProperties to match your database schema
+            builder.OwnsOne(e => e.AuditProperties, ap =>
             {
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy");
 
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
-                    .IsRequired();
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
 
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
+
+                ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
+                    .HasDefaultValue(false)
+                    .IsRequired();
             });
+
+            // Indexes
+            builder.HasIndex(e => e.OrganizationId);
+            builder.HasIndex(e => new { e.OrganizationId, e.Email })
+                .IsUnique();
         }
     }
 }

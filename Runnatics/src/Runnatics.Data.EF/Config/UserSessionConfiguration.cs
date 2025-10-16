@@ -8,53 +8,34 @@ namespace Runnatics.Data.EF.Config
     {
         public virtual void Configure(EntityTypeBuilder<UserSession> builder)
         {
-            // Composite key using UserId and TokenHash
-
             builder.ToTable("UserSessions");
 
             builder.HasKey(e => e.Id);
             builder.Property(e => e.Id)
+                .HasColumnName("Id")
                 .ValueGeneratedOnAdd()
                 .IsRequired();
-                
+
             builder.Property(e => e.UserId)
+                .HasColumnName("UserId")
                 .IsRequired();
 
             builder.Property(e => e.TokenHash)
+                .HasColumnName("TokenHash")
                 .HasMaxLength(255)
                 .IsRequired();
 
             builder.Property(e => e.ExpiresAt)
+                .HasColumnName("ExpiresAt")
                 .IsRequired();
 
             builder.Property(e => e.UserAgent)
+                .HasColumnName("UserAgent")
                 .HasMaxLength(1000);
 
             builder.Property(e => e.IpAddress)
+                .HasColumnName("IpAddress")
                 .HasMaxLength(45);
-
-            // Configure AuditProperties as owned entity
-            builder.OwnsOne(e => e.AuditProperties, ap =>
-            {
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
-                    .IsRequired();
-
-                ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
-
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-
-                ap.Property(p => p.UpdatedBy);
-
-                ap.Property(p => p.UpdatedDate);
-
-                ap.Property(p => p.IsActive)
-                    .HasDefaultValue(true)
-                    .IsRequired();
-            });
 
             // Relationships
             builder.HasOne(e => e.User)
@@ -70,24 +51,33 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasIndex(e => e.ExpiresAt);
 
-            builder.OwnsOne(o => o.AuditProperties, ap =>
+            // Configure AuditProperties as owned entity
+            builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
+                    .HasMaxLength(100)
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy")
+                    .HasMaxLength(100);
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
 
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });

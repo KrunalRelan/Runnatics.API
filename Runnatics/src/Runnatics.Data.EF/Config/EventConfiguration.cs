@@ -11,103 +11,101 @@ namespace Runnatics.Data.EF.Config
             builder.ToTable("Events");
 
             builder.HasKey(e => e.Id);
+            
+            // Map to actual database columns
             builder.Property(e => e.Id)
-             .ValueGeneratedOnAdd();
+                .HasColumnName("Id")
+                .ValueGeneratedOnAdd();
 
-            // Properties
             builder.Property(e => e.OrganizationId)
+                .HasColumnName("OrganizationId")
                 .IsRequired();
 
             builder.Property(e => e.Name)
-                .HasMaxLength(255)
+                .HasColumnName("Name")
+                .HasMaxLength(510)
                 .IsRequired();
 
             builder.Property(e => e.Slug)
-                .HasMaxLength(100)
+                .HasColumnName("Slug")
+                .HasMaxLength(200)
                 .IsRequired();
 
             builder.Property(e => e.Description)
+                .HasColumnName("Description")
                 .HasColumnType("nvarchar(max)");
 
             builder.Property(e => e.EventDate)
+                .HasColumnName("EventDate")
                 .IsRequired();
 
             builder.Property(e => e.TimeZone)
-                .HasMaxLength(50)
+                .HasColumnName("TimeZone")
+                .HasMaxLength(100)
                 .HasDefaultValue("Asia/Kolkata");
 
             builder.Property(e => e.VenueName)
-                .HasMaxLength(255);
+                .HasColumnName("VenueName")
+                .HasMaxLength(510);
 
             builder.Property(e => e.VenueAddress)
+                .HasColumnName("VenueAddress")
                 .HasColumnType("nvarchar(max)");
 
             builder.Property(e => e.VenueLatitude)
+                .HasColumnName("VenueLatitude")
                 .HasColumnType("decimal(10,8)");
 
             builder.Property(e => e.VenueLongitude)
+                .HasColumnName("VenueLongitude")
                 .HasColumnType("decimal(11,8)");
 
             builder.Property(e => e.Status)
-                .HasMaxLength(20)
+                .HasColumnName("Status")
+                .HasMaxLength(40)
                 .HasDefaultValue("Draft");
 
+            builder.Property(e => e.MaxParticipants)
+                .HasColumnName("MaxParticipants");
+
+            builder.Property(e => e.RegistrationDeadline)
+                .HasColumnName("RegistrationDeadline");
+
             builder.Property(e => e.Settings)
-                .HasColumnType("nvarchar(max)"); // JSON
-
-            // Indexes
-            builder.HasIndex(e => new { e.OrganizationId, e.Status })
-                .HasDatabaseName("IX_Events_OrganizationId_Status");
-
-            builder.HasIndex(e => new { e.OrganizationId, e.Slug })
-                .IsUnique()
-                .HasDatabaseName("IX_Events_OrganizationId_Slug");
-
-            builder.HasIndex(e => e.EventDate)
-                .HasDatabaseName("IX_Events_EventDate");
-
-            // Relationships
-            builder.HasOne(e => e.Organization)
-                .WithMany(o => o.Events)
-                .HasForeignKey(e => e.OrganizationId)
-                .OnDelete(DeleteBehavior.Restrict);
-
-            builder.HasMany(e => e.RaceCategories)
-                .WithOne(rc => rc.Event)
-                .HasForeignKey(rc => rc.EventId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            builder.HasMany(e => e.Participants)
-                .WithOne(p => p.Event)
-                .HasForeignKey(p => p.EventId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            builder.HasMany(e => e.Checkpoints)
-                .WithOne(c => c.Event)
-                .HasForeignKey(c => c.EventId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            builder.OwnsOne(o => o.AuditProperties, ap =>
+                .HasColumnName("Settings")
+                .HasColumnType("nvarchar(max)"); // JSON            // Configure AuditProperties to match your database schema
+            builder.OwnsOne(e => e.AuditProperties, ap =>
             {
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy");
 
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
-                    .IsRequired();
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
 
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
+
+                ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
+                    .HasDefaultValue(false)
+                    .IsRequired();
             });
-        }      
+
+            // Indexes
+            builder.HasIndex(e => new { e.OrganizationId, e.Status });
+            builder.HasIndex(e => new { e.OrganizationId, e.Slug })
+                .IsUnique();
+            builder.HasIndex(e => e.EventDate);
+        }
     }
 }

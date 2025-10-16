@@ -11,71 +11,95 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasKey(e => e.Id);
             builder.Property(e => e.Id)
+                   .HasColumnName("Id")
                    .ValueGeneratedOnAdd()
                    .IsRequired();
 
             // Properties
             builder.Property(e => e.OrganizationId)
+                .HasColumnName("OrganizationId")
                 .IsRequired();
 
             builder.Property(e => e.EventId)
+                .HasColumnName("EventId")
                 .IsRequired();
 
             builder.Property(e => e.RaceCategoryId)
+                .HasColumnName("RaceCategoryId")
                 .IsRequired();
 
             builder.Property(e => e.BibNumber)
+                .HasColumnName("BibNumber")
                 .HasMaxLength(20);
 
             builder.Property(e => e.FirstName)
+                .HasColumnName("FirstName")
                 .HasMaxLength(100)
                 .IsRequired();
 
             builder.Property(e => e.LastName)
+                .HasColumnName("LastName")
                 .HasMaxLength(100)
                 .IsRequired();
 
             builder.Property(e => e.Email)
+                .HasColumnName("Email")
                 .HasMaxLength(255);
 
             builder.Property(e => e.Phone)
+                .HasColumnName("Phone")
                 .HasMaxLength(20);
 
+            builder.Property(e => e.DateOfBirth)
+                .HasColumnName("DateOfBirth");
+
             builder.Property(e => e.Gender)
+                .HasColumnName("Gender")
                 .HasMaxLength(10);
 
             builder.Property(e => e.AgeCategory)
+                .HasColumnName("AgeCategory")
                 .HasMaxLength(50);
 
             builder.Property(e => e.Country)
+                .HasColumnName("Country")
                 .HasMaxLength(100);
 
             builder.Property(e => e.State)
+                .HasColumnName("State")
                 .HasMaxLength(100);
 
             builder.Property(e => e.City)
+                .HasColumnName("City")
                 .HasMaxLength(100);
 
             builder.Property(e => e.EmergencyContactName)
+                .HasColumnName("EmergencyContactName")
                 .HasMaxLength(200);
 
             builder.Property(e => e.EmergencyContactPhone)
+                .HasColumnName("EmergencyContactPhone")
                 .HasMaxLength(20);
 
             builder.Property(e => e.MedicalConditions)
+                .HasColumnName("MedicalConditions")
                 .HasColumnType("nvarchar(max)");
 
             builder.Property(e => e.TShirtSize)
+                .HasColumnName("TShirtSize")
                 .HasMaxLength(10);
 
             builder.Property(e => e.RegistrationDate)
+                .HasColumnName("RegistrationDate")
                 .HasDefaultValueSql("GETUTCDATE()");
 
             builder.Property(e => e.Status)
+                .HasColumnName("Status")
                 .HasMaxLength(20)
                 .HasDefaultValue("Registered");
 
             builder.Property(e => e.Notes)
+                .HasColumnName("Notes")
                 .HasColumnType("nvarchar(max)");
 
             // Computed Properties
@@ -119,20 +143,28 @@ namespace Runnatics.Data.EF.Config
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
+                    .HasMaxLength(100)
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy")
+                    .HasMaxLength(100);
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
                     .HasDefaultValue(false);
 
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });

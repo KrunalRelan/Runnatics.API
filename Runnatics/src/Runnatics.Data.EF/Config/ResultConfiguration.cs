@@ -11,30 +11,56 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasKey(e => e.Id);
             builder.Property(e => e.Id)
-                     .ValueGeneratedOnAdd()
-                        .IsRequired();
+                .HasColumnName("Id")
+                .ValueGeneratedOnAdd()
+                .IsRequired();
 
             // Properties
             builder.Property(e => e.EventId)
+                .HasColumnName("EventId")
                 .IsRequired();
 
             builder.Property(e => e.ParticipantId)
+                .HasColumnName("ParticipantId")
                 .IsRequired();
 
             builder.Property(e => e.RaceCategoryId)
+                .HasColumnName("RaceCategoryId")
                 .IsRequired();
 
+            builder.Property(e => e.FinishTime)
+                .HasColumnName("FinishTime");
+
+            builder.Property(e => e.GunTime)
+                .HasColumnName("GunTime");
+
+            builder.Property(e => e.NetTime)
+                .HasColumnName("NetTime");
+
+            builder.Property(e => e.OverallRank)
+                .HasColumnName("OverallRank");
+
+            builder.Property(e => e.GenderRank)
+                .HasColumnName("GenderRank");
+
+            builder.Property(e => e.CategoryRank)
+                .HasColumnName("CategoryRank");
+
             builder.Property(e => e.Status)
+                .HasColumnName("Status")
                 .HasMaxLength(20)
                 .HasDefaultValue("Finished");
 
             builder.Property(e => e.DisqualificationReason)
+                .HasColumnName("DisqualificationReason")
                 .HasMaxLength(255);
 
             builder.Property(e => e.IsOfficial)
+                .HasColumnName("IsOfficial")
                 .HasDefaultValue(false);
 
             builder.Property(e => e.CertificateGenerated)
+                .HasColumnName("CertificateGenerated")
                 .HasDefaultValue(false);
 
             // Computed Properties
@@ -75,21 +101,29 @@ namespace Runnatics.Data.EF.Config
             builder.OwnsOne(o => o.AuditProperties, ap =>
             {
                 ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
+                    .HasMaxLength(100)
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy")
+                    .HasMaxLength(100);
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
 
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });

@@ -14,13 +14,28 @@ namespace Runnatics.Data.EF.Config
             builder.HasKey(e => new { e.EventId, e.ParticipantId, e.ChipId });
 
             // Properties
+            builder.Property(e => e.EventId)
+                .HasColumnName("EventId")
+                .IsRequired();
+
+            builder.Property(e => e.ParticipantId)
+                .HasColumnName("ParticipantId")
+                .IsRequired();
+
+            builder.Property(e => e.ChipId)
+                .HasColumnName("ChipId")
+                .IsRequired();
+
             builder.Property(e => e.AssignedAt)
+                .HasColumnName("AssignedAt")
                 .IsRequired()
                 .HasDefaultValueSql("GETUTCDATE()");
 
-            builder.Property(e => e.UnassignedAt);
+            builder.Property(e => e.UnassignedAt)
+                .HasColumnName("UnassignedAt");
 
-            builder.Property(e => e.AssignedByUserId);
+            builder.Property(e => e.AssignedByUserId)
+                .HasColumnName("AssignedByUserId");
 
             // Relationships
             builder.HasOne(e => e.Event)
@@ -46,17 +61,30 @@ namespace Runnatics.Data.EF.Config
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
+                    .HasMaxLength(100)
                     .IsRequired();
+
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
-                ap.Property(p => p.CreatedBy)
+
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy")
+                    .HasMaxLength(100);
+
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
+
+                ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
+                    .HasDefaultValue(false)
                     .IsRequired();
-                ap.Property(p => p.UpdatedBy);
-                ap.Property(p => p.UpdatedDate);
+
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });

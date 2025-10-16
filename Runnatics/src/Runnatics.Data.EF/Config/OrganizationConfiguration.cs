@@ -12,78 +12,103 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasKey(e => e.Id);
 
-            // Properties
+            // Map to actual database columns (Pascal case as per your schema)
             builder.Property(e => e.Id)
+                .HasColumnName("Id")
                 .ValueGeneratedOnAdd()
                 .IsRequired();          
                 
             builder.Property(e => e.Name)
-                .HasMaxLength(255)
+                .HasColumnName("Name")
+                .HasMaxLength(510)
                 .IsRequired();
 
             builder.Property(e => e.Slug)
-                .HasMaxLength(100)
+                .HasColumnName("Slug")
+                .HasMaxLength(200)
                 .IsRequired();
 
             builder.Property(e => e.Domain)
-                .HasMaxLength(255);
+                .HasColumnName("Domain")
+                .HasMaxLength(510);
 
             builder.Property(e => e.TimeZone)
-                .HasMaxLength(50)
+                .HasColumnName("TimeZone")
+                .HasMaxLength(100)
                 .HasDefaultValue("Asia/Kolkata");
 
             builder.Property(e => e.Settings)
-                .HasColumnType("nvarchar(max)"); // JSON
+                .HasColumnName("Settings")
+                .HasColumnType("nvarchar(max)");
 
             builder.Property(e => e.SubscriptionPlan)
-                .HasMaxLength(50);
+                .HasColumnName("SubscriptionPlan")
+                .HasMaxLength(100);
 
             builder.Property(e => e.Status)
-                .HasMaxLength(20)
+                .HasColumnName("Status")
+                .HasMaxLength(40)
                 .HasDefaultValue("Active");
+
+            // Configure AuditProperties as owned entity to match your database schema
+            builder.OwnsOne(e => e.AuditProperties, ap =>
+            {
+                ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
+
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy");
+
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
+
+                ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
+                    .HasDefaultValue(true)
+                    .IsRequired();
+
+                ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
+                    .HasDefaultValue(false)
+                    .IsRequired();
+            });
+
+            // Ignore properties that don't exist in the database
+            builder.Ignore(e => e.Email);
+            builder.Ignore(e => e.PhoneNumber);
+            builder.Ignore(e => e.Website);
+            builder.Ignore(e => e.LogoUrl);
+            builder.Ignore(e => e.Description);
+            builder.Ignore(e => e.SubscriptionStartDate);
+            builder.Ignore(e => e.SubscriptionEndDate);
+            builder.Ignore(e => e.IsSubscriptionActive);
+            builder.Ignore(e => e.Currency);
+            builder.Ignore(e => e.Country);
+            builder.Ignore(e => e.City);
+            builder.Ignore(e => e.IsVerified);
+            builder.Ignore(e => e.MaxEvents);
+            builder.Ignore(e => e.MaxParticipantsPerEvent);
+            builder.Ignore(e => e.MaxUsers);
+            
+            // Ignore computed properties
+            builder.Ignore(e => e.TotalUsers);
+            builder.Ignore(e => e.ActiveEvents);
+            builder.Ignore(e => e.PendingInvitations);
+            builder.Ignore(e => e.AccessUrl);
+            builder.Ignore(e => e.IsSubscriptionExpired);
+            builder.Ignore(e => e.DaysUntilSubscriptionExpiry);
 
             // Indexes
             builder.HasIndex(e => e.Slug)
-                .IsUnique()
-                .HasDatabaseName("IX_Organizations_Slug");
+                .IsUnique();
 
             builder.HasIndex(e => e.Domain)
-                .IsUnique()
-                .HasDatabaseName("IX_Organizations_Domain")
-                .HasFilter("[Domain] IS NOT NULL");
-
-            // Relationships
-            builder.HasMany(e => e.Users)
-                .WithOne(u => u.Organization)
-                .HasForeignKey(u => u.OrganizationId)
-                .OnDelete(DeleteBehavior.Restrict);
-
-            builder.HasMany(e => e.Events)
-                .WithOne(ev => ev.Organization)
-                .HasForeignKey(ev => ev.OrganizationId)
-                .OnDelete(DeleteBehavior.Restrict);
-
-           builder.OwnsOne(o => o.AuditProperties, ap =>
-           {
-               ap.Property(p => p.CreatedBy)
-                   .IsRequired();
-
-               ap.Property(p => p.CreatedDate)
-                   .HasDefaultValueSql("GETUTCDATE()")
-                   .IsRequired();
-
-               ap.Property(p => p.UpdatedBy);
-
-               ap.Property(p => p.UpdatedDate);
-
-               ap.Property(p => p.IsDeleted)
-                   .HasDefaultValue(false)
-                   .IsRequired();
-
-               ap.Property(p => p.IsActive)
-                   .HasDefaultValue(true)
-                   .IsRequired();
-           });
+                .IsUnique();
         }
     }
 }

@@ -37,6 +37,9 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.MinGapMs)
                 .HasDefaultValue(1000);
 
+            builder.Property(e => e.SortOrder)
+                .HasColumnName("SortOrder");
+
             // Indexes
             builder.HasIndex(e => e.EventId)
                 .HasDatabaseName("IX_Checkpoints_EventId");
@@ -66,9 +69,11 @@ namespace Runnatics.Data.EF.Config
                     .IsRequired();
                 ap.Property(p => p.UpdatedBy);
                 ap.Property(p => p.UpdatedDate);
-                ap.Property(p => p.IsActive)
-                    .HasDefaultValue(true)
-                    .IsRequired();
+
+                builder.Property(e => e.IsActive)
+               .HasColumnName("IsActive")
+               .HasDefaultValue(true)
+               .IsRequired();
             });
         }
     }

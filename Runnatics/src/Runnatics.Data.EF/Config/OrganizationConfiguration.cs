@@ -62,11 +62,14 @@ namespace Runnatics.Data.EF.Config
                     .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.CreatedBy)
-                    .HasColumnName("CreatedBy");
+                    .HasColumnName("CreatedBy")
+                    .HasMaxLength(100);
 
                 ap.Property(p => p.UpdatedBy)
-                    .HasColumnName("UpdatedBy");
+                    .HasColumnName("UpdatedBy")
+                    .HasMaxLength(100);
 
+                // Ignore IsActive from AuditProperties since Organization has its own IsActive property
                 ap.Property(p => p.IsActive)
                     .HasColumnName("IsActive")
                     .HasDefaultValue(true)

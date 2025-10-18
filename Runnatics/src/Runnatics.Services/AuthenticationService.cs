@@ -17,22 +17,14 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Runnatics.Services
 {
-    public class AuthenticationService : ServiceBase<IUnitOfWork<RaceSyncDbContext>>, IAuthenticationService
+    public class AuthenticationService(IUnitOfWork<RaceSyncDbContext> repository,
+                                IMapper mapper,
+                                ILogger<AuthenticationService> logger,
+                                IConfiguration configuration) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IAuthenticationService
     {
-        protected readonly IMapper _mapper;
-        protected readonly ILogger _logger;
-
-        protected readonly IConfiguration _configuration;
-
-        public AuthenticationService(IUnitOfWork<RaceSyncDbContext> repository,
-                                    IMapper mapper,
-                                    ILogger<AuthenticationService> logger,
-                                    IConfiguration configuration) : base(repository)
-        {
-            _mapper = mapper;
-            _logger = logger;
-            _configuration = configuration;
-        }
+        protected readonly IMapper _mapper = mapper;
+        protected readonly ILogger _logger = logger;
+        protected readonly IConfiguration _configuration = configuration;
 
         // Implement the methods from the interface
         public async Task<AuthenticationResponse?> AcceptInvitationAsync(AcceptInvitationRequest request)
@@ -89,20 +81,154 @@ namespace Runnatics.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error during accepting invitation for email", request);
+                _logger.LogError(ex, "Error during accepting invitation for email: {Email}", request.InvitationToken);
                 this.ErrorMessage = "Error during accepting invitation.";
                 return null;
             }
         }
 
-        public Task<string?> ChangePasswordAsync(Guid userId, ChangePasswordRequest request)
+        public async Task<string?> ChangePasswordAsync(Guid userId, ChangePasswordRequest request)
         {
-            throw new NotImplementedException();
+            try
+            {
+                // Validate input
+                if (string.IsNullOrWhiteSpace(request.CurrentPassword) || 
+                    string.IsNullOrWhiteSpace(request.NewPassword))
+                {
+                    ErrorMessage = "Current password and new password are required.";
+                    return null;
+                }
+
+                if (request.NewPassword != request.ConfirmPassword)
+                {
+                    ErrorMessage = "New password and confirmation do not match.";
+                    return null;
+                }
+
+                // Get the user
+                var userRepo = _repository.GetRepository<User>();
+                var user = await userRepo.GetQuery(u => u.Id == userId 
+                                                  && u.AuditProperties.IsActive 
+                                                  && !u.AuditProperties.IsDeleted)
+                                        .FirstOrDefaultAsync();
+
+                if (user == null)
+                {
+                    ErrorMessage = "User not found or inactive.";
+                    return null;
+                }
+
+                // Verify current password
+                if (string.IsNullOrEmpty(user.PasswordHash) ||
+                    !BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+                {
+                    ErrorMessage = "Current password is incorrect.";
+                    _logger.LogWarning("Invalid current password attempt for user: {UserId}", userId);
+                    return null;
+                }
+
+                // Validate new password strength
+                if (!IsValidPassword(request.NewPassword))
+                {
+                    ErrorMessage = "New password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&).";
+                    return null;
+                }
+                
+                
+                        // Check if new password is different from current password
+                if (BCrypt.Net.BCrypt.Verify(request.NewPassword, user.PasswordHash))
+                {
+                    ErrorMessage = "New password must be different from the current password.";
+                    return null;
+                }
+
+                // Hash the new password
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+                user.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                user.AuditProperties.UpdatedBy = userId; // User is updating their own password
+
+                // Save changes
+                await userRepo.UpdateAsync(user);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Password changed successfully for user: {UserId}", userId);
+                return "Password changed successfully.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during changing password for user: {UserId}", userId);
+                ErrorMessage = "Error during changing password.";
+                return null;
+            }
         }
 
-        public Task<string?> ForgotPasswordAsync(ForgotPasswordRequest request)
+        public async Task<string?> ForgotPasswordAsync(ForgotPasswordRequest request)
         {
-            throw new NotImplementedException();
+            try
+            {
+                // Validate input
+                if (string.IsNullOrWhiteSpace(request.Email))
+                {
+                    ErrorMessage = "Email address is required.";
+                    return null;
+                }
+
+                // Find user by email
+                var userRepo = _repository.GetRepository<User>();
+                var user = await userRepo.GetQuery(u => u.Email.ToLower() == request.Email.ToLower() 
+                    && u.AuditProperties.IsActive && !u.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                // Always return success message for security (don't reveal if email exists)
+                // But only send email if user actually exists
+                if (user != null)
+                {
+                    // Generate reset token
+                    var resetToken = GeneratePasswordResetToken();
+                    var tokenExpiry = DateTime.UtcNow.AddHours(1); // Token expires in 1 hour
+
+                    // Save reset token to database
+                    var passwordResetTokenRepo = _repository.GetRepository<PasswordResetToken>();
+                    var resetTokenEntity = new PasswordResetToken
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId = user.Id,
+                        TokenHash = BCrypt.Net.BCrypt.HashPassword(resetToken),
+                        ExpiresAt = tokenExpiry,
+                        IsUsed = false,
+                        AuditProperties = new AuditProperties
+                        {
+                            CreatedDate = DateTime.UtcNow,
+                            CreatedBy = user.Id,
+                            IsActive = true,
+                            IsDeleted = false
+                        }
+                    };
+
+                    await passwordResetTokenRepo.AddAsync(resetTokenEntity);
+                    await _repository.SaveChangesAsync();
+
+                    // In a real application, you would send an email here
+                    // For now, we'll log the reset token for development purposes
+                    _logger.LogInformation("Password reset requested for user: {UserId}. Reset token generated.", user.Id);
+                    
+                    // TODO: Implement email service to send reset link
+                    // await _emailService.SendPasswordResetEmailAsync(user.Email, resetToken);
+                }
+                else
+                {
+                    _logger.LogWarning("Password reset requested for non-existent email: {Email}", request.Email);
+                }
+
+                // Always return success message for security reasons
+                return "If the email address exists in our system, you will receive a password reset link shortly.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during forgot password for email: {Email}", request.Email);
+                ErrorMessage = "Error processing password reset request.";
+                return null;
+            }
         }
 
         public Task<InvitationResponse?> InviteUserAsync(InviteUserRequest request, Guid organizationId, Guid invitedBy)
@@ -202,7 +328,7 @@ namespace Runnatics.Services
                 if (existingUser != null)
                 {
                     this.ErrorMessage = "User with the same email already exists.";
-                    return await Task.FromResult<AuthenticationResponse>(null);
+                    return null;
                 }
 
                 await _repository.BeginTransactionAsync();
@@ -210,7 +336,7 @@ namespace Runnatics.Services
                 if (existingOrganization != null)
                 {
                     this.ErrorMessage = "Organization with the same name already exists.";
-                    return await Task.FromResult<AuthenticationResponse>(null);
+                    return null;
                 }
                 
                 var organization = new Organization
@@ -281,19 +407,104 @@ namespace Runnatics.Services
                 {
                     _logger.LogWarning(rollbackEx, "Rollback failed or there was no active transaction to rollback.");
                     this.ErrorMessage = "Rollback failed.";
-                    return await Task.FromResult<AuthenticationResponse>(null);
+                    return null;
                 }
 
                 _logger.LogError(ex, "Error during organization registration for request: {Request}", request);
                 this.ErrorMessage = "Error during organization registration.";
                
-               return await Task.FromResult<AuthenticationResponse>(null);
+               return null;
             }
         }
 
-        public Task<string?> ResetPasswordAsync(ResetPasswordRequest request)
+        public async Task<string?> ResetPasswordAsync(ResetPasswordRequest request)
         {
-            throw new NotImplementedException();
+            try
+            {
+                // Validate input
+                if (string.IsNullOrWhiteSpace(request.ResetToken) || 
+                    string.IsNullOrWhiteSpace(request.NewPassword))
+                {
+                    ErrorMessage = "Reset token and new password are required.";
+                    return null;
+                }
+
+                if (request.NewPassword != request.ConfirmNewPassword)
+                {
+                    ErrorMessage = "New password and confirmation do not match.";
+                    return null;
+                }
+
+                // Validate new password strength
+                if (!IsValidPassword(request.NewPassword))
+                {
+                    ErrorMessage = "New password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&).";
+                    return null;
+                }
+
+                // Find valid reset token
+                var resetTokenRepo = _repository.GetRepository<PasswordResetToken>();
+                var resetTokens = await resetTokenRepo.GetQuery(rt => 
+                    !rt.IsUsed && 
+                    rt.ExpiresAt > DateTime.UtcNow && 
+                    rt.AuditProperties.IsActive && 
+                    !rt.AuditProperties.IsDeleted)
+                    .Include(rt => rt.User)
+                    .ToListAsync();
+
+                PasswordResetToken? validResetToken = null;
+                foreach (var token in resetTokens)
+                {
+                    if (BCrypt.Net.BCrypt.Verify(request.ResetToken, token.TokenHash))
+                    {
+                        validResetToken = token;
+                        break;
+                    }
+                }
+
+                if (validResetToken == null)
+                {
+                    ErrorMessage = "Invalid or expired reset token.";
+                    return null;
+                }
+
+                var user = validResetToken.User;
+
+                // Check if user is still active
+                if (!user.AuditProperties.IsActive || user.AuditProperties.IsDeleted)
+                {
+                    ErrorMessage = "User account is not active.";
+                    return null;
+                }
+
+                // Update user password
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+                user.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                user.AuditProperties.UpdatedBy = user.Id;
+
+                // Mark reset token as used
+                validResetToken.IsUsed = true;
+                validResetToken.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                validResetToken.AuditProperties.UpdatedBy = user.Id;
+
+                // Save changes
+                var userRepo = _repository.GetRepository<User>();
+                await userRepo.UpdateAsync(user);
+                await resetTokenRepo.UpdateAsync(validResetToken);
+                await _repository.SaveChangesAsync();
+
+                // Invalidate all existing user sessions for security
+                await InvalidateAllUserSessionsAsync(user.Id);
+
+                _logger.LogInformation("Password reset successfully completed for user: {UserId}", user.Id);
+                return "Password has been reset successfully. Please log in with your new password.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during password reset");
+                ErrorMessage = "Error processing password reset.";
+                return null;
+            }
         }
 
         public async Task<string?> RevokeUserAccessAsync(Guid userId, Guid revokedBy)
@@ -526,6 +737,37 @@ namespace Runnatics.Services
             }
         }
 
+        /// <summary>
+        /// Cleanup expired password reset tokens from the database
+        /// </summary>
+        public async Task CleanupExpiredPasswordResetTokensAsync()
+        {
+            try
+            {
+                var resetTokenRepo = _repository.GetRepository<PasswordResetToken>();
+                var expiredTokens = await resetTokenRepo.GetQuery(rt => 
+                    rt.ExpiresAt <= DateTime.UtcNow && rt.AuditProperties.IsActive)
+                    .ToListAsync();
+
+                foreach (var token in expiredTokens)
+                {
+                    token.AuditProperties.IsActive = false;
+                    token.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    await resetTokenRepo.UpdateAsync(token);
+                }
+
+                if (expiredTokens.Any())
+                {
+                    await _repository.SaveChangesAsync();
+                    _logger.LogInformation($"Cleaned up {expiredTokens.Count} expired password reset tokens");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cleaning up expired password reset tokens");
+            }
+        }
+
         private string GenerateJwtToken(User user, Organization organization)
         {
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Key"]!));
@@ -607,6 +849,74 @@ namespace Runnatics.Services
             return int.TryParse(_configuration["JWT:DurationInMinutes"], out var minutes)
                 ? minutes / 60
                 : 1;
+        }
+
+        /// <summary>
+        /// Validates password complexity using the same pattern as the request model
+        /// </summary>
+        /// <param name="password">Password to validate</param>
+        /// <returns>True if password meets complexity requirements</returns>
+        private static bool IsValidPassword(string password)
+        {
+            if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+                return false;
+
+            // Pattern: ^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$
+            // - At least one lowercase letter
+            // - At least one uppercase letter  
+            // - At least one digit
+            // - At least one special character from @$!%*?&
+            // - Only allows letters, digits, and specified special characters
+            var pattern = @"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$";
+            return System.Text.RegularExpressions.Regex.IsMatch(password, pattern);
+        }
+
+        /// <summary>
+        /// Generates a cryptographically secure password reset token
+        /// </summary>
+        /// <returns>Password reset token</returns>
+        private static string GeneratePasswordResetToken()
+        {
+            // Generate a 32-byte random token and convert to base64
+            using var rng = RandomNumberGenerator.Create();
+            var tokenBytes = new byte[32];
+            rng.GetBytes(tokenBytes);
+            return Convert.ToBase64String(tokenBytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        }
+
+        /// <summary>
+        /// Invalidates all active sessions for a user (for security after password reset)
+        /// </summary>
+        /// <param name="userId">User ID</param>
+        private async Task InvalidateAllUserSessionsAsync(Guid userId)
+        {
+            try
+            {
+                var sessionRepo = _repository.GetRepository<UserSession>();
+                var activeSessions = await sessionRepo.GetQuery(s => 
+                    s.UserId == userId && 
+                    s.AuditProperties.IsActive && 
+                    !s.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                foreach (var session in activeSessions)
+                {
+                    session.AuditProperties.IsActive = false;
+                    session.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    session.AuditProperties.UpdatedBy = userId;
+                    await sessionRepo.UpdateAsync(session);
+                }
+
+                if (activeSessions.Any())
+                {
+                    await _repository.SaveChangesAsync();
+                    _logger.LogInformation("Invalidated {Count} active sessions for user: {UserId}", activeSessions.Count, userId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to invalidate user sessions for user: {UserId}", userId);
+            }
         }
     }
 }

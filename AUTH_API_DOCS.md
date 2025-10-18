@@ -108,6 +108,159 @@ curl -X POST "https://api.runnatics.com/api/authentication/validate-token" \
   }'
 ```
 
+### 4. Change Password
+**Endpoint:** `POST /api/authentication/change-password`
+**Description:** Change the current user's password
+**Authorization:** Bearer token required
+
+**Request:**
+```json
+{
+  "currentPassword": "current-password",
+  "newPassword": "new-secure-password",
+  "confirmPassword": "new-secure-password"
+}
+```
+
+**Response (Success):**
+```json
+{
+  "message": "Password changed successfully."
+}
+```
+
+**Response (Error Examples):**
+```json
+{
+  "error": "Current password is incorrect."
+}
+```
+
+```json
+{
+  "error": "New password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&)."
+}
+```
+
+```json
+{
+  "error": "New password must be different from the current password."
+}
+```
+
+**Curl Example:**
+```bash
+curl -X POST "https://api.runnatics.com/api/authentication/change-password" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-jwt-token" \
+  -d '{
+    "currentPassword": "current-password",
+    "newPassword": "new-secure-password",
+    "confirmPassword": "new-secure-password"
+  }'
+```
+
+**Validation Rules:**
+- Current password must be provided and correct
+- New password must be at least 8 characters long
+- New password must contain at least one uppercase letter (A-Z)
+- New password must contain at least one lowercase letter (a-z)
+- New password must contain at least one number (0-9)
+- New password must contain at least one special character (@$!%*?&)
+- New password must be different from current password
+- New password and confirmation must match
+- User must be authenticated and active
+
+**Password Validation Examples:**
+
+✅ **Valid Passwords:**
+- `MyPassword123!` - Contains all required character types
+- `SecurePass$456` - Meets complexity requirements
+- `Admin@789Test` - Complex password with special characters
+
+❌ **Invalid Passwords:**
+- `password123` - Missing uppercase letter and special character
+- `PASSWORD123!` - Missing lowercase letter
+- `MyPassword!` - Missing number
+- `MyPassword123` - Missing special character
+- `Short1!` - Too short (less than 8 characters)
+- `ValidPass123#` - Contains invalid special character (#)
+
+### 5. Forgot Password
+**Endpoint:** `POST /api/authentication/forgot-password`
+**Description:** Request a password reset link for a user account
+**Authorization:** None required (public endpoint)
+
+**Request:**
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+**Response (Always Success for Security):**
+```json
+{
+  "message": "If the email address exists in our system, you will receive a password reset link shortly."
+}
+```
+
+**Curl Example:**
+```bash
+curl -X POST "https://api.runnatics.com/api/authentication/forgot-password" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com"
+  }'
+```
+
+### 6. Reset Password
+**Endpoint:** `POST /api/authentication/reset-password`
+**Description:** Reset password using a valid reset token
+**Authorization:** None required (public endpoint)
+
+**Request:**
+```json
+{
+  "resetToken": "your-reset-token-here",
+  "newPassword": "NewSecurePassword123!",
+  "confirmNewPassword": "NewSecurePassword123!"
+}
+```
+
+**Response (Success):**
+```json
+{
+  "message": "Password has been reset successfully. Please log in with your new password."
+}
+```
+
+**Response (Error):**
+```json
+{
+  "error": "Invalid or expired reset token."
+}
+```
+
+**Curl Example:**
+```bash
+curl -X POST "https://api.runnatics.com/api/authentication/reset-password" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "resetToken": "your-reset-token-here",
+    "newPassword": "NewSecurePassword123!",
+    "confirmNewPassword": "NewSecurePassword123!"
+  }'
+```
+
+**Password Reset Security Features:**
+- Reset tokens are cryptographically secure and hashed before storage
+- Tokens expire after 1 hour for security
+- Tokens can only be used once
+- All user sessions are invalidated after successful password reset
+- Email validation is done without revealing if account exists
+- Strong password requirements enforced
+
 ## Token Management Best Practices
 
 ### Client-Side Implementation

@@ -3,7 +3,6 @@ using AutoMapper;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Runnatics.Data.EF;
-using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Responses;
 using Runnatics.Models.Data.Common;
@@ -15,7 +14,6 @@ using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.VisualBasic;
 
 namespace Runnatics.Services
 {
@@ -37,7 +35,7 @@ namespace Runnatics.Services
         }
 
         // Implement the methods from the interface
-        public async Task<AuthenticationResponse> AcceptInvitationAsync(AcceptInvitationRequest request)
+        public async Task<AuthenticationResponse?> AcceptInvitationAsync(AcceptInvitationRequest request)
         {
             try
             {
@@ -50,7 +48,7 @@ namespace Runnatics.Services
                 {
                     this.ErrorMessage = "Invalid or expired invitation";
                     _logger.LogError("Invalid or expired invitation for token: {Token}", request.InvitationToken);
-                    return await Task.FromResult<AuthenticationResponse>(null);
+                    return null;
                 }
 
                 user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
@@ -69,7 +67,7 @@ namespace Runnatics.Services
                 {
                     _logger.LogError("Organization not found or inactive for user: {UserId}", user.Id);
                     this.ErrorMessage = "Organization not found or inactive.";
-                    return await Task.FromResult<AuthenticationResponse>(null);
+                    return null;
                 }
 
                 var token = GenerateJwtToken(user, organization);
@@ -97,17 +95,17 @@ namespace Runnatics.Services
             }
         }
 
-        public Task<string> ChangePasswordAsync(Guid userId, ChangePasswordRequest request)
+        public Task<string?> ChangePasswordAsync(Guid userId, ChangePasswordRequest request)
         {
             throw new NotImplementedException();
         }
 
-        public Task<string> ForgotPasswordAsync(ForgotPasswordRequest request)
+        public Task<string?> ForgotPasswordAsync(ForgotPasswordRequest request)
         {
             throw new NotImplementedException();
         }
 
-        public Task<InvitationResponse> InviteUserAsync(InviteUserRequest request, Guid organizationId, Guid invitedBy)
+        public Task<InvitationResponse?> InviteUserAsync(InviteUserRequest request, Guid organizationId, Guid invitedBy)
         {
             throw new NotImplementedException();
         }
@@ -181,7 +179,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<AuthenticationResponse> RegisterOrganizationAsync(RegisterOrganizationRequest request)
+        public async Task<AuthenticationResponse?> RegisterOrganizationAsync(RegisterOrganizationRequest request)
         {
             try
             {
@@ -293,12 +291,12 @@ namespace Runnatics.Services
             }
         }
 
-        public Task<string> ResetPasswordAsync(ResetPasswordRequest request)
+        public Task<string?> ResetPasswordAsync(ResetPasswordRequest request)
         {
             throw new NotImplementedException();
         }
 
-        public async Task<string> RevokeUserAccessAsync(Guid userId, Guid revokedBy)
+        public async Task<string?> RevokeUserAccessAsync(Guid userId, Guid revokedBy)
         {
             try
             {
@@ -328,7 +326,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<string> UpdateUserRoleAsync(Guid userId, string newRole, Guid updatedBy)
+        public async Task<string?> UpdateUserRoleAsync(Guid userId, string newRole, Guid updatedBy)
         {
             try
             {
@@ -362,7 +360,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<AuthenticationResponse> RefreshTokenAsync(string refreshToken)
+        public async Task<AuthenticationResponse?> RefreshTokenAsync(string refreshToken)
         {
             try
             {
@@ -433,7 +431,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<string> LogoutAsync(string refreshToken)
+        public async Task<string?> LogoutAsync(string refreshToken)
         {
             try
             {

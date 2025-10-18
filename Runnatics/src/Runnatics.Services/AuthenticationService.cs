@@ -725,7 +725,7 @@ namespace Runnatics.Services
                     await sessionRepo.UpdateAsync(session);
                 }
 
-                if (expiredSessions.Any())
+                if (expiredSessions.Count != 0)
                 {
                     await _repository.SaveChangesAsync();
                     _logger.LogInformation($"Cleaned up {expiredSessions.Count} expired refresh tokens");
@@ -756,7 +756,7 @@ namespace Runnatics.Services
                     await resetTokenRepo.UpdateAsync(token);
                 }
 
-                if (expiredTokens.Any())
+                if (expiredTokens.Count != 0)
                 {
                     await _repository.SaveChangesAsync();
                     _logger.LogInformation($"Cleaned up {expiredTokens.Count} expired password reset tokens");
@@ -907,7 +907,7 @@ namespace Runnatics.Services
                     await sessionRepo.UpdateAsync(session);
                 }
 
-                if (activeSessions.Any())
+                if (activeSessions.Count != 0)
                 {
                     await _repository.SaveChangesAsync();
                     _logger.LogInformation("Invalidated {Count} active sessions for user: {UserId}", activeSessions.Count, userId);

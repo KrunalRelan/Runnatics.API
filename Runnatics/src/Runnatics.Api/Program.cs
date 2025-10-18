@@ -132,7 +132,7 @@ builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactor
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
 // Add AutoMapper
-builder.Services.AddAutoMapper(typeof(Program));
+builder.Services.AddAutoMapper(typeof(AutoMapperMappingProfile));
 
 // Add logging
 builder.Services.AddLogging(logging =>

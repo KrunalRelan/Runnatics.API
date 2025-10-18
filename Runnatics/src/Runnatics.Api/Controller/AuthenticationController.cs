@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,14 +21,30 @@ namespace Runnatics.Api.Controller
         {
             ResponseBase<AuthenticationResponse> toReturn = new();
             var result = await _authService.RegisterOrganizationAsync(request);
-            if (result == null)
+            if (result == null && _authService.HasError)
             {
                 _authService.ErrorMessage = "Registration failed.";
-                return BadRequest(_authService.ErrorMessage);
+                return StatusCode((int)HttpStatusCode.InternalServerError, _authService.ErrorMessage);
             }
             if (_authService.HasError)
             {
-                return BadRequest(_authService.ErrorMessage);
+                if (string.Equals(_authService.ErrorMessage, "Organization already exists.", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Conflict(_authService.ErrorMessage);
+                }
+                if (string.Equals(_authService.ErrorMessage, "Invalid organization domain.", StringComparison.OrdinalIgnoreCase))
+                {
+                    return UnprocessableEntity(_authService.ErrorMessage);
+                }
+                if (string.Equals(_authService.ErrorMessage, "Email already in use.", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Conflict(_authService.ErrorMessage);
+                }
+                if (string.Equals(_authService.ErrorMessage, "User with the same email already exists.", StringComparison.OrdinalIgnoreCase))
+                {
+                    return StatusCode((int)HttpStatusCode.Conflict, _authService.ErrorMessage);
+                }
+                return StatusCode((int)HttpStatusCode.InternalServerError, _authService.ErrorMessage);
             }
             toReturn.Message = result;
             return Ok(toReturn);
@@ -179,6 +196,50 @@ namespace Runnatics.Api.Controller
             }
             toReturn.Message = result;
             return Ok(toReturn);
+        }
+
+        [HttpPost("refresh-token")]
+        [AllowAnonymous]
+        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
+        {
+            ResponseBase<AuthenticationResponse> toReturn = new();
+            var result = await _authService.RefreshTokenAsync(request.RefreshToken);
+            if (result == null)
+            {
+                return Unauthorized("Invalid or expired refresh token.");
+            }
+            if (_authService.HasError)
+            {
+                return BadRequest(_authService.ErrorMessage);
+            }
+            toReturn.Message = result;
+            return Ok(toReturn);
+        }
+
+        [HttpPost("logout")]
+        [Authorize]
+        public async Task<IActionResult> Logout([FromBody] LogoutRequest request)
+        {
+            ResponseBase<string> toReturn = new();
+            var result = await _authService.LogoutAsync(request.RefreshToken);
+            if (result == null)
+            {
+                return BadRequest("Logout failed.");
+            }
+            if (_authService.HasError)
+            {
+                return BadRequest(_authService.ErrorMessage);
+            }
+            toReturn.Message = result;
+            return Ok(toReturn);
+        }
+
+        [HttpPost("validate-token")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ValidateRefreshToken([FromBody] RefreshTokenRequest request)
+        {
+            var isValid = await _authService.ValidateRefreshTokenAsync(request.RefreshToken);
+            return Ok(new { IsValid = isValid });
         }
     }
 }

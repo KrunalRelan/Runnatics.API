@@ -39,8 +39,9 @@ namespace Runnatics.Data.EF.Config
 
             // Relationships
             builder.HasOne(e => e.User)
-                .WithMany()
+                .WithMany(u => u.UserSessions)
                 .HasForeignKey(e => e.UserId)
+                .HasConstraintName("FK_UserSessions_UserId")
                 .OnDelete(DeleteBehavior.Cascade);
 
             // Indexes
@@ -57,6 +58,7 @@ namespace Runnatics.Data.EF.Config
                 ap.Property(p => p.CreatedBy)
                     .HasColumnName("CreatedBy")
                     .HasMaxLength(100)
+                    .HasConversion<string>() // Convert Guid to string to avoid FK conflicts
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
@@ -66,7 +68,8 @@ namespace Runnatics.Data.EF.Config
 
                 ap.Property(p => p.UpdatedBy)
                     .HasColumnName("UpdatedBy")
-                    .HasMaxLength(100);
+                    .HasMaxLength(100)
+                    .HasConversion<string>(); // Convert Guid? to string to avoid FK conflicts
 
                 ap.Property(p => p.UpdatedDate)
                     .HasColumnName("UpdatedAt");

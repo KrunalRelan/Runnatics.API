@@ -45,7 +45,7 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new SplitTimeConfiguration());
             modelBuilder.ApplyConfiguration(new ResultConfiguration());
             modelBuilder.ApplyConfiguration(new NotificationConfiguration());
-            modelBuilder.DefaultFilters();
+            //modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here
         }

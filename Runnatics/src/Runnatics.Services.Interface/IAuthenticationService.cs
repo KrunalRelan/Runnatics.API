@@ -15,5 +15,8 @@ namespace Runnatics.Services.Interface
         Task<string>ResetPasswordAsync(ResetPasswordRequest request);
         Task<string>RevokeUserAccessAsync(Guid userId, Guid revokedBy);
         Task<string>UpdateUserRoleAsync(Guid userId, string newRole, Guid updatedBy);
+        Task<AuthenticationResponse?>RefreshTokenAsync(string refreshToken);
+        Task<string?>LogoutAsync(string refreshToken);
+        Task<bool>ValidateRefreshTokenAsync(string refreshToken);
     }
 }

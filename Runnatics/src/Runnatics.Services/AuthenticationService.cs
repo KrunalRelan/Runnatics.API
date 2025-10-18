@@ -15,6 +15,7 @@ using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.VisualBasic;
 
 namespace Runnatics.Services
 {
@@ -138,7 +139,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                var organization = _repository.GetRepository<Models.Data.Entities.Organization>()
+                var organization = _repository.GetRepository<Organization>()
                                                 .GetQuery(o => o.Id == user.OrganizationId
                                                             && !o.AuditProperties.IsDeleted
                                                             && o.AuditProperties.IsActive)
@@ -184,15 +185,21 @@ namespace Runnatics.Services
         {
             try
             {
+                var response = new AuthenticationResponse();
                 var organizationRepo = _repository.GetRepository<Organization>();
                 var userRepo = _repository.GetRepository<User>();
 
                 var existingOrganization = organizationRepo
-                                    .GetQuery(o => o.Name == request.Name)
+                                    .GetQuery(o => o.Name == request.Name
+                                             && o.Domain == request.Domain
+                                             && !o.AuditProperties.IsDeleted
+                                             && o.AuditProperties.IsActive)
                                     .FirstOrDefault();
 
                 var existingUser = userRepo
-                            .GetQuery(u => u.Email == request.AdminEmail)
+                            .GetQuery(u => u.Email == request.AdminEmail
+                                     && u.AuditProperties.IsActive
+                                     && !u.AuditProperties.IsDeleted)
                             .FirstOrDefault();
                 if (existingUser != null)
                 {
@@ -207,17 +214,7 @@ namespace Runnatics.Services
                     this.ErrorMessage = "Organization with the same name already exists.";
                     return await Task.FromResult<AuthenticationResponse>(null);
                 }
-                existingOrganization = organizationRepo
-                                    .GetQuery(o => o.Domain == request.Domain)
-                                    .FirstOrDefault();
-
-                // Check if organization with the same name or domain already exists
-                if (existingOrganization != null)
-                {
-                    this.ErrorMessage = "Organization with the same domain already exists.";
-                    return await Task.FromResult<AuthenticationResponse>(null);
-                }
-
+                
                 var organization = new Organization
                 {
                     Id = Guid.NewGuid(),
@@ -234,13 +231,13 @@ namespace Runnatics.Services
                     }
                 };
 
-                await organizationRepo.AddAsync(organization);
+                var addedOrganization = await organizationRepo.AddAsync(organization);
 
                 // Create admin user
                 var adminUser = new User
                 {
                     Id = Guid.NewGuid(),
-                    OrganizationId = organization.Id,
+                    OrganizationId = addedOrganization.Id,
                     FirstName = request.AdminFirstName,
                     LastName = request.AdminLastName,
                     Email = request.AdminEmail,
@@ -254,26 +251,42 @@ namespace Runnatics.Services
                         IsDeleted = false
                     }
                 };
-                await userRepo.AddAsync(adminUser);
+                var addeduser = await userRepo.AddAsync(adminUser);
+                
                 await _repository.SaveChangesAsync();
-                await _repository.CommitTransactionAsync();
-                var token = GenerateJwtToken(adminUser, organization);
+
+                var token = GenerateJwtToken(addeduser, organization);
+
                 var refreshToken = GenerateRefreshToken();
-                await SaveRefreshTokenAsync(adminUser.Id, refreshToken, false);
-                var response = new AuthenticationResponse
-                {
-                    Token = token,
-                    RefreshToken = refreshToken,
-                    ExpiresAt = DateTime.UtcNow.AddMinutes(30), // Example expiration time
-                    User = _mapper.Map<UserResponse>(adminUser),
-                    Organization = _mapper.Map<OrganizationResponse>(organization),
-                };
+
+                await SaveRefreshTokenAsync(addeduser.Id, refreshToken, false);
+
+                response.Token = token;
+                response.RefreshToken = refreshToken;
+                response.ExpiresAt = DateTime.UtcNow.AddMinutes(30); // Example expiration time
+                response.User = _mapper.Map<UserResponse>(addeduser);
+                response.Organization = _mapper.Map<OrganizationResponse>(addedOrganization);
+
+                await _repository.CommitTransactionAsync();
+
                 return response;
 
             }
             catch (System.Exception ex)
             {
-               _logger.LogError(ex, "Error during organization registration for request: {Request}", request);
+                // Attempt to rollback any active transaction; ignore if none or rollback fails
+                try
+                {
+                    await _repository.RollbackTransactionAsync();
+                }
+                catch (Exception rollbackEx)
+                {
+                    _logger.LogWarning(rollbackEx, "Rollback failed or there was no active transaction to rollback.");
+                    this.ErrorMessage = "Rollback failed.";
+                    return await Task.FromResult<AuthenticationResponse>(null);
+                }
+
+                _logger.LogError(ex, "Error during organization registration for request: {Request}", request);
                 this.ErrorMessage = "Error during organization registration.";
                
                return await Task.FromResult<AuthenticationResponse>(null);
@@ -349,6 +362,172 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<AuthenticationResponse> RefreshTokenAsync(string refreshToken)
+        {
+            try
+            {
+                // Find the user session with the matching refresh token
+                var sessionRepo = _repository.GetRepository<UserSession>();
+                var sessions = await sessionRepo.GetQuery(s => s.AuditProperties.IsActive && !s.AuditProperties.IsDeleted)
+                    .Include(s => s.User)
+                    .ThenInclude(u => u.Organization)
+                    .ToListAsync();
+
+                UserSession? validSession = null;
+                foreach (var session in sessions)
+                {
+                    if (BCrypt.Net.BCrypt.Verify(refreshToken, session.TokenHash))
+                    {
+                        validSession = session;
+                        break;
+                    }
+                }
+
+                if (validSession == null)
+                {
+                    ErrorMessage = "Invalid refresh token.";
+                    return null!;
+                }
+
+                // Check if token is expired
+                if (validSession.ExpiresAt <= DateTime.UtcNow)
+                {
+                    ErrorMessage = "Refresh token has expired.";
+                    return null!;
+                }
+
+                var user = validSession.User;
+                var organization = user.Organization;
+
+                // Generate new tokens
+                var newJwtToken = GenerateJwtToken(user, organization);
+                var newRefreshToken = GenerateRefreshToken();
+
+                // Update the session with new refresh token
+                validSession.TokenHash = BCrypt.Net.BCrypt.HashPassword(newRefreshToken);
+                validSession.AuditProperties.UpdatedDate = DateTime.UtcNow;
+
+                await sessionRepo.UpdateAsync(validSession);
+                await _repository.SaveChangesAsync();
+
+                // Update last login time
+                user.LastLoginAt = DateTime.UtcNow;
+                var userRepo = _repository.GetRepository<User>();
+                await userRepo.UpdateAsync(user);
+                await _repository.SaveChangesAsync();
+
+                return new AuthenticationResponse
+                {
+                    Token = newJwtToken,
+                    RefreshToken = newRefreshToken,
+                    ExpiresAt = DateTime.UtcNow.AddHours(GetTokenExpirationHours()),
+                    User = _mapper.Map<UserResponse>(user),
+                    Organization = _mapper.Map<OrganizationResponse>(organization)
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during token refresh");
+                ErrorMessage = "Token refresh failed.";
+                return null!;
+            }
+        }
+
+        public async Task<string> LogoutAsync(string refreshToken)
+        {
+            try
+            {
+                // Find and invalidate the user session
+                var sessionRepo = _repository.GetRepository<UserSession>();
+                var sessions = await sessionRepo.GetQuery(s => s.AuditProperties.IsActive && !s.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                UserSession? validSession = null;
+                foreach (var session in sessions)
+                {
+                    if (BCrypt.Net.BCrypt.Verify(refreshToken, session.TokenHash))
+                    {
+                        validSession = session;
+                        break;
+                    }
+                }
+
+                if (validSession != null)
+                {
+                    // Mark session as inactive
+                    validSession.AuditProperties.IsActive = false;
+                    validSession.AuditProperties.UpdatedDate = DateTime.UtcNow;
+
+                    await sessionRepo.UpdateAsync(validSession);
+                    await _repository.SaveChangesAsync();
+                }
+
+                return "Logout successful.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during logout");
+                ErrorMessage = "Logout failed.";
+                return null!;
+            }
+        }
+
+        public async Task<bool> ValidateRefreshTokenAsync(string refreshToken)
+        {
+            try
+            {
+                var sessionRepo = _repository.GetRepository<UserSession>();
+                var sessions = await sessionRepo.GetQuery(s => s.AuditProperties.IsActive && !s.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                foreach (var session in sessions)
+                {
+                    if (BCrypt.Net.BCrypt.Verify(refreshToken, session.TokenHash))
+                    {
+                        return session.ExpiresAt > DateTime.UtcNow;
+                    }
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error validating refresh token");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Cleanup expired refresh tokens from the database
+        /// </summary>
+        public async Task CleanupExpiredTokensAsync()
+        {
+            try
+            {
+                var sessionRepo = _repository.GetRepository<UserSession>();
+                var expiredSessions = await sessionRepo.GetQuery(s => 
+                    s.ExpiresAt <= DateTime.UtcNow && s.AuditProperties.IsActive)
+                    .ToListAsync();
+
+                foreach (var session in expiredSessions)
+                {
+                    session.AuditProperties.IsActive = false;
+                    session.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    await sessionRepo.UpdateAsync(session);
+                }
+
+                if (expiredSessions.Any())
+                {
+                    await _repository.SaveChangesAsync();
+                    _logger.LogInformation($"Cleaned up {expiredSessions.Count} expired refresh tokens");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cleaning up expired tokens");
+            }
+        }
+
         private string GenerateJwtToken(User user, Organization organization)
         {
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Key"]!));
@@ -358,8 +537,8 @@ namespace Runnatics.Services
             {
                 new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
                 new Claim(JwtRegisteredClaimNames.Email, user.Email),
-                new Claim(JwtRegisteredClaimNames.GivenName, user.FirstName),
-                new Claim(JwtRegisteredClaimNames.FamilyName, user.LastName),
+                new Claim(JwtRegisteredClaimNames.GivenName, user.FirstName ?? string.Empty),
+                new Claim(JwtRegisteredClaimNames.FamilyName, user.LastName ?? string.Empty),
                 new Claim("role", user.Role),
                 new Claim("organizationId", organization.Id.ToString()),
                 new Claim("organizationName", organization.Name),

@@ -65,7 +65,7 @@ builder.Services.AddSwaggerGen(c =>
 // Add Entity Framework with connection pooling optimizations
 builder.Services.AddDbContextPool<RaceSyncDbContext>(options =>
 {
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"), sqlOptions =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("RunnaticsDB"), sqlOptions =>
     {
         // Command timeout for long-running queries
         sqlOptions.CommandTimeout(30);

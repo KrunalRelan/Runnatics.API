@@ -9,9 +9,9 @@ namespace Runnatics.Models.Client.Responses.Events
 {
     public class EventResponse
     {
-        public Guid Id { get; set; }
+        public int Id { get; set; }
 
-        public Guid OrganizationId { get; set; }
+        public int OrganizationId { get; set; }
 
         public string Name { get; set; } = string.Empty;
 

@@ -10,7 +10,7 @@ namespace Runnatics.Models.Client.Requests.Events
     public class EventRequest
     {
         [Required]
-        public Guid OrganizationId { get; set; }
+        public int OrganizationId { get; set; }
 
         public string Name { get; set; } = string.Empty;
 

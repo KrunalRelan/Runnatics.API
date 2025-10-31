@@ -12,7 +12,7 @@ namespace Runnatics.Models.Data.Entities
         public int EventId { get; set; }
         public int ParticipantId { get; set; }
         public int CheckpointId { get; set; }
-        public Guid? ReadNormalizedId { get; set; }
+        public int? ReadNormalizedId { get; set; }
         public long SplitTimeMs { get; set; } // Milliseconds from start to this checkpoint
         public long? SegmentTime { get; set; } // Milliseconds from previous checkpoint
         public decimal? Pace { get; set; } // Minutes per km

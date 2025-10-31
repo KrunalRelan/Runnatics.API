@@ -15,7 +15,7 @@ namespace Runnatics.Models.Data.Entities
         public bool IsActive { get; set; } = true;
         public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UnassignedAt { get; set; }
-        public Guid? AssignedByUserId { get; set; }
+        public int? AssignedByUserId { get; set; }
 
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;

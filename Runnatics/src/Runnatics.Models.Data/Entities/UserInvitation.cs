@@ -46,7 +46,7 @@ namespace Runnatics.Models.Data.Entities
 
         public DateTime? AcceptedAt { get; set; }
 
-        public Guid? AcceptedBy { get; set; }
+        public int? AcceptedBy { get; set; }
 
         // Navigation properties
         [ForeignKey("OrganizationId")]

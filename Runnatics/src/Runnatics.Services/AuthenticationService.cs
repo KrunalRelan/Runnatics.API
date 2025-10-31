@@ -29,65 +29,72 @@ namespace Runnatics.Services
         // Implement the methods from the interface
         public async Task<AuthenticationResponse?> AcceptInvitationAsync(AcceptInvitationRequest request)
         {
-            try
+      try
             {
-                var user = await _repository.GetRepository<Models.Data.Entities.User>()
-                                             .GetQuery(u => u.Id == Guid.Parse(request.InvitationToken))
-                                             .FirstOrDefaultAsync(); // Assuming InvitationToken is the User ID for simplicity
-                 
+         // Parse invitation token as int
+      if (!int.TryParse(request.InvitationToken, out int userId))
+            {
+         this.ErrorMessage = "Invalid invitation token format";
+          _logger.LogError("Invalid invitation token format: {Token}", request.InvitationToken);
+      return null;
+    }
 
-                if (user == null || user.AuditProperties.IsActive)
-                {
-                    this.ErrorMessage = "Invalid or expired invitation";
-                    _logger.LogError("Invalid or expired invitation for token: {Token}", request.InvitationToken);
-                    return null;
-                }
+        var user = await _repository.GetRepository<Models.Data.Entities.User>()
+             .GetQuery(u => u.Id == userId)
+              .FirstOrDefaultAsync();
 
-                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
-                user.AuditProperties.IsActive = true;
-                user.AuditProperties.UpdatedBy = user.Id; // Assuming user accepts their own invitation
-                user.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                await _repository.SaveChangesAsync();
+    if (user == null || user.AuditProperties.IsActive)
+    {
+      this.ErrorMessage = "Invalid or expired invitation";
+       _logger.LogError("Invalid or expired invitation for token: {Token}", request.InvitationToken);
+            return null;
+         }
 
-                var organization = await _repository.GetRepository<Models.Data.Entities.Organization>()
-                                                .GetQuery(o => o.Id == user.OrganizationId
-                                                            && !o.AuditProperties.IsDeleted
-                                                            && o.AuditProperties.IsActive)
-                                                .FirstOrDefaultAsync();
+    user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
+    user.AuditProperties.IsActive = true;
+           user.AuditProperties.UpdatedBy = user.Id;
+        user.AuditProperties.UpdatedDate = DateTime.UtcNow;
+         await _repository.SaveChangesAsync();
 
-                if (organization == null || !organization.AuditProperties.IsActive || organization.AuditProperties.IsDeleted)
-                {
-                    _logger.LogError("Organization not found or inactive for user: {UserId}", user.Id);
-                    this.ErrorMessage = "Organization not found or inactive.";
-                    return null;
-                }
+    var organization = await _repository.GetRepository<Models.Data.Entities.Organization>()
+          .GetQuery(o => o.Id == user.OrganizationId
+           && !o.AuditProperties.IsDeleted
+    && o.AuditProperties.IsActive)
+            .FirstOrDefaultAsync();
+
+        if (organization == null || !organization.AuditProperties.IsActive || organization.AuditProperties.IsDeleted)
+        {
+            _logger.LogError("Organization not found or inactive for user: {UserId}", user.Id);
+       this.ErrorMessage = "Organization not found or inactive.";
+                  return null;
+         }
 
                 var token = GenerateJwtToken(user, organization);
 
                 var refreshToken = GenerateRefreshToken();
 
-                await SaveRefreshTokenAsync(user.Id, refreshToken, false);
+   await SaveRefreshTokenAsync(user.Id, refreshToken, false);
 
-                var response = new AuthenticationResponse
+ var response = new AuthenticationResponse
                 {
-                    Token = token,
-                    RefreshToken = refreshToken,
-                    ExpiresAt = DateTime.UtcNow.AddMinutes(30), // Example expiration time
-                    User = _mapper.Map<UserResponse>(user),
-                    Organization = _mapper.Map<OrganizationResponse>(organization),
+         Token = token,
+       RefreshToken = refreshToken,
+         ExpiresAt = DateTime.UtcNow.AddMinutes(30),
+           User = _mapper.Map<UserResponse>(user),
+      Organization = _mapper.Map<OrganizationResponse>(organization),
                 };
 
-                return response;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error during accepting invitation for email: {Email}", request.InvitationToken);
-                this.ErrorMessage = "Error during accepting invitation.";
-                return null;
+     return response;
+          }
+       catch (Exception ex)
+  {
+      _logger.LogError(ex, "Error during accepting invitation for email: {Email}", request.InvitationToken);
+    this.ErrorMessage = "Error during accepting invitation.";
+    return null;
             }
         }
 
-        public async Task<string?> ChangePasswordAsync(Guid userId, ChangePasswordRequest request)
+        public async Task<string?> ChangePasswordAsync(int userId, ChangePasswordRequest request)
         {
             try
             {
@@ -231,7 +238,7 @@ namespace Runnatics.Services
             }
         }
 
-        public Task<InvitationResponse?> InviteUserAsync(InviteUserRequest request, Guid organizationId, Guid invitedBy)
+        public Task<InvitationResponse?> InviteUserAsync(InviteUserRequest request, int organizationId, int invitedBy)
         {
             throw new NotImplementedException();
         }
@@ -341,7 +348,7 @@ namespace Runnatics.Services
                 
                 var organization = new Organization
                 {
-                    Id = Guid.NewGuid(),
+                    // Id will be auto-generated by database
                     Name = request.Name,
                     Slug = GenerateSlug(request.Domain), // Generate slug from domain
                     Domain = request.Domain,
@@ -360,7 +367,7 @@ namespace Runnatics.Services
                 // Create admin user
                 var adminUser = new User
                 {
-                    Id = Guid.NewGuid(),
+                    // Id will be auto-generated by database
                     OrganizationId = addedOrganization.Id,
                     FirstName = request.AdminFirstName,
                     LastName = request.AdminLastName,
@@ -507,7 +514,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<string?> RevokeUserAccessAsync(Guid userId, Guid revokedBy)
+        public async Task<string?> RevokeUserAccessAsync(int userId, int revokedBy)
         {
             try
             {
@@ -537,7 +544,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<string?> UpdateUserRoleAsync(Guid userId, string newRole, Guid updatedBy)
+        public async Task<string?> UpdateUserRoleAsync(int userId, string newRole, int updatedBy)
         {
             try
             {
@@ -809,87 +816,34 @@ namespace Runnatics.Services
             return Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         }
 
-        private async Task SaveRefreshTokenAsync(Guid userId, string refreshToken, bool rememberMe = false)
+        private async Task SaveRefreshTokenAsync(int userId, string refreshToken, bool rememberMe = false)
         {
             var session = new UserSession
-            {
-                Id = Guid.NewGuid(),
-                UserId = userId,
-                TokenHash = BCrypt.Net.BCrypt.HashPassword(refreshToken),
-                ExpiresAt = rememberMe ? DateTime.UtcNow.AddDays(30) : DateTime.UtcNow.AddDays(7),
-                AuditProperties = new AuditProperties
-                {
-                    CreatedDate = DateTime.UtcNow,
-                    IsActive = true,
-                    IsDeleted = false
-                }
-            };
+      {
+     // Id will be auto-generated by database
+   UserId = userId,
+   TokenHash = BCrypt.Net.BCrypt.HashPassword(refreshToken),
+        ExpiresAt = rememberMe ? DateTime.UtcNow.AddDays(30) : DateTime.UtcNow.AddDays(7),
+        AuditProperties = new AuditProperties
+   {
+    CreatedDate = DateTime.UtcNow,
+    IsActive = true,
+  IsDeleted = false
+}
+    };
 
-            // Implementation to save session
-            var repo = _repository.GetRepository<UserSession>();
-            await repo.AddAsync(session);
-            await _repository.SaveChangesAsync();
-        }
-        private static string GenerateSlug(string input)
-        {
-            if (string.IsNullOrWhiteSpace(input))
-                return string.Empty;
+  // Implementation to save session
+    var repo = _repository.GetRepository<UserSession>();
+      await repo.AddAsync(session);
+       await _repository.SaveChangesAsync();
+  }
 
-            return input.ToLowerInvariant()
-                .Replace(" ", "-")
-                .Replace("_", "-")
-                .Replace("'", "")
-                .Replace("\"", "")
-                .Replace(".", "-")
-                .Trim('-');
-        }
-
-        private int GetTokenExpirationHours()
-        {
-            return int.TryParse(_configuration["JWT:DurationInMinutes"], out var minutes)
-                ? minutes / 60
-                : 1;
-        }
-
-        /// <summary>
-        /// Validates password complexity using the same pattern as the request model
-        /// </summary>
-        /// <param name="password">Password to validate</param>
-        /// <returns>True if password meets complexity requirements</returns>
-        private static bool IsValidPassword(string password)
-        {
-            if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
-                return false;
-
-            // Pattern: ^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$
-            // - At least one lowercase letter
-            // - At least one uppercase letter  
-            // - At least one digit
-            // - At least one special character from @$!%*?&
-            // - Only allows letters, digits, and specified special characters
-            var pattern = @"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$";
-            return System.Text.RegularExpressions.Regex.IsMatch(password, pattern);
-        }
-
-        /// <summary>
-        /// Generates a cryptographically secure password reset token
-        /// </summary>
-        /// <returns>Password reset token</returns>
-        private static string GeneratePasswordResetToken()
-        {
-            // Generate a 32-byte random token and convert to base64
-            using var rng = RandomNumberGenerator.Create();
-            var tokenBytes = new byte[32];
-            rng.GetBytes(tokenBytes);
-            return Convert.ToBase64String(tokenBytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
-        }
-
-        /// <summary>
+    /// <summary>
         /// Invalidates all active sessions for a user (for security after password reset)
-        /// </summary>
+    /// </summary>
         /// <param name="userId">User ID</param>
-        private async Task InvalidateAllUserSessionsAsync(Guid userId)
-        {
+   private async Task InvalidateAllUserSessionsAsync(int userId)
+   {
             try
             {
                 var sessionRepo = _repository.GetRepository<UserSession>();
@@ -917,6 +871,60 @@ namespace Runnatics.Services
             {
                 _logger.LogWarning(ex, "Failed to invalidate user sessions for user: {UserId}", userId);
             }
+    }
+
+    private static string GenerateSlug(string input)
+    {
+            if (string.IsNullOrWhiteSpace(input))
+  return string.Empty;
+
+  return input.ToLowerInvariant()
+         .Replace(" ", "-")
+        .Replace("_", "-")
+         .Replace("'", "")
+             .Replace("\"", "")
+        .Replace(".", "-")
+          .Trim('-');
+        }
+
+        private int GetTokenExpirationHours()
+        {
+            return int.TryParse(_configuration["JWT:DurationInMinutes"], out var minutes)
+   ? minutes / 60
+        : 1;
+   }
+
+   /// <summary>
+        /// Validates password complexity using the same pattern as the request model
+        /// </summary>
+   /// <param name="password">Password to validate</param>
+        /// <returns>True if password meets complexity requirements</returns>
+        private static bool IsValidPassword(string password)
+    {
+   if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+       return false;
+
+     // Pattern: ^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$
+ // - At least one lowercase letter
+    // - At least one uppercase letter  
+     // - At least one digit
+        // - At least one special character from @$!%*?&
+        // - Only allows letters, digits, and specified special characters
+            var pattern = @"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]+$";
+         return System.Text.RegularExpressions.Regex.IsMatch(password, pattern);
+     }
+
+        /// <summary>
+/// Generates a cryptographically secure password reset token
+      /// </summary>
+        /// <returns>Password reset token</returns>
+        private static string GeneratePasswordResetToken()
+      {
+  // Generate a 32-byte random token and convert to base64
+   using var rng = RandomNumberGenerator.Create();
+ var tokenBytes = new byte[32];
+            rng.GetBytes(tokenBytes);
+       return Convert.ToBase64String(tokenBytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
         }
     }
 }

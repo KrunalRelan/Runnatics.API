@@ -9,8 +9,8 @@ namespace Runnatics.Models.Data.Entities
         [Key]
         public int Id { get; set; }
         
-        public Guid? EventId { get; set; }
-        public Guid? ParticipantId { get; set; }
+        public int? EventId { get; set; }
+        public int? ParticipantId { get; set; }
 
         [Required]
         [MaxLength(20)]

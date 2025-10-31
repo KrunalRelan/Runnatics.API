@@ -85,7 +85,7 @@ namespace Runnatics.Services
                 eventEntity.AuditProperties.IsActive = true;
                 eventEntity.AuditProperties.IsDeleted = false;
                 eventEntity.AuditProperties.CreatedDate = DateTime.UtcNow;
-                eventEntity.AuditProperties.CreatedBy
+                eventEntity.AuditProperties.CreatedBy = 1; // ToDo : Replace with actual user ID
 
                 // Add and save
                 await eventRepo.AddAsync(eventEntity);

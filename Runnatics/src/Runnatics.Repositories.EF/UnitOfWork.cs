@@ -36,7 +36,7 @@ namespace Runnatics.Repositories.EF
     {
         private readonly C _context;
         private IDbContextTransaction? _transaction;
-        private Guid? _tenantId;
+        private int? _tenantId;
 
         public UnitOfWork(C context)
         {
@@ -138,7 +138,7 @@ namespace Runnatics.Repositories.EF
         /// Sets the tenant ID for the current context.
         /// </summary>
         /// <param name="organizationId">The organization ID (tenant ID)</param>
-        public void SetTenantId(Guid organizationId)
+        public void SetTenantId(int organizationId)
         {
             _tenantId = organizationId;
         }
@@ -147,7 +147,7 @@ namespace Runnatics.Repositories.EF
         /// Gets the current tenant ID.
         /// </summary>
         /// <returns>The current tenant ID, or null if not set</returns>
-        public Guid? GetCurrentTenantId()
+        public int? GetCurrentTenantId()
         {
             return _tenantId;
         }

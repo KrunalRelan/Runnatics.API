@@ -18,7 +18,7 @@ namespace Runnatics.Models.Data.Entities
         public long? NetTime { get; set; } // Milliseconds from participant start
         public bool IsManualEntry { get; set; } = false;
         public string? ManualEntryReason { get; set; }
-        public Guid? CreatedByUserId { get; set; }
+        public int? CreatedByUserId { get; set; }
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

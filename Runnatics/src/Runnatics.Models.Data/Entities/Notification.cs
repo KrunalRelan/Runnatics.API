@@ -7,7 +7,7 @@ namespace Runnatics.Models.Data.Entities
     public class Notification
     {
         [Key]
-        public Guid Id { get; set; } = Guid.NewGuid();
+        public int Id { get; set; }
         
         public Guid? EventId { get; set; }
         public Guid? ParticipantId { get; set; }

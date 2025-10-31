@@ -4,9 +4,9 @@ namespace Runnatics.Models.Data.Entities
 {
     public class ChipAssignment
     {
-        public Guid EventId { get; set; }
-        public Guid ParticipantId { get; set; }
-        public Guid ChipId { get; set; }
+        public int EventId { get; set; }
+        public int ParticipantId { get; set; }
+        public int ChipId { get; set; }
         public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UnassignedAt { get; set; }
         public Guid? AssignedByUserId { get; set; }

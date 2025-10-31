@@ -8,10 +8,10 @@ namespace Runnatics.Models.Data.Entities
     public class SplitTime
     {
         [Key]
-        public Guid Id { get; set; }
-        public Guid EventId { get; set; }
-        public Guid ParticipantId { get; set; }
-        public Guid CheckpointId { get; set; }
+        public int Id { get; set; }
+        public int EventId { get; set; }
+        public int ParticipantId { get; set; }
+        public int CheckpointId { get; set; }
         public Guid? ReadNormalizedId { get; set; }
         public long SplitTimeMs { get; set; } // Milliseconds from start to this checkpoint
         public long? SegmentTime { get; set; } // Milliseconds from previous checkpoint

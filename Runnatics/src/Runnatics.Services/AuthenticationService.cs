@@ -34,7 +34,7 @@ namespace Runnatics.Services
                 var user = await _repository.GetRepository<Models.Data.Entities.User>()
                                              .GetQuery(u => u.Id == Guid.Parse(request.InvitationToken))
                                              .FirstOrDefaultAsync(); // Assuming InvitationToken is the User ID for simplicity
-
+                 
 
                 if (user == null || user.AuditProperties.IsActive)
                 {
@@ -191,7 +191,7 @@ namespace Runnatics.Services
                     var passwordResetTokenRepo = _repository.GetRepository<PasswordResetToken>();
                     var resetTokenEntity = new PasswordResetToken
                     {
-                        Id = Guid.NewGuid(),
+                        //Id = Guid.NewGuid(),
                         UserId = user.Id,
                         TokenHash = BCrypt.Net.BCrypt.HashPassword(resetToken),
                         ExpiresAt = tokenExpiry,

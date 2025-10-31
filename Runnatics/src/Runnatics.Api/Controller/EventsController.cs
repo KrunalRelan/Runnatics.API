@@ -14,7 +14,7 @@ namespace Runnatics.Api.Controller
     {
         private readonly IEventsService _eventService = eventService;
 
-        [HttpPost("create")]
+        [HttpPost("search")]
         [Authorize(Roles = "Admin")]
 
         public async Task<IActionResult> Search([FromBody] EventSearchRequest request)
@@ -34,6 +34,8 @@ namespace Runnatics.Api.Controller
             return Ok(response);
         }
 
+        [HttpPost("create")]
+        //[Authorize(Roles = "Admin")]
         public async Task<IActionResult> Create([FromBody] EventRequest request)
         {
             if (request == null)

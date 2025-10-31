@@ -8,10 +8,10 @@ namespace Runnatics.Models.Data.Entities
     public class UserInvitation
     {
         [Key]
-        public Guid Id { get; set; }
+        public int Id { get; set; }
 
         [Required]
-        public Guid OrganizationId { get; set; }
+        public int OrganizationId { get; set; }
 
         [Required]
         [EmailAddress]
@@ -34,7 +34,7 @@ namespace Runnatics.Models.Data.Entities
         public string Token { get; set; }
 
         [Required]
-        public Guid InvitedBy { get; set; }
+        public int InvitedBy { get; set; }
 
         public DateTime ExpiryDate { get; set; }
 

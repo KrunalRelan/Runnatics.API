@@ -50,6 +50,6 @@ namespace Runnatics.Models.Client.Requests
         // Optional: Subscription plan selection
         public string SubscriptionPlan { get; set; } = "starter";
 
-        public Guid CreatedBy { get; set; }
+        public int CreatedBy { get; set; }
     }
 }

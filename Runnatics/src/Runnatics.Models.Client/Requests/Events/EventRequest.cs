@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -8,22 +9,30 @@ namespace Runnatics.Models.Client.Requests.Events
 {
     public class EventRequest
     {
-        public string Title { get; set; }
-        public string Organizer { get; set; }
-        public string City { get; set; }
-        public DateTimeOffset Time { get; set; }
-        public string TimeZone { get; set; }
-        public string Details { get; set; }
-        public string SmsText { get; set; }
+        [Required]
+        public Guid OrganizationId { get; set; }
 
-        // Publishing info
-        public bool IsPublished { get; set; }
-        public bool IsConfirmed { get; set; }
-        public bool RankOnNet { get; set; }
+        public string Name { get; set; } = string.Empty;
 
-        // Leaderboard
-        public string ResultBasis { get; set; } // "ChipTime" or "GunTime"
-        public bool AllowOverall { get; set; }
-        public bool AllowGenderCategory { get; set; }
+        public string Slug { get; set; } = string.Empty;
+
+        public string? Description { get; set; }
+
+        public DateTime EventDate { get; set; }
+
+        public string TimeZone { get; set; } 
+
+        public string? VenueName { get; set; }
+
+        public string? VenueAddress { get; set; }
+
+        public decimal? VenueLatitude { get; set; }
+        public decimal? VenueLongitude { get; set; }
+
+        public string Status { get; set; } 
+
+        public int? MaxParticipants { get; set; }
+        public DateTime? RegistrationDeadline { get; set; }
+        public string? Settings { get; set; } // JSON
     }
 }

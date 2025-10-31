@@ -1,7 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Events;
+using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Services.Interface;
+using System.Net;
 
 namespace Runnatics.Api.Controller
 {
@@ -13,21 +16,41 @@ namespace Runnatics.Api.Controller
 
         [HttpPost("create")]
         [Authorize(Roles = "Admin")]
+
+        public async Task<IActionResult> Search([FromBody] EventSearchRequest request)
+        {
+            var response = new ResponseBase<PagingList<EventResponse>>();
+            var result = await _eventService.Search(request);
+
+            if (_eventService.HasError)
+            {
+                response.Error = new ResponseBase<PagingList<EventResponse>>.ErrorData() { Message = _eventService.ErrorMessage };
+                return StatusCode((int)HttpStatusCode.InternalServerError);
+            }
+
+            response.Message = result;
+            response.Message.TotalCount = result.TotalCount;
+
+            return Ok(response);
+        }
+
         public async Task<IActionResult> Create([FromBody] EventRequest request)
         {
             if (request == null)
             {
-                return BadRequest("Event details are not provided.");
+                return BadRequest("Invalid Input Provided.");
             }
 
-            await _eventService.CreateEventAsync(request);
-            
+            var response = new ResponseBase<EventResponse>();
+            var result = await _eventService.Create(request);
+
             if (_eventService.HasError)
             {
-                return BadRequest(_eventService.ErrorMessage);
+                return StatusCode((int)HttpStatusCode.InternalServerError);
             }
 
-            return NoContent();
+            response.Message = result;
+            return StatusCode((int)HttpStatusCode.Created, response);
         }
 
     }

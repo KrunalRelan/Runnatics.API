@@ -1,0 +1,84 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Repositories.Interface", "Runnatics.Repositories.Interface\Runnatics.Repositories.Interface.csproj", "{19688603-4C47-3822-2FC2-F53DFF0A5762}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Infrastructure.Interface", "Runnatics.Infrastructure.Interface\Runnatics.Infrastructure.Interface.csproj", "{58DA6F40-05B1-CD70-BEE5-B3D29CD6279F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Services.Interface", "Runnatics.Services.Interface\Runnatics.Services.Interface.csproj", "{A98D3107-3D2D-C810-2528-94596DBA2AA1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.EF", "Runnatics.EF\Runnatics.EF.csproj", "{5C3D2856-297A-2BFA-CCD1-DCE6017A6667}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Repositories.EF", "Runnatics.Repositories.EF\Runnatics.Repositories.EF.csproj", "{17705634-E5D9-723A-5888-0930C087337F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Api", "Runnatics.Api\Runnatics.Api.csproj", "{6C65785C-4C8A-3DB1-9087-B117D24C8C1E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Models.Data", "Runnatics.Models.Data\Runnatics.Models.Data.csproj", "{D21CBBF9-9B42-FF19-2FE9-BDF785A4F738}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Infrastructure", "Runnatics.Infrastructure\Runnatics.Infrastructure.csproj", "{D56E6D62-439E-5CC9-385F-EFF1674EC6A8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Services", "Runnatics.Services\Runnatics.Services.csproj", "{BF74B3ED-FF7D-4275-7E5F-E110FF220FFA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Data.EF", "Runnatics.Data.EF\Runnatics.Data.EF.csproj", "{9711CAF6-09BB-81B9-142C-5FE362B53D81}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Models.Client", "Runnatics.Models.Client\Runnatics.Models.Client.csproj", "{ECCFE7EB-930A-AAF3-E492-151A6AE01FFB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{19688603-4C47-3822-2FC2-F53DFF0A5762}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{19688603-4C47-3822-2FC2-F53DFF0A5762}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{19688603-4C47-3822-2FC2-F53DFF0A5762}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{19688603-4C47-3822-2FC2-F53DFF0A5762}.Release|Any CPU.Build.0 = Release|Any CPU
+		{58DA6F40-05B1-CD70-BEE5-B3D29CD6279F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{58DA6F40-05B1-CD70-BEE5-B3D29CD6279F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{58DA6F40-05B1-CD70-BEE5-B3D29CD6279F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{58DA6F40-05B1-CD70-BEE5-B3D29CD6279F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A98D3107-3D2D-C810-2528-94596DBA2AA1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A98D3107-3D2D-C810-2528-94596DBA2AA1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A98D3107-3D2D-C810-2528-94596DBA2AA1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A98D3107-3D2D-C810-2528-94596DBA2AA1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5C3D2856-297A-2BFA-CCD1-DCE6017A6667}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5C3D2856-297A-2BFA-CCD1-DCE6017A6667}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5C3D2856-297A-2BFA-CCD1-DCE6017A6667}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5C3D2856-297A-2BFA-CCD1-DCE6017A6667}.Release|Any CPU.Build.0 = Release|Any CPU
+		{17705634-E5D9-723A-5888-0930C087337F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{17705634-E5D9-723A-5888-0930C087337F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{17705634-E5D9-723A-5888-0930C087337F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{17705634-E5D9-723A-5888-0930C087337F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6C65785C-4C8A-3DB1-9087-B117D24C8C1E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6C65785C-4C8A-3DB1-9087-B117D24C8C1E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6C65785C-4C8A-3DB1-9087-B117D24C8C1E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6C65785C-4C8A-3DB1-9087-B117D24C8C1E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D21CBBF9-9B42-FF19-2FE9-BDF785A4F738}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D21CBBF9-9B42-FF19-2FE9-BDF785A4F738}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D21CBBF9-9B42-FF19-2FE9-BDF785A4F738}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D21CBBF9-9B42-FF19-2FE9-BDF785A4F738}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D56E6D62-439E-5CC9-385F-EFF1674EC6A8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D56E6D62-439E-5CC9-385F-EFF1674EC6A8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D56E6D62-439E-5CC9-385F-EFF1674EC6A8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D56E6D62-439E-5CC9-385F-EFF1674EC6A8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BF74B3ED-FF7D-4275-7E5F-E110FF220FFA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BF74B3ED-FF7D-4275-7E5F-E110FF220FFA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BF74B3ED-FF7D-4275-7E5F-E110FF220FFA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BF74B3ED-FF7D-4275-7E5F-E110FF220FFA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9711CAF6-09BB-81B9-142C-5FE362B53D81}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9711CAF6-09BB-81B9-142C-5FE362B53D81}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9711CAF6-09BB-81B9-142C-5FE362B53D81}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9711CAF6-09BB-81B9-142C-5FE362B53D81}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ECCFE7EB-930A-AAF3-E492-151A6AE01FFB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ECCFE7EB-930A-AAF3-E492-151A6AE01FFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ECCFE7EB-930A-AAF3-E492-151A6AE01FFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ECCFE7EB-930A-AAF3-E492-151A6AE01FFB}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {3F1047E5-BA74-46B3-A743-F2759C58A009}
+	EndGlobalSection
+EndGlobal

@@ -12,6 +12,7 @@ namespace Runnatics.Data.EF
         public DbSet<UserSession> UserSessions { get; set; }
         public DbSet<PasswordResetToken> PasswordResetTokens { get; set; }
         public DbSet<Event> Events { get; set; }
+        public DbSet<EventSettings> EventSettings { get; set; }
         public DbSet<RaceCategory> RaceCategories { get; set; }
         public DbSet<Participant> Participants { get; set; }
         public DbSet<Checkpoint> Checkpoints { get; set; }
@@ -35,6 +36,7 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new UserSessionConfiguration());
             modelBuilder.ApplyConfiguration(new PasswordResetTokenConfiguration());
             modelBuilder.ApplyConfiguration(new EventConfiguration());
+            modelBuilder.ApplyConfiguration(new EventSettingsConfiguration());
             modelBuilder.ApplyConfiguration(new RaceCategoryConfiguration());
             modelBuilder.ApplyConfiguration(new ParticipantConfiguration());
             modelBuilder.ApplyConfiguration(new CheckpointConfiguration());

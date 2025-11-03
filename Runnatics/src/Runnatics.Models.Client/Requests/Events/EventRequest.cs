@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace Runnatics.Models.Client.Requests.Events
 {
@@ -12,16 +7,23 @@ namespace Runnatics.Models.Client.Requests.Events
         [Required]
         public int OrganizationId { get; set; }
 
+        [Required]
+        [MaxLength(255)]
         public string Name { get; set; } = string.Empty;
 
+        [Required]
+        [MaxLength(100)]
         public string Slug { get; set; } = string.Empty;
 
         public string? Description { get; set; }
 
+        [Required]
         public DateTime EventDate { get; set; }
 
-        public string TimeZone { get; set; } 
+        [MaxLength(50)]
+        public string TimeZone { get; set; } = "Asia/Kolkata";
 
+        [MaxLength(255)]
         public string? VenueName { get; set; }
 
         public string? VenueAddress { get; set; }
@@ -29,10 +31,16 @@ namespace Runnatics.Models.Client.Requests.Events
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
 
-        public string Status { get; set; } 
+        [MaxLength(20)]
+        public string Status { get; set; } = "Draft";
 
         public int? MaxParticipants { get; set; }
         public DateTime? RegistrationDeadline { get; set; }
-        public string? Settings { get; set; } // JSON
+
+        // Event Settings
+        public EventSettingsRequest? EventSettings { get; set; }
+
+        // Audit
+        public int? CreatedBy { get; set; }
     }
 }

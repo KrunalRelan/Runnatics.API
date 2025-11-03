@@ -72,8 +72,64 @@ namespace Runnatics.Services
 
 
             //Event mappings
-            CreateMap<EventRequest, Event>();
-                
+            CreateMap<EventRequest, Event>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.Organization, opt => opt.Ignore())
+                .ForMember(dest => dest.RaceCategories, opt => opt.Ignore())
+                .ForMember(dest => dest.Checkpoints, opt => opt.Ignore())
+                .ForMember(dest => dest.Participants, opt => opt.Ignore())
+                .ForMember(dest => dest.ChipAssignments, opt => opt.Ignore())
+                .ForMember(dest => dest.ReadRaws, opt => opt.Ignore())
+                .ForMember(dest => dest.ReadNormalized, opt => opt.Ignore())
+                .ForMember(dest => dest.SplitTimes, opt => opt.Ignore())
+                .ForMember(dest => dest.Results, opt => opt.Ignore());
+
+            CreateMap<Event, EventResponse>()
+                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.OrganizationId, opt => opt.MapFrom(src => src.OrganizationId))
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
+                .ForMember(dest => dest.Slug, opt => opt.MapFrom(src => src.Slug))
+                .ForMember(dest => dest.Description, opt => opt.MapFrom(src => src.Description))
+                .ForMember(dest => dest.EventDate, opt => opt.MapFrom(src => src.EventDate))
+                .ForMember(dest => dest.TimeZone, opt => opt.MapFrom(src => src.TimeZone))
+                .ForMember(dest => dest.VenueName, opt => opt.MapFrom(src => src.VenueName))
+                .ForMember(dest => dest.VenueAddress, opt => opt.MapFrom(src => src.VenueAddress))
+                .ForMember(dest => dest.VenueLatitude, opt => opt.MapFrom(src => src.VenueLatitude))
+                .ForMember(dest => dest.VenueLongitude, opt => opt.MapFrom(src => src.VenueLongitude))
+                .ForMember(dest => dest.Status, opt => opt.MapFrom(src => src.Status))
+                .ForMember(dest => dest.MaxParticipants, opt => opt.MapFrom(src => src.MaxParticipants))
+                .ForMember(dest => dest.RegistrationDeadline, opt => opt.MapFrom(src => src.RegistrationDeadline))
+                .ForMember(dest => dest.EventSettings, opt => opt.MapFrom(src => src.EventSettings))
+                .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
+                .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
+                .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
+                .ForMember(dest => dest.City, opt => opt.Ignore()) // Legacy field
+                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.Organization != null ? src.Organization.Name : string.Empty))
+                .ForMember(dest => dest.IsPublished, opt => opt.MapFrom(src => src.EventSettings != null ? src.EventSettings.Published : false));
+
+            // EventSettings mappings
+            CreateMap<EventSettingsRequest, EventSettings>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.EventId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.Event, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()); // Set by service
+
+            CreateMap<EventSettings, EventSettingsResponse>()
+                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.EventId, opt => opt.MapFrom(src => src.EventId))
+                .ForMember(dest => dest.RemoveBanner, opt => opt.MapFrom(src => src.RemoveBanner))
+                .ForMember(dest => dest.Published, opt => opt.MapFrom(src => src.Published))
+                .ForMember(dest => dest.RankOnNet, opt => opt.MapFrom(src => src.RankOnNet))
+                .ForMember(dest => dest.ShowResultSummaryForRaces, opt => opt.MapFrom(src => src.ShowResultSummaryForRaces))
+                .ForMember(dest => dest.UseOldData, opt => opt.MapFrom(src => src.UseOldData))
+                .ForMember(dest => dest.ConfirmedEvent, opt => opt.MapFrom(src => src.ConfirmedEvent))
+                .ForMember(dest => dest.AllowNameCheck, opt => opt.MapFrom(src => src.AllowNameCheck))
+                .ForMember(dest => dest.AllowParticipantEdit, opt => opt.MapFrom(src => src.AllowParticipantEdit))
+                .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
+                .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
+   
         }
     }
 }

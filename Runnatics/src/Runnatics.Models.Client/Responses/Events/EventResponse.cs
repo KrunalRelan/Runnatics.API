@@ -15,12 +15,44 @@ namespace Runnatics.Models.Client.Responses.Events
 
         public string Name { get; set; } = string.Empty;
 
+        public string Slug { get; set; } = string.Empty;
+
+        public string? Description { get; set; }
+
         public DateTime EventDate { get; set; }
 
+        public string TimeZone { get; set; } = string.Empty;
+
+        public string? VenueName { get; set; }
+
+        public string? VenueAddress { get; set; }
+
+        public decimal? VenueLatitude { get; set; }
+
+        public decimal? VenueLongitude { get; set; }
+
+        public string Status { get; set; } = string.Empty;
+
+        public int? MaxParticipants { get; set; }
+
+        public DateTime? RegistrationDeadline { get; set; }
+
+        // Deprecated - kept for backward compatibility
         public string? City { get; set; } 
 
         public string? EventOrganizerName { get; set; }
 
+        [Obsolete("Use EventSettings.Published instead")]
         public bool IsPublished { get; set; }
+
+        // Event Settings
+        public EventSettingsResponse? EventSettings { get; set; }
+
+        // Audit
+        public DateTime CreatedAt { get; set; }
+
+        public DateTime? UpdatedAt { get; set; }
+
+        public bool IsActive { get; set; }
     }
 }

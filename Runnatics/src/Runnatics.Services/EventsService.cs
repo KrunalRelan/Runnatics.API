@@ -4,19 +4,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
-using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Requests.Events;
-using Runnatics.Models.Client.Responses;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Linq.Expressions;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Services
 {

@@ -15,7 +15,7 @@ namespace Runnatics.Api.Controller
     {
         private readonly IAuthenticationService _authService = authService;
 
-        [HttpPost("register")]
+        [HttpPost("register-organization")]
         [AllowAnonymous]
         public async Task<IActionResult> RegisterAsync([FromBody] RegisterOrganizationRequest request)
         {
@@ -69,8 +69,8 @@ namespace Runnatics.Api.Controller
             return Ok(toReturn);
         }
 
-        [HttpPost("invite")]
-        [Authorize(Roles = "Admin")]
+        [HttpPost("register-user")]
+        [Authorize(Roles = "Admin,SuperAdmin")]
         public async Task<IActionResult> InviteUser([FromBody] InviteUserRequest request)
         {
             var organizationId = int.Parse(User.FindFirst("organizationId")!.Value);
@@ -161,7 +161,7 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpPost("users/{userId}/revoke")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin, SuperAdmin")]
         public async Task<IActionResult> RevokeUserAccess(int userId)
         {
             ResponseBase<string> toReturn = new();
@@ -180,7 +180,7 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpPut("users/{userId}/role")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin,SuperAdmin")]
         public async Task<IActionResult> UpdateUserRole(int userId, [FromBody] string newRole)
         {
             ResponseBase<string> toReturn = new();

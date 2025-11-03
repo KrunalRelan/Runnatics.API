@@ -14,10 +14,6 @@ namespace Runnatics.Models.Data.Entities
         public string Name { get; set; }
 
         [Required]
-        [StringLength(100)]
-        public string Slug { get; set; }
-
-        [Required]
         [StringLength(30)]
         public string Domain { get; set; }
 
@@ -30,49 +26,16 @@ namespace Runnatics.Models.Data.Entities
         [StringLength(20)]
         public string? PhoneNumber { get; set; }
 
-        [Url]
-        [StringLength(255)]
-        public string? Website { get; set; }
-
-        [StringLength(255)]
-        public string? LogoUrl { get; set; }
-
-        [StringLength(500)]
-        public string? Description { get; set; }
-
-        // JSON settings
-        public string? Settings { get; set; }
-
         // Subscription Information
-        [Required]
-        [StringLength(50)]
-        public string SubscriptionPlan { get; set; } = "starter";
+        //[Required]
+        //[StringLength(50)]
+        //public string SubscriptionPlan { get; set; } = "starter";
 
-        public DateTime? SubscriptionStartDate { get; set; }
+        //public DateTime? SubscriptionStartDate { get; set; }
 
-        public DateTime? SubscriptionEndDate { get; set; }
+        //public DateTime? SubscriptionEndDate { get; set; }
 
-        public bool IsSubscriptionActive { get; set; } = true;
-
-        // Organization Settings
-        [StringLength(10)]
-        public string TimeZone { get; set; } = "UTC";
-
-        [StringLength(10)]
-        public string Currency { get; set; } = "USD";
-
-        [StringLength(100)]
-        public string? Country { get; set; }
-
-        [StringLength(100)]
-        public string? City { get; set; }
-
-             
-        public bool IsVerified { get; set; } = false;
-
-        [Required]
-        [StringLength(20)]
-        public string Status { get; set; } = "Active";
+        //public bool IsSubscriptionActive { get; set; } = true;
 
         // Limits based on subscription
         public int MaxEvents { get; set; } = 5;
@@ -105,14 +68,14 @@ namespace Runnatics.Models.Data.Entities
         [NotMapped]
         public int PendingInvitations => UserInvitations?.Count(i => !i.IsAccepted && !i.IsExpired && i.ExpiryDate > DateTime.UtcNow) ?? 0;
 
-        [NotMapped]
-        public string AccessUrl => $"https://{Domain}.runnatics.com";
+        //[NotMapped]
+        //public string AccessUrl => $"https://{Domain}.runnatics.com";
 
-        [NotMapped]
-        public bool IsSubscriptionExpired => SubscriptionEndDate.HasValue && SubscriptionEndDate.Value < DateTime.UtcNow;
+        //[NotMapped]
+        //public bool IsSubscriptionExpired => SubscriptionEndDate.HasValue && SubscriptionEndDate.Value < DateTime.UtcNow;
 
-        [NotMapped]
-        public int DaysUntilSubscriptionExpiry => SubscriptionEndDate.HasValue ?
-            Math.Max(0, (int)(SubscriptionEndDate.Value - DateTime.UtcNow).TotalDays) : int.MaxValue;
+        //[NotMapped]
+        //public int DaysUntilSubscriptionExpiry => SubscriptionEndDate.HasValue ?
+        //    Math.Max(0, (int)(SubscriptionEndDate.Value - DateTime.UtcNow).TotalDays) : int.MaxValue;
     }
 }

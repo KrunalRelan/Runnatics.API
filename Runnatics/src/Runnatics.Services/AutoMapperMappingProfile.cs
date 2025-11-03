@@ -19,7 +19,6 @@ namespace Runnatics.Services
             CreateMap<Organization, OrganizationResponse>()
                 .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
-                .ForMember(dest => dest.SubscriptionPlan, opt => opt.MapFrom(src => src.SubscriptionPlan))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate));
 
@@ -108,7 +107,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.City, opt => opt.Ignore()) // Legacy field
-                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.Organization != null ? src.Organization.Name : string.Empty))
+                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.Organization != null ? src.Organization.Name : string.Empty));
 
             // EventSettings mappings
             CreateMap<EventSettingsRequest, EventSettings>()

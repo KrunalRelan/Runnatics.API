@@ -362,7 +362,7 @@ namespace Runnatics.Services
                 };
 
                 var addedOrganization = await organizationRepo.AddAsync(organization);
-
+                await _repository.SaveChangesAsync();
                 // Create super admin user
                 var superAdminUser = new User
                 {
@@ -387,7 +387,7 @@ namespace Runnatics.Services
 
                 var token = GenerateJwtToken(addeduser, organization);
 
-                var refreshToken = GenerateRefreshToken();
+                var refreshToken = GenerateRefreshToken(); 
 
                 await SaveRefreshTokenAsync(addeduser.Id, refreshToken, false);
 
@@ -400,7 +400,6 @@ namespace Runnatics.Services
                 await _repository.CommitTransactionAsync();
 
                 return response;
-
             }
             catch (System.Exception ex)
             {

@@ -1,11 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace Runnatics.Models.Client.Responses.Events
+﻿namespace Runnatics.Models.Client.Responses.Events
 {
     public class EventResponse
     {
@@ -42,11 +35,11 @@ namespace Runnatics.Models.Client.Responses.Events
 
         public string? EventOrganizerName { get; set; }
 
-        [Obsolete("Use EventSettings.Published instead")]
-        public bool IsPublished { get; set; }
-
         // Event Settings
         public EventSettingsResponse? EventSettings { get; set; }
+
+        // Leaderboard Settings
+        public LeaderboardSettingsResponse? LeaderboardSettings { get; set; }
 
         // Audit
         public DateTime CreatedAt { get; set; }

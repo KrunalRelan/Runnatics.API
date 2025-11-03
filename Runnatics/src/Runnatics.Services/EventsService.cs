@@ -79,6 +79,7 @@ namespace Runnatics.Services
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted;
 
+                // Use AsNoTracking to prevent DataReader conflicts
                 var alreadyExists = await eventRepo.GetQuery(expression)
                                       .AsNoTracking()
                                       .FirstOrDefaultAsync();
@@ -114,15 +115,30 @@ namespace Runnatics.Services
                     eventEntity.EventSettings = eventSettings;
                 }
 
+                // Handle LeaderboardSettings if provided
+                if (request.LeaderboardSettings != null)
+                {
+                    var leaderboardSettings = _mapper.Map<Models.Data.Entities.LeaderboardSettings>(request.LeaderboardSettings);
+                    leaderboardSettings.AuditProperties = new Models.Data.Common.AuditProperties
+                    {
+                        IsActive = true,
+                        IsDeleted = false,
+                        CreatedDate = DateTime.UtcNow,
+                        CreatedBy = request.CreatedBy ?? 1
+                    };
+                    eventEntity.LeaderboardSettings = leaderboardSettings;
+                }
+
                 // Add and save
                 await eventRepo.AddAsync(eventEntity);
                 await _repository.SaveChangesAsync();
 
                 _logger.LogInformation("Event created successfully: {EventId} - {Name}", eventEntity.Id, eventEntity.Name);
 
-                // Reload entity with EventSettings to ensure mapping works correctly
+                // Reload entity with EventSettings and LeaderboardSettings to ensure mapping works correctly
                 var createdEvent = await eventRepo.GetQuery(e => e.Id == eventEntity.Id)
                     .Include(e => e.EventSettings)
+                    .Include(e => e.LeaderboardSettings)
                     .Include(e => e.Organization)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();

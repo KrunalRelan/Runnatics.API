@@ -40,6 +40,9 @@ namespace Runnatics.Models.Client.Requests.Events
         // Event Settings
         public EventSettingsRequest? EventSettings { get; set; }
 
+        // Leaderboard Settings
+        public LeaderboardSettingsRequest? LeaderboardSettings { get; set; }
+
         // Audit
         public int? CreatedBy { get; set; }
     }

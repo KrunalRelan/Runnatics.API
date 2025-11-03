@@ -49,6 +49,7 @@ namespace Runnatics.Models.Data.Entities
         // Navigation Properties
         public virtual Organization Organization { get; set; } = null!;
         public virtual EventSettings? EventSettings { get; set; }
+        public virtual LeaderboardSettings? LeaderboardSettings { get; set; }
         public virtual ICollection<RaceCategory> RaceCategories { get; set; } = new List<RaceCategory>();
         public virtual ICollection<Checkpoint> Checkpoints { get; set; } = new List<Checkpoint>();
         public virtual ICollection<Participant> Participants { get; set; } = new List<Participant>();

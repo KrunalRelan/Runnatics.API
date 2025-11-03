@@ -75,6 +75,7 @@ namespace Runnatics.Services
             CreateMap<EventRequest, Event>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
+                .ForMember(dest => dest.LeaderboardSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Organization, opt => opt.Ignore())
                 .ForMember(dest => dest.RaceCategories, opt => opt.Ignore())
@@ -102,12 +103,12 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.MaxParticipants, opt => opt.MapFrom(src => src.MaxParticipants))
                 .ForMember(dest => dest.RegistrationDeadline, opt => opt.MapFrom(src => src.RegistrationDeadline))
                 .ForMember(dest => dest.EventSettings, opt => opt.MapFrom(src => src.EventSettings))
+                .ForMember(dest => dest.LeaderboardSettings, opt => opt.MapFrom(src => src.LeaderboardSettings))
                 .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.City, opt => opt.Ignore()) // Legacy field
                 .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.Organization != null ? src.Organization.Name : string.Empty))
-                .ForMember(dest => dest.IsPublished, opt => opt.MapFrom(src => src.EventSettings != null ? src.EventSettings.Published : false));
 
             // EventSettings mappings
             CreateMap<EventSettingsRequest, EventSettings>()
@@ -127,6 +128,31 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.ConfirmedEvent, opt => opt.MapFrom(src => src.ConfirmedEvent))
                 .ForMember(dest => dest.AllowNameCheck, opt => opt.MapFrom(src => src.AllowNameCheck))
                 .ForMember(dest => dest.AllowParticipantEdit, opt => opt.MapFrom(src => src.AllowParticipantEdit))
+                .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
+                .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
+
+            // LeaderboardSettings mappings
+            CreateMap<LeaderboardSettingsRequest, LeaderboardSettings>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.EventId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.Event, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()); // Set by service
+
+            CreateMap<LeaderboardSettings, LeaderboardSettingsResponse>()
+                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.EventId, opt => opt.MapFrom(src => src.EventId))
+                .ForMember(dest => dest.ShowOverallResults, opt => opt.MapFrom(src => src.ShowOverallResults))
+                .ForMember(dest => dest.ShowCategoryResults, opt => opt.MapFrom(src => src.ShowCategoryResults))
+                .ForMember(dest => dest.ShowGenderResults, opt => opt.MapFrom(src => src.ShowGenderResults))
+                .ForMember(dest => dest.ShowAgeGroupResults, opt => opt.MapFrom(src => src.ShowAgeGroupResults))
+                .ForMember(dest => dest.EnableLiveLeaderboard, opt => opt.MapFrom(src => src.EnableLiveLeaderboard))
+                .ForMember(dest => dest.ShowSplitTimes, opt => opt.MapFrom(src => src.ShowSplitTimes))
+                .ForMember(dest => dest.ShowPace, opt => opt.MapFrom(src => src.ShowPace))
+                .ForMember(dest => dest.ShowTeamResults, opt => opt.MapFrom(src => src.ShowTeamResults))
+                .ForMember(dest => dest.ShowMedalIcon, opt => opt.MapFrom(src => src.ShowMedalIcon))
+                .ForMember(dest => dest.AllowAnonymousView, opt => opt.MapFrom(src => src.AllowAnonymousView))
+                .ForMember(dest => dest.AutoRefreshIntervalSec, opt => opt.MapFrom(src => src.AutoRefreshIntervalSec))
+                .ForMember(dest => dest.MaxDisplayedRecords, opt => opt.MapFrom(src => src.MaxDisplayedRecords))
                 .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
    

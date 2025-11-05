@@ -41,6 +41,31 @@ namespace Runnatics.Data.EF.Config
            .HasDefaultValue(true)
          .IsRequired();
 
+            builder.Property(e => e.SortByOverallChipTime)
+              .HasColumnName("SortByOverallChipTime")
+                    .HasDefaultValue(false)
+                .IsRequired();
+
+            builder.Property(e => e.SortByOverallGunTime)
+              .HasColumnName("SortByOverallGunTime")
+                    .HasDefaultValue(false)
+                .IsRequired();
+
+            builder.Property(e => e.SortByCategoryChipTime)
+              .HasColumnName("SortByCategoryChipTime")
+                    .HasDefaultValue(false)
+                .IsRequired();
+
+            builder.Property(e => e.SortByCategoryGunTime)
+              .HasColumnName("SortByCategoryGunTime")
+                    .HasDefaultValue(false)
+                .IsRequired();
+
+            builder.Property(e => e.NumberOfResultsToShow)
+              .HasColumnName("NumberOfResultsToShow")
+                    .HasDefaultValue(5)
+                .IsRequired();
+
             builder.Property(e => e.EnableLiveLeaderboard)
           .HasColumnName("EnableLiveLeaderboard")
           .HasDefaultValue(true)

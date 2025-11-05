@@ -11,7 +11,7 @@ namespace Runnatics.Models.Data.Entities
     public class LeaderboardSettings
     {
         [Key]
-     public int Id { get; set; }
+        public int Id { get; set; }
 
         [Required]
         public int EventId { get; set; }
@@ -20,19 +20,29 @@ namespace Runnatics.Models.Data.Entities
 
         public bool ShowCategoryResults { get; set; } = true;
 
-     public bool ShowGenderResults { get; set; } = true;
+        public bool ShowGenderResults { get; set; } = true;
 
-    public bool ShowAgeGroupResults { get; set; } = true;
+        public bool ShowAgeGroupResults { get; set; } = true;
 
-  public bool EnableLiveLeaderboard { get; set; } = true;
+        public bool SortByOverallChipTime { get; set; } = false;
+
+        public bool SortByOverallGunTime { get; set; } = false;
+
+        public bool SortByCategoryChipTime { get; set; } = false;
+
+        public bool SortByCategoryGunTime { get; set; } = false;
+
+        public int NumberOfResultsToShow { get; set; } = 50;
+
+        public bool EnableLiveLeaderboard { get; set; } = true;
 
         public bool ShowSplitTimes { get; set; } = true;
 
         public bool ShowPace { get; set; } = true;
 
-     public bool ShowTeamResults { get; set; } = false;
+        public bool ShowTeamResults { get; set; } = false;
 
-     public bool ShowMedalIcon { get; set; } = true;
+        public bool ShowMedalIcon { get; set; } = true;
 
         public bool AllowAnonymousView { get; set; } = true;
 
@@ -41,9 +51,9 @@ namespace Runnatics.Models.Data.Entities
         public int MaxDisplayedRecords { get; set; } = 100;
 
         // Navigation Properties
- public virtual Event Event { get; set; } = null!;
+        public virtual Event Event { get; set; } = null!;
 
         // Audit Properties
-    public AuditProperties AuditProperties { get; set; } = new AuditProperties();
+        public AuditProperties AuditProperties { get; set; } = new AuditProperties();
     }
 }

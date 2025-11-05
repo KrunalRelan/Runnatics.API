@@ -1,9 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace Runnatics.Models.Client.Responses.Events
 {
     public class EventSettingsResponse
@@ -20,7 +14,7 @@ namespace Runnatics.Models.Client.Responses.Events
 
         public bool ShowResultSummaryForRaces { get; set; }
 
-     public bool UseOldData { get; set; }
+        public bool UseOldData { get; set; }
 
         public bool ConfirmedEvent { get; set; }
 

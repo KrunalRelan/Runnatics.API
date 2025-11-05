@@ -1,10 +1,4 @@
 ﻿using Runnatics.Models.Client.Common;
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Models.Client.Requests.Events
 {
@@ -16,16 +10,29 @@ namespace Runnatics.Models.Client.Requests.Events
             SortDirection = SortDirection.Descending;
         }
 
-        [Range(1, int.MaxValue)]
-        public int Id { get; set; } 
+        /// <summary>
+        /// Event ID for filtering specific event (optional)
+        /// </summary>
+        public int? Id { get; set; } 
 
+        /// <summary>
+        /// Event name for partial match search (optional)
+        /// </summary>
         public string? Name { get; set; }
 
-        [Required]
+        /// <summary>
+        /// End date for date range filter (optional)
+        /// </summary>
         public DateTime? EventDateTo { get; set; }
 
+        /// <summary>
+        /// Start date for date range filter (optional)
+        /// </summary>
         public DateTime? EventDateFrom { get; set; }
 
+        /// <summary>
+        /// Event status filter - Draft, Active, InProgress, Completed, Cancelled (optional)
+        /// </summary>
         public string? Status { get; set; }
     }
 }

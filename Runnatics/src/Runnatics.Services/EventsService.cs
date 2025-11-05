@@ -13,12 +13,17 @@ using System.Linq.Expressions;
 
 namespace Runnatics.Services
 {
-    public class EventsService(IUnitOfWork<RaceSyncDbContext> repository, IMapper mapper, ILogger<EventsService> logger, IConfiguration configuration) :
+    public class EventsService(IUnitOfWork<RaceSyncDbContext> repository,
+                               IMapper mapper,
+                               ILogger<EventsService> logger,
+                               IConfiguration configuration,
+                               IUserContextService userContext) :
         ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventsService
     {
         protected readonly IMapper _mapper = mapper;
         protected readonly ILogger _logger = logger;
         protected readonly IConfiguration _configuration = configuration;
+        protected readonly IUserContextService _userContext = userContext;
 
         public async Task<PagingList<EventResponse>> Search(EventSearchRequest request)
         {
@@ -26,26 +31,41 @@ namespace Runnatics.Services
             {
                 var eventRepo = _repository.GetRepository<Event>();
 
+                var organizationId = _userContext.OrganizationId;
+
+                // Build expression with OrganizationId from token as the primary filter
+                // When no other filters are provided, returns all events for the organization
                 Expression<Func<Event, bool>> expression = e =>
-                         (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
-                         (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
-                         (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
-                         (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
-                         e.AuditProperties.IsActive &&
-                         !e.AuditProperties.IsDeleted;
+                   e.OrganizationId == organizationId &&
+                   (!request.Id.HasValue || e.Id == request.Id.Value) &&
+                   (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
+                   (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
+                   (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
+                   (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
+                   e.AuditProperties.IsActive &&
+                   !e.AuditProperties.IsDeleted;
 
                 var data = await eventRepo.SearchAsync(expression, request.PageSize,
-                    request.PageNumber,
-                    request.SortDirection == SortDirection.Ascending ?
-                    Models.Data.Common.SortDirection.Ascending :
-                    Models.Data.Common.SortDirection.Descending,
-                    false,
-                    request.SortFieldName,
-                    true // Include navigation properties to load EventSettings and Organization
-                );
+                          request.PageNumber,
+                          request.SortDirection == SortDirection.Ascending ?
+                          Models.Data.Common.SortDirection.Ascending :
+                          Models.Data.Common.SortDirection.Descending,
+                          false,
+                          request.SortFieldName,
+                          true);
 
                 var mappedData = _mapper.Map<PagingList<EventResponse>>(data);
+
+                _logger.LogInformation("Event search completed for Organization {OrgId} by User {UserId}. Found {Count} events.",
+                                                                organizationId, _userContext.UserId, mappedData.TotalCount);
+
                 return mappedData;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                this.ErrorMessage = "Unauthorized: " + ex.Message;
+                _logger.LogWarning(ex, "Unauthorized event search attempt");
+                return new PagingList<EventResponse>();
             }
             catch (Exception ex)
             {
@@ -59,6 +79,13 @@ namespace Runnatics.Services
         {
             try
             {
+                // Get user ID and organization ID from JWT token
+                var currentUserId = _userContext.UserId;
+                var organizationId = _userContext.OrganizationId;
+
+                // Override request organization ID with token organization ID for security
+                request.OrganizationId = organizationId;
+
                 // Validate request
                 if (!ValidateEventRequest(request))
                 {
@@ -69,8 +96,8 @@ namespace Runnatics.Services
                 if (await IsDuplicateEventAsync(request))
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
-                    _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId}",
-                               request.Name, request.EventDate, request.OrganizationId);
+                    _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
+              request.Name, request.EventDate, organizationId, currentUserId);
                     return null;
                 }
 
@@ -80,10 +107,17 @@ namespace Runnatics.Services
                 // Persist to database
                 var createdEventId = await SaveEventAsync(eventEntity);
 
-                _logger.LogInformation("Event created successfully: {EventId} - {Name}", createdEventId, eventEntity.Name);
+                _logger.LogInformation("Event created successfully: {EventId} - {Name} by User {UserId}",
+                      createdEventId, eventEntity.Name, currentUserId);
 
                 // Return response with full details
                 return await GetEventResponseAsync(createdEventId);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                this.ErrorMessage = "Unauthorized: " + ex.Message;
+                _logger.LogWarning(ex, "Unauthorized event creation attempt");
+                return null;
             }
             catch (DbUpdateException dbEx)
             {
@@ -131,15 +165,15 @@ namespace Runnatics.Services
             var eventRepo = _repository.GetRepository<Event>();
 
             Expression<Func<Event, bool>> duplicateExpression = e =>
-                  e.Name == request.Name &&
-                  e.EventDate.Date == request.EventDate.Date &&
+                 e.Name == request.Name &&
+        e.EventDate.Date == request.EventDate.Date &&
                   e.OrganizationId == request.OrganizationId &&
-                  e.AuditProperties.IsActive &&
-                  !e.AuditProperties.IsDeleted;
+              e.AuditProperties.IsActive &&
+      !e.AuditProperties.IsDeleted;
 
             return await eventRepo.GetQuery(duplicateExpression)
-                      .AsNoTracking()
-                      .AnyAsync();
+              .AsNoTracking()
+           .AnyAsync();
         }
 
         /// <summary>
@@ -150,8 +184,8 @@ namespace Runnatics.Services
             // Map base event entity
             var eventEntity = _mapper.Map<Event>(request);
 
-            // Initialize audit properties
-            var currentUserId = request.CreatedBy ?? 1; // TODO: Get from authentication context
+            // Get current user ID from context (already set in Create method)
+            var currentUserId = _userContext.UserId;
             eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
 
             // Add event settings if provided
@@ -222,11 +256,11 @@ namespace Runnatics.Services
             var eventRepo = _repository.GetRepository<Event>();
 
             var createdEvent = await eventRepo.GetQuery(e => e.Id == eventId)
-                .Include(e => e.EventSettings)
+      .Include(e => e.EventSettings)
                 .Include(e => e.LeaderboardSettings)
-                .Include(e => e.Organization)
-                .AsNoTracking()
-                .FirstOrDefaultAsync();
+             .Include(e => e.Organization)
+          .AsNoTracking()
+          .FirstOrDefaultAsync();
 
             if (createdEvent == null)
             {

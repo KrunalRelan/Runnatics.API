@@ -69,7 +69,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                var token = GenerateJwtToken(user, organization);
+                var token = GenerateJwtToken(user);
 
                 var refreshToken = GenerateRefreshToken();
 
@@ -247,36 +247,43 @@ namespace Runnatics.Services
         {
             try
             {
-                // Find user by email
-                var user = _repository.GetRepository<User>()
-                                            .GetQuery(u => u.Email == request.Email && u.AuditProperties.IsActive)
-                                            .FirstOrDefault();
+                // Find user by email and include Organization navigation property
+                var user = await _repository.GetRepository<User>()
+                    .GetQuery(u => u.Email == request.Email && u.AuditProperties.IsActive)
+                    .Include(u => u.Organization)
+                    .FirstOrDefaultAsync();
 
                 if (user == null)
                 {
-                    _logger.LogError("Invalid email or password for email: {Email}", request.Email);
+                    _logger.LogWarning("Login attempt with invalid email: {Email}", request.Email);
+                    this.ErrorMessage = "Invalid email or password.";
                     return null;
                 }
 
                 if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
                 {
-                    _logger.LogError("Invalid email or password for email: {Email}", request.Email);
+                    _logger.LogWarning("Login attempt with invalid password for email: {Email}", request.Email);
+                    this.ErrorMessage = "Invalid email or password.";
                     return null;
                 }
 
-                if (!user.AuditProperties.IsActive || user.Organization == null || !user.Organization.AuditProperties.IsDeleted)
+                // Check if user account is active
+                if (!user.AuditProperties.IsActive)
                 {
-                    _logger.LogError("User account is inactive for email: {Email}", request.Email);
+                    _logger.LogWarning("Login attempt for inactive user: {Email}", request.Email);
+                    this.ErrorMessage = "User account is inactive.";
                     return null;
                 }
 
-                var organization = _repository.GetRepository<Organization>()
-                                                .GetQuery(o => o.Id == user.OrganizationId
-                                                            && !o.AuditProperties.IsDeleted
-                                                            && o.AuditProperties.IsActive)
-                                                .FirstOrDefault();
+                // Check if organization exists and is active
+                if (user.Organization == null)
+                {
+                    _logger.LogError("Organization not found for user: {UserId}", user.Id);
+                    this.ErrorMessage = "Organization not found.";
+                    return null;
+                }
 
-                if (organization == null || !organization.AuditProperties.IsActive || organization.AuditProperties.IsDeleted)
+                if (!user.Organization.AuditProperties.IsActive || user.Organization.AuditProperties.IsDeleted)
                 {
                     _logger.LogError("Organization not found or inactive for user: {UserId}", user.Id);
                     this.ErrorMessage = "Organization not found or inactive.";
@@ -288,7 +295,7 @@ namespace Runnatics.Services
 
                 await _repository.SaveChangesAsync();
 
-                var token = GenerateJwtToken(user, organization);
+                var token = GenerateJwtToken(user);
 
                 var refreshToken = GenerateRefreshToken();
 
@@ -300,7 +307,7 @@ namespace Runnatics.Services
                     RefreshToken = refreshToken,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(30), // Example expiration time
                     User = _mapper.Map<UserResponse>(user),
-                    Organization = _mapper.Map<OrganizationResponse>(organization),
+                    Organization = _mapper.Map<OrganizationResponse>(user.Organization),
                 };
 
                 return response;
@@ -371,7 +378,7 @@ namespace Runnatics.Services
                     FirstName = request.SuperAdminFirstName,
                     LastName = request.SuperAdminLastName,
                     Email = request.SuperAdminEmail,
-                    Role = UserRole.Support.ToString(),
+                    Role = UserRole.SuperAdmin.ToString(),
                     PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
                     AuditProperties = new AuditProperties
                     {
@@ -385,9 +392,9 @@ namespace Runnatics.Services
 
                 await _repository.SaveChangesAsync();
 
-                var token = GenerateJwtToken(addeduser, organization);
+                var token = GenerateJwtToken(addeduser);
 
-                var refreshToken = GenerateRefreshToken(); 
+                var refreshToken = GenerateRefreshToken();
 
                 await SaveRefreshTokenAsync(addeduser.Id, refreshToken, false);
 
@@ -546,7 +553,7 @@ namespace Runnatics.Services
         {
             try
             {
-                var validRoles = new List<string> { "Admin", "Ops", "Support", "ReadOnly" };
+                var validRoles = new List<string> { "SuperAdmin", "Admin", "Ops", "Support", "ReadOnly" };
                 if (!validRoles.Contains(newRole))
                 {
                     this.ErrorMessage = "Invalid role specified.";
@@ -583,9 +590,9 @@ namespace Runnatics.Services
                 // Find the user session with the matching refresh token
                 var sessionRepo = _repository.GetRepository<UserSession>();
                 var sessions = await sessionRepo.GetQuery(s => s.AuditProperties.IsActive && !s.AuditProperties.IsDeleted)
-                    .Include(s => s.User)
-                    .ThenInclude(u => u.Organization)
-                    .ToListAsync();
+              .Include(s => s.User)
+               .ThenInclude(u => u.Organization)
+                .ToListAsync();
 
                 UserSession? validSession = null;
                 foreach (var session in sessions)
@@ -611,10 +618,9 @@ namespace Runnatics.Services
                 }
 
                 var user = validSession.User;
-                var organization = user.Organization;
 
                 // Generate new tokens
-                var newJwtToken = GenerateJwtToken(user, organization);
+                var newJwtToken = GenerateJwtToken(user);
                 var newRefreshToken = GenerateRefreshToken();
 
                 // Update the session with new refresh token
@@ -634,9 +640,9 @@ namespace Runnatics.Services
                 {
                     Token = newJwtToken,
                     RefreshToken = newRefreshToken,
-                    ExpiresAt = DateTime.UtcNow.AddHours(GetTokenExpirationHours()),
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(GetTokenExpirationMinutes()),
                     User = _mapper.Map<UserResponse>(user),
-                    Organization = _mapper.Map<OrganizationResponse>(organization)
+                    Organization = _mapper.Map<OrganizationResponse>(user.Organization)
                 };
             }
             catch (Exception ex)
@@ -773,7 +779,7 @@ namespace Runnatics.Services
             }
         }
 
-        private string GenerateJwtToken(User user, Organization organization)
+        private string GenerateJwtToken(User user)
         {
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Key"]!));
             var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -785,8 +791,8 @@ namespace Runnatics.Services
                 new Claim(JwtRegisteredClaimNames.GivenName, user.FirstName ?? string.Empty),
                 new Claim(JwtRegisteredClaimNames.FamilyName, user.LastName ?? string.Empty),
                 new Claim("role", user.Role),
-                new Claim("organizationId", organization.Id.ToString()),
-                new Claim("organizationName", organization.Name),
+                new Claim("organizationId", user.Organization.Id.ToString()),
+                new Claim("organizationName", user.Organization.Name),
                 new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
             };
 
@@ -794,7 +800,7 @@ namespace Runnatics.Services
                 issuer: _configuration["JWT:Issuer"],
                 audience: _configuration["JWT:Audience"],
                 claims: claims,
-                expires: DateTime.UtcNow.AddHours(GetTokenExpirationHours()),
+                expires: DateTime.UtcNow.AddMinutes(GetTokenExpirationMinutes()),
                 signingCredentials: credentials
             );
 
@@ -825,6 +831,7 @@ namespace Runnatics.Services
                 AuditProperties = new AuditProperties
                 {
                     CreatedDate = DateTime.UtcNow,
+                    CreatedBy = userId,
                     IsActive = true,
                     IsDeleted = false
                 }
@@ -846,10 +853,10 @@ namespace Runnatics.Services
             {
                 var sessionRepo = _repository.GetRepository<UserSession>();
                 var activeSessions = await sessionRepo.GetQuery(s =>
-                    s.UserId == userId &&
+                 s.UserId == userId &&
                     s.AuditProperties.IsActive &&
-                    !s.AuditProperties.IsDeleted)
-                    .ToListAsync();
+               !s.AuditProperties.IsDeleted)
+                     .ToListAsync();
 
                 foreach (var session in activeSessions)
                 {
@@ -877,19 +884,23 @@ namespace Runnatics.Services
                 return string.Empty;
 
             return input.ToLowerInvariant()
-                   .Replace(" ", "-")
-                  .Replace("_", "-")
-                   .Replace("'", "")
-                       .Replace("\"", "")
-                  .Replace(".", "-")
-                    .Trim('-');
+       .Replace(" ", "-")
+         .Replace("_", "-")
+          .Replace("'", "")
+        .Replace("\"", "")
+           .Replace(".", "-")
+ .Trim('-');
         }
 
-        private int GetTokenExpirationHours()
+        /// <summary>
+        /// Gets the JWT token expiration duration in minutes from configuration
+        /// </summary>
+        /// <returns>Token expiration duration in minutes (default: 30)</returns>
+        private int GetTokenExpirationMinutes()
         {
-            return int.TryParse(_configuration["JWT:DurationInMinutes"], out var minutes)
-   ? minutes / 60
-        : 1;
+            return int.TryParse(_configuration["JWT:DurationInMinutes"], out var minutes) && minutes > 0
+          ? minutes
+          : 30; // Default to 30 minutes
         }
 
         /// <summary>

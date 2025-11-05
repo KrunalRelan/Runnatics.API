@@ -52,9 +52,18 @@ namespace Runnatics.Services
                           Models.Data.Common.SortDirection.Descending,
                           false,
                           request.SortFieldName,
-                          true);
+                          false);
 
-                var mappedData = _mapper.Map<PagingList<EventResponse>>(data);
+                // Manually load only the navigation properties we need
+                var eventsWithDetails = await eventRepo.GetQuery(e => data.Select(d => d.Id).Contains(e.Id))
+                    .Include(e => e.EventSettings)
+                    .Include(e => e.LeaderboardSettings)
+                    .Include(e => e.Organization)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var mappedData = _mapper.Map<PagingList<EventResponse>>(eventsWithDetails);
+                mappedData.TotalCount = data.TotalCount;
 
                 _logger.LogInformation("Event search completed for Organization {OrgId} by User {UserId}. Found {Count} events.",
                                                                 organizationId, _userContext.UserId, mappedData.TotalCount);

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Claims;
+using Azure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.API.Models.Requests;
@@ -95,14 +96,20 @@ namespace Runnatics.Api.Controller
         {
             try
             {
+                var toReturn = new ResponseBase<List<EventOrganizerResponse>>();
                 var result = await _eventOrganizerService.GetAllEventOrganizersAsync();
 
                 if (result == null)
                 {
                     return NotFound(new { error = _eventOrganizerService.ErrorMessage });
                 }
+                if (result.Count == 0)
+                {
+                    return NoContent();
+                }
 
-                return Ok(result);
+                toReturn.Message = result;
+                return Ok(toReturn);
             }
             catch
             {

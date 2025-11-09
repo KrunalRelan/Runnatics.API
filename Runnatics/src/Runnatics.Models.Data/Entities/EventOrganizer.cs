@@ -16,12 +16,12 @@ namespace Runnatics.Models.Data.EventOrganizers
 
         [Required]
         [MaxLength(255)]
-        public string OrganizerName { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 
         // Navigation Properties
         public virtual Organization Organization { get; set; } = null!;
-        public virtual User User { get; set; } = null!;
+        public virtual ICollection<Event> Events { get; set; } = new List<Event>();
     }
 }

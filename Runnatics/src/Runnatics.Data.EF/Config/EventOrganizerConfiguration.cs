@@ -9,18 +9,27 @@ namespace Runnatics.Data.EF.Config
     {
         public void Configure(EntityTypeBuilder<EventOrganizer> builder)
         {
-            builder.ToTable("EventOrganizers");
+            builder.ToTable("EventOrganizer");
 
             builder.HasKey(eo => eo.Id);
 
-            builder.Property(eo => eo.OrganizerName)
+            builder.Property(eo => eo.Id)
+                .HasColumnName("Id")
+                .ValueGeneratedOnAdd();
+
+            builder.Property(eo => eo.OrganizationId)
+                .HasColumnName("OrganizationId")
+                .IsRequired();
+
+            builder.Property(eo => eo.Name)
+                .HasColumnName("Name")
                 .IsRequired()
                 .HasMaxLength(255);
 
             builder.HasOne(eo => eo.Organization)
                 .WithMany(e => e.EventOrganizers)
                 .HasForeignKey(eo => eo.OrganizationId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.Restrict);
 
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {

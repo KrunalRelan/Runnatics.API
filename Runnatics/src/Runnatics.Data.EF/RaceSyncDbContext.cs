@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Runnatics.Data.EF.Config;
 using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.EventOrganizers;
 
 namespace Runnatics.Data.EF
 {
@@ -26,6 +27,7 @@ namespace Runnatics.Data.EF
         public DbSet<SplitTime> SplitTimes { get; set; }
         public DbSet<Results> Results { get; set; }
         public DbSet<Notification> Notifications { get; set; }
+        public DbSet<EventOrganizer> EventOrganizers { get; set; }
         // public DbSet<ImportBatch> ImportBatches { get; set; }
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
@@ -51,6 +53,7 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new SplitTimeConfiguration());
             modelBuilder.ApplyConfiguration(new ResultConfiguration());
             modelBuilder.ApplyConfiguration(new NotificationConfiguration());
+            modelBuilder.ApplyConfiguration(new EventOrganizerConfiguration());
             //modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here

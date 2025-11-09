@@ -6,6 +6,7 @@ using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Data.EventOrganizers;
+using Runnatics.API.Models.Requests;
 
 namespace Runnatics.Services
 {
@@ -74,10 +75,12 @@ namespace Runnatics.Services
             //Event mappings
             CreateMap<EventRequest, Event>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.OrganizationId, opt => opt.Ignore()) // Set by service from JWT token
                 .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.LeaderboardSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Organization, opt => opt.Ignore())
+                .ForMember(dest => dest.EventOrganizer, opt => opt.Ignore())
                 .ForMember(dest => dest.RaceCategories, opt => opt.Ignore())
                 .ForMember(dest => dest.Checkpoints, opt => opt.Ignore())
                 .ForMember(dest => dest.Participants, opt => opt.Ignore())
@@ -85,7 +88,8 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.ReadRaws, opt => opt.Ignore())
                 .ForMember(dest => dest.ReadNormalized, opt => opt.Ignore())
                 .ForMember(dest => dest.SplitTimes, opt => opt.Ignore())
-                .ForMember(dest => dest.Results, opt => opt.Ignore());
+                .ForMember(dest => dest.Results, opt => opt.Ignore())
+                .ForMember(dest => dest.EventOrganizerId, opt => opt.MapFrom(src => src.EventOrganizerId));
 
             CreateMap<Event, EventResponse>()
                 .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
@@ -161,10 +165,18 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
 
-                CreateMap<EventOrganizer, EventOrganizerResponse>()
-                    .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                    .ForMember(dest => dest.OrganizationId, opt => opt.MapFrom(src => src.OrganizationId))
-                    .ForMember(dest => dest.OrganizerName, opt => opt.MapFrom(src => src.OrganizerName));
+            CreateMap<EventOrganizer, EventOrganizerResponse>()
+                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.OrganizationId, opt => opt.MapFrom(src => src.OrganizationId))
+                .ForMember(dest => dest.OrganizerName, opt => opt.MapFrom(src => src.Name));
+
+            CreateMap<EventOrganizerResponse, EventOrganizer>()
+            .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.OrganizerName));
+
+            CreateMap<EventOrganizerRequest, EventOrganizer>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.OrganizationId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.EventOrganizerName));
 
         }
     }

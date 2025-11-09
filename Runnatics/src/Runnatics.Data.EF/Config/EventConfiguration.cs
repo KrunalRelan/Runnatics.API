@@ -74,6 +74,11 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.Settings)
                 .HasColumnName("Settings")
                 .HasColumnType("nvarchar(max)"); // JSON            // Configure AuditProperties to match your database schema
+
+            builder.Property(e => e.EventOrganizerId)
+                   .HasColumnName("EventOrganizerId")
+                   .IsRequired();
+
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.CreatedDate)
@@ -106,6 +111,17 @@ namespace Runnatics.Data.EF.Config
             builder.HasIndex(e => new { e.OrganizationId, e.Slug })
                 .IsUnique();
             builder.HasIndex(e => e.EventDate);
+
+            // Foreign Key Relationships
+            builder.HasOne(e => e.Organization)
+                .WithMany(o => o.Events)
+                .HasForeignKey(e => e.OrganizationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            builder.HasOne(e => e.EventOrganizer)
+                .WithMany(eo => eo.Events)
+                .HasForeignKey(e => e.EventOrganizerId)
+                .OnDelete(DeleteBehavior.Restrict);
         }
     }
 }

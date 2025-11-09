@@ -32,7 +32,7 @@ namespace Runnatics.Models.Data.Entities
 
         public bool SortByCategoryGunTime { get; set; } = false;
 
-        public int NumberOfResultsToShow { get; set; } = 50;
+        public int? NumberOfResultsToShow { get; set; }
 
         public bool EnableLiveLeaderboard { get; set; } = true;
 
@@ -46,9 +46,9 @@ namespace Runnatics.Models.Data.Entities
 
         public bool AllowAnonymousView { get; set; } = true;
 
-        public int AutoRefreshIntervalSec { get; set; } = 30;
+        public int? AutoRefreshIntervalSec { get; set; }
 
-        public int MaxDisplayedRecords { get; set; } = 100;
+        public int? MaxDisplayedRecords { get; set; }
 
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;

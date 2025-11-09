@@ -50,44 +50,41 @@ namespace Runnatics.Services
 
                 // Check if eventOrganizer exists and belongs to the organization
                 var existingEventOrganizer = await eventRepo
-                    .GetQuery(e => e.OrganizationId == request.OrganizationId
+                    .GetQuery(e => e.Name == request.EventOrganizerName
                         && !e.AuditProperties.IsDeleted
                         && e.AuditProperties.IsActive)
                     .FirstOrDefaultAsync();
 
-                if (existingEventOrganizer == null)
+                if (existingEventOrganizer != null)
                 {
-                    ErrorMessage = "Event not found or does not belong to this organization.";
-                    _logger.LogError("Event not found: for organization: {OrganizationId}", request.OrganizationId);
+                    ErrorMessage = "Event Organizer already exists.";
+                    _logger.LogError("Event Organizer already exists: with {request.EventOrganizerName}:", request.EventOrganizerName);
                     return null;
                 }
 
-                // Check if organizer name is already set
-                if (!string.IsNullOrWhiteSpace(existingEventOrganizer.OrganizerName))
+                // Create new event organizer
+                var createEventOrganizer = _mapper.Map<EventOrganizer>(request);
+                createEventOrganizer.OrganizationId = organizationId;
+                createEventOrganizer.AuditProperties = new AuditProperties
                 {
-                    ErrorMessage = "Event Organizer already has an organizer assigned. Use update instead.";
-                    _logger.LogWarning("Event Organizer already has organizer: {OrganizerName} for organization: {OrganizationId}",
-                        existingEventOrganizer.OrganizerName, existingEventOrganizer.OrganizationId);
-                    return null;
-                }
-
-                // Update event with organizer name
-                existingEventOrganizer.OrganizerName = request.EventOrganizerName;
-                existingEventOrganizer.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                existingEventOrganizer.AuditProperties.UpdatedBy = userId;
-
-                await eventRepo.UpdateAsync(existingEventOrganizer);
+                    CreatedBy = userId,
+                    CreatedDate = DateTime.UtcNow,
+                    IsActive = true,
+                    IsDeleted = false
+                };
+                
+                await eventRepo.AddAsync(createEventOrganizer);
                 await _repository.SaveChangesAsync();
 
-                _logger.LogInformation("Event organizer created for event: {EventId} by user: {UserId}",
-                    existingEventOrganizer.OrganizationId, userId);
+                _logger.LogInformation("Event organizer created for organization: {OrganizationId} by user: {UserId}",
+                    createEventOrganizer.OrganizationId, userId);
 
-                var toReturn = _mapper.Map<EventOrganizerResponse>(existingEventOrganizer);
+                var toReturn = _mapper.Map<EventOrganizerResponse>(createEventOrganizer);
                 return toReturn;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating event organizer for event: {EventId}", request.OrganizationId);
+                _logger.LogError(ex, "Error creating event organizer for organization: {OrganizationId}", _userContext.OrganizationId);
                 ErrorMessage = "Error creating event organizer.";
                 return null;
             }
@@ -150,14 +147,14 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                if (string.IsNullOrWhiteSpace(existingOrgEvent.OrganizerName))
+                if (string.IsNullOrWhiteSpace(existingOrgEvent.Name))
                 {
                     ErrorMessage = "No organizer assigned to this event.";
                     return null;
                 }
 
                 // Remove organizer name
-                existingOrgEvent.OrganizerName = null;
+                existingOrgEvent.Name = null;
                 existingOrgEvent.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 existingOrgEvent.AuditProperties.UpdatedBy = userId;
 

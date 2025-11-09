@@ -90,10 +90,7 @@ namespace Runnatics.Services
             {
                 // Get user ID and organization ID from JWT token
                 var currentUserId = _userContext.UserId;
-                var organizationId = _userContext.OrganizationId;
-
-                // Override request organization ID with token organization ID for security
-                request.OrganizationId = organizationId;
+                var organizationId = _userContext.OrganizationId;               
 
                 // Validate request
                 if (!ValidateEventRequest(request))
@@ -102,11 +99,11 @@ namespace Runnatics.Services
                 }
 
                 // Check for duplicates
-                if (await IsDuplicateEventAsync(request))
+                if (await IsDuplicateEventAsync(request, organizationId))
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
-              request.Name, request.EventDate, organizationId, currentUserId);
+                    request.Name, request.EventDate, organizationId, currentUserId);
                     return null;
                 }
 
@@ -169,16 +166,16 @@ namespace Runnatics.Services
         /// <summary>
         /// Checks if an event with the same name and date already exists
         /// </summary>
-        private async Task<bool> IsDuplicateEventAsync(EventRequest request)
+        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int organizationId)
         {
             var eventRepo = _repository.GetRepository<Event>();
 
             Expression<Func<Event, bool>> duplicateExpression = e =>
-                 e.Name == request.Name &&
-        e.EventDate.Date == request.EventDate.Date &&
-                  e.OrganizationId == request.OrganizationId &&
-              e.AuditProperties.IsActive &&
-      !e.AuditProperties.IsDeleted;
+                e.Name == request.Name &&
+                e.EventDate.Date == request.EventDate.Date &&
+                e.OrganizationId == organizationId &&
+                e.AuditProperties.IsActive &&
+                !e.AuditProperties.IsDeleted;
 
             return await eventRepo.GetQuery(duplicateExpression)
               .AsNoTracking()
@@ -193,8 +190,12 @@ namespace Runnatics.Services
             // Map base event entity
             var eventEntity = _mapper.Map<Event>(request);
 
-            // Get current user ID from context (already set in Create method)
+            // Get current user ID and organization ID from context
             var currentUserId = _userContext.UserId;
+            var organizationId = _userContext.OrganizationId;
+            
+            // Set the organization ID from the JWT token
+            eventEntity.OrganizationId = organizationId;
             eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
 
             // Add event settings if provided
@@ -265,11 +266,11 @@ namespace Runnatics.Services
             var eventRepo = _repository.GetRepository<Event>();
 
             var createdEvent = await eventRepo.GetQuery(e => e.Id == eventId)
-      .Include(e => e.EventSettings)
-                .Include(e => e.LeaderboardSettings)
-             .Include(e => e.Organization)
-          .AsNoTracking()
-          .FirstOrDefaultAsync();
+                                    .Include(e => e.EventSettings)
+                                    .Include(e => e.LeaderboardSettings)
+                                    .Include(e => e.Organization)
+                                    .AsNoTracking()
+                                    .FirstOrDefaultAsync();
 
             if (createdEvent == null)
             {

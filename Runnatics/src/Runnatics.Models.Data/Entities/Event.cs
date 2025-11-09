@@ -15,6 +15,9 @@ namespace Runnatics.Models.Data.Entities
         public int OrganizationId { get; set; }
 
         [Required]
+        public int EventOrganizerId { get; set; }
+
+        [Required]
         [MaxLength(255)]
         public string Name { get; set; } = string.Empty;
 
@@ -49,15 +52,16 @@ namespace Runnatics.Models.Data.Entities
 
         // Navigation Properties
         public virtual Organization Organization { get; set; } = null!;
+        public virtual EventOrganizer EventOrganizer { get; set; } = null!;
         public virtual EventSettings? EventSettings { get; set; }
         public virtual LeaderboardSettings? LeaderboardSettings { get; set; }
-        public virtual ICollection<RaceCategory> RaceCategories { get; set; } = new List<RaceCategory>();
-        public virtual ICollection<Checkpoint> Checkpoints { get; set; } = new List<Checkpoint>();
-        public virtual ICollection<Participant> Participants { get; set; } = new List<Participant>();
-        public virtual ICollection<ChipAssignment> ChipAssignments { get; set; } = new List<ChipAssignment>();
-        public virtual ICollection<ReadRaw> ReadRaws { get; set; } = new List<ReadRaw>();
-        public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = new List<ReadNormalized>();
-        public virtual ICollection<SplitTime> SplitTimes { get; set; } = new List<SplitTime>();
-        public virtual ICollection<Results> Results { get; set; } = new List<Results>();
+        public virtual ICollection<RaceCategory> RaceCategories { get; set; } = [];
+        public virtual ICollection<Checkpoint> Checkpoints { get; set; } = [];
+        public virtual ICollection<Participant> Participants { get; set; } = [];
+        public virtual ICollection<ChipAssignment> ChipAssignments { get; set; } = [];
+        public virtual ICollection<ReadRaw> ReadRaws { get; set; } = [];
+        public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = [];
+        public virtual ICollection<SplitTime> SplitTimes { get; set; } = [];
+        public virtual ICollection<Results> Results { get; set; } = [];
     }
 }

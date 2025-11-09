@@ -63,8 +63,7 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.NumberOfResultsToShow)
               .HasColumnName("NumberOfResultsToShow")
-                    .HasDefaultValue(5)
-                .IsRequired();
+                    .HasDefaultValue(50);
 
             builder.Property(e => e.EnableLiveLeaderboard)
           .HasColumnName("EnableLiveLeaderboard")
@@ -98,13 +97,11 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.AutoRefreshIntervalSec)
             .HasColumnName("AutoRefreshIntervalSec")
-               .HasDefaultValue(30)
-            .IsRequired();
+               .HasDefaultValue(30);
 
             builder.Property(e => e.MaxDisplayedRecords)
             .HasColumnName("MaxDisplayedRecords")
-         .HasDefaultValue(100)
-           .IsRequired();
+         .HasDefaultValue(100);
 
             // Indexes
             builder.HasIndex(e => e.EventId)

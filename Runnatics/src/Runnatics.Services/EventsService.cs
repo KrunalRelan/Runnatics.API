@@ -204,7 +204,7 @@ namespace Runnatics.Services
         /// <summary>
         /// Checks if an event with the same name and date already exists
         /// </summary>
-        private async Task<bool> IsDuplicateEventAsync(EventRequest request)
+        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int? excludeEventId = null)
         {
             var eventRepo = _repository.GetRepository<Event>();
 
@@ -213,7 +213,8 @@ namespace Runnatics.Services
         e.EventDate.Date == request.EventDate.Date &&
                   e.OrganizationId == request.OrganizationId &&
               e.AuditProperties.IsActive &&
-      !e.AuditProperties.IsDeleted;
+      !e.AuditProperties.IsDeleted &&
+                  (!excludeEventId.HasValue || e.Id != excludeEventId.Value);
 
             return await eventRepo.GetQuery(duplicateExpression)
               .AsNoTracking()
@@ -359,6 +360,114 @@ namespace Runnatics.Services
                 this.ErrorMessage = "An error occurred while deleting the event.";
                 _logger.LogError(ex, "Error during event deletion for ID: {EventId}", id);
                 return false;
+            }
+        }
+
+        public async Task<EventResponse?> Update(int id, EventRequest request)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                var organizationId = _userContext.OrganizationId;
+                var currentUserId = _userContext.UserId;
+
+                // Find the event and verify it belongs to the user's organization
+                var eventEntity = await eventRepo.GetQuery(e =>
+                   e.Id == id &&
+                      e.OrganizationId == organizationId &&
+              e.AuditProperties.IsActive &&
+              !e.AuditProperties.IsDeleted)
+                            .Include(e => e.EventSettings)
+              .Include(e => e.LeaderboardSettings)
+                        .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                {
+                    this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
+                    _logger.LogWarning("Event update failed: Event {EventId} not found for Organization {OrgId}",
+                            id, organizationId);
+                    return null;
+                }
+
+                // Override request organization ID with token organization ID for security
+                request.OrganizationId = organizationId;
+
+                // Validate request
+                if (!ValidateEventRequest(request))
+                {
+                    return null;
+                }
+
+                // Check for duplicates when name or date is changed
+                if (eventEntity.Name != request.Name || eventEntity.EventDate.Date != request.EventDate.Date)
+                {
+                    if (await IsDuplicateEventAsync(request, id))
+                    {
+                        this.ErrorMessage = "Event already exists with the same name and date.";
+                        _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
+                  request.Name, request.EventDate, organizationId, currentUserId);
+                        return null;
+                    }
+                }
+
+                // Update event properties
+                _mapper.Map(request, eventEntity);
+
+                // Update audit properties
+                eventEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                eventEntity.AuditProperties.UpdatedBy = currentUserId;
+
+                // Update or create event settings if provided
+                if (request.EventSettings != null)
+                {
+                    if (eventEntity.EventSettings != null)
+                    {
+                        _mapper.Map(request.EventSettings, eventEntity.EventSettings);
+                        eventEntity.EventSettings.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        eventEntity.EventSettings.AuditProperties.UpdatedBy = currentUserId;
+                    }
+                    else
+                    {
+                        eventEntity.EventSettings = CreateEventSettings(request.EventSettings, currentUserId);
+                    }
+                }
+
+                // Update or create leaderboard settings if provided
+                if (request.LeaderboardSettings != null)
+                {
+                    if (eventEntity.LeaderboardSettings != null)
+                    {
+                        _mapper.Map(request.LeaderboardSettings, eventEntity.LeaderboardSettings);
+                        eventEntity.LeaderboardSettings.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        eventEntity.LeaderboardSettings.AuditProperties.UpdatedBy = currentUserId;
+                    }
+                    else
+                    {
+                        eventEntity.LeaderboardSettings = CreateLeaderboardSettings(request.LeaderboardSettings, currentUserId);
+                    }
+                }
+
+                // Save changes
+                await eventRepo.UpdateAsync(eventEntity);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Event updated successfully: {EventId} - {Name} by User {UserId}",
+              id, eventEntity.Name, currentUserId);
+
+                // Return updated event with all details
+                return await GetEventResponseAsync(id);
+            }
+            catch (DbUpdateException dbEx)
+            {
+                this.ErrorMessage = "Database error occurred while updating the event.";
+                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}", id);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "An unexpected error occurred while updating the event.";
+                _logger.LogError(ex, "Error during event update for ID: {EventId}", id);
+                return null;
             }
         }
     }

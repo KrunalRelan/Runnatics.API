@@ -7,10 +7,10 @@ namespace Runnatics.Models.Data.Entities
     public class UserSession
     {
         [Key]
-        public Guid Id { get; set; }
+        public int Id { get; set; }
         
         [Required]
-        public Guid UserId { get; set; }
+        public int UserId { get; set; }
 
         [Required]
         [MaxLength(255)]

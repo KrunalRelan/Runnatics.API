@@ -57,8 +57,6 @@ namespace Runnatics.Data.EF.Config
             {
                 ap.Property(p => p.CreatedBy)
                     .HasColumnName("CreatedBy")
-                    .HasMaxLength(100)
-                    .HasConversion<string>() // Convert Guid to string to avoid FK conflicts
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
@@ -67,9 +65,7 @@ namespace Runnatics.Data.EF.Config
                     .IsRequired();
 
                 ap.Property(p => p.UpdatedBy)
-                    .HasColumnName("UpdatedBy")
-                    .HasMaxLength(100)
-                    .HasConversion<string>(); // Convert Guid? to string to avoid FK conflicts
+                    .HasColumnName("UpdatedBy");
 
                 ap.Property(p => p.UpdatedDate)
                     .HasColumnName("UpdatedAt");

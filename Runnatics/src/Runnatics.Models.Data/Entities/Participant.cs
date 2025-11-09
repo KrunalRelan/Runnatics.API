@@ -7,16 +7,16 @@ namespace Runnatics.Models.Data.Entities
     public class Participant
     {
         [Key]
-        public Guid Id { get; set; }
+        public int Id { get; set; }
         
         [Required]
-        public Guid OrganizationId { get; set; }
+        public int OrganizationId { get; set; }
 
         [Required]
-        public Guid EventId { get; set; }
+        public int EventId { get; set; }
 
         [Required]
-        public Guid RaceCategoryId { get; set; }
+        public int RaceCategoryId { get; set; }
 
         [MaxLength(20)]
         public string? BibNumber { get; set; }

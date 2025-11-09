@@ -8,10 +8,10 @@ namespace Runnatics.Models.Data.Entities
     public class Event
     {
         [Key]
-        public Guid Id { get; set; }
+        public int Id { get; set; }
 
         [Required]
-        public Guid OrganizationId { get; set; }
+        public int OrganizationId { get; set; }
 
         [Required]
         [MaxLength(255)]
@@ -48,6 +48,8 @@ namespace Runnatics.Models.Data.Entities
 
         // Navigation Properties
         public virtual Organization Organization { get; set; } = null!;
+        public virtual EventSettings? EventSettings { get; set; }
+        public virtual LeaderboardSettings? LeaderboardSettings { get; set; }
         public virtual ICollection<RaceCategory> RaceCategories { get; set; } = new List<RaceCategory>();
         public virtual ICollection<Checkpoint> Checkpoints { get; set; } = new List<Checkpoint>();
         public virtual ICollection<Participant> Participants { get; set; } = new List<Participant>();

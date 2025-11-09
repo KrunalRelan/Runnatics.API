@@ -9,10 +9,10 @@ namespace Runnatics.Models.Data.Entities
     public class RaceCategory
     {
         [Key]
-        public Guid Id { get; set; } = Guid.NewGuid();
+        public int Id { get; set; } 
         
         [Required]
-        public Guid EventId { get; set; }
+        public int EventId { get; set; }
 
         [Required]
         [MaxLength(100)]

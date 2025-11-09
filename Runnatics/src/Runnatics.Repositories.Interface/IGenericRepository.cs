@@ -11,14 +11,14 @@ public interface IGenericRepository<T> where T : class
         string? sortFieldName = null,
         bool includeNavigationProperties = false);
         
-    Task<T> GetByIdAsync(Guid id);
+    Task<T> GetByIdAsync(int id);
     Task<IEnumerable<T>> GetAllAsync();
     Task<T> AddAsync(T entity);
     Task<T> UpdateAsync(T entity);
-    Task<T> DeleteAsync(Guid id);
+    Task<T> DeleteAsync(int id);
     Task<List<T>> AddRangeAsync(List<T> entities);
     Task<List<T>> UpdateRangeAsync(List<T> entities);
-    Task DeleteRangeAsync(List<Guid> ids);
+    Task DeleteRangeAsync(List<int> ids);
 
     IQueryable<T> GetQuery(Expression<Func<T, bool>>? filter = null,
                         bool ignoreQueryFilters = false,

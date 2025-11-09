@@ -1,0 +1,12 @@
+﻿using Runnatics.Models.Client.Common;
+using Runnatics.Models.Client.Requests.Events;
+using Runnatics.Models.Client.Responses.Events;
+
+namespace Runnatics.Services.Interface
+{
+    public interface IEventsService : ISimpleServiceBase
+    {
+        Task<PagingList<EventResponse>> Search(EventSearchRequest request);
+        Task<EventResponse?> Create(EventRequest request);
+    }
+}

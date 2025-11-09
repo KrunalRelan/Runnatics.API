@@ -7,10 +7,10 @@ namespace Runnatics.Models.Data.Entities
     public class Results
     {
         [Key]
-        public Guid Id { get; set; } = Guid.NewGuid();
-        public Guid EventId { get; set; }
-        public Guid ParticipantId { get; set; }
-        public Guid RaceCategoryId { get; set; }
+        public int Id { get; set; }
+        public int EventId { get; set; }
+        public int ParticipantId { get; set; }
+        public int RaceCategoryId { get; set; }
         public long? FinishTime { get; set; } // Total race time in milliseconds
         public long? GunTime { get; set; } // Time from gun start
         public long? NetTime { get; set; } // Time from participant crossing start line

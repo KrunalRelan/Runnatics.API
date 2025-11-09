@@ -4,6 +4,7 @@ namespace Runnatics.Models.Data.Entities
     using System.Collections.Generic;
     using System.ComponentModel.DataAnnotations;
     using Runnatics.Models.Data.Common;
+    using Runnatics.Models.Data.EventOrganizers;
 
     public class Event
     {

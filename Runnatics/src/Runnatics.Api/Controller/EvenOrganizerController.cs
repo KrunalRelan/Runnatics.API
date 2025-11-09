@@ -13,33 +13,20 @@ namespace Runnatics.Api.Controller
     [ApiController]
     [Route("api/[controller]")]
     [Authorize]
-    public class EventOrganizerController : ControllerBase
+    public class EventOrganizerController(IEventOrganizerService eventOrganizerService) : ControllerBase
     {
-        private readonly IEventOrganizerService _eventOrganizerService;
-
-        public EventOrganizerController(IEventOrganizerService eventOrganizerService)
-        {
-            _eventOrganizerService = eventOrganizerService;
-        }
+        private readonly IEventOrganizerService _eventOrganizerService = eventOrganizerService;
 
         /// <summary>
         /// Create event organizer
         /// </summary>
-        [HttpPost("create")]
+        [HttpPost("create-event-organizer")]
         public async Task<IActionResult> CreateAsync([FromBody] EventOrganizerRequest request)
         {
             try
             {
-                var userId = GetUserIdFromClaims();
-                var organizationId = GetOrganizationIdFromClaims();
+                var result = await _eventOrganizerService.CreateEventOrganizerAsync(request);
 
-                if (userId == Guid.Empty || organizationId == Guid.Empty)
-                {
-                    return Unauthorized("Invalid user or organization claims.");
-                }
-
-                var result = await _eventOrganizerService.CreateEventOrganizerAsync(request, organizationId, userId);
-                
                 if (result == null)
                 {
                     return BadRequest(new { error = _eventOrganizerService.ErrorMessage });
@@ -56,20 +43,13 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Get event organizer by event ID
         /// </summary>
-        [HttpGet("{eventId}")]
-        public async Task<IActionResult> GetAsync(Guid eventId)
+        [HttpGet("{id}/event-organizer")]
+        public async Task<IActionResult> GetAsync(int id)
         {
             try
             {
-                var organizationId = GetOrganizationIdFromClaims();
+                var result = await _eventOrganizerService.GetEventOrganizerAsync(id);
 
-                if (organizationId == Guid.Empty)
-                {
-                    return Unauthorized("Invalid organization claims.");
-                }
-
-                var result = await _eventOrganizerService.GetEventOrganizerAsync(eventId, organizationId);
-                
                 if (result == null)
                 {
                     return NotFound(new { error = _eventOrganizerService.ErrorMessage });
@@ -84,54 +64,15 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Update event organizer
-        /// </summary>
-        [HttpPut("update")]
-        public async Task<IActionResult> UpdateAsync([FromBody] EventOrganizerRequest request)
-        {
-            try
-            {
-                var userId = GetUserIdFromClaims();
-                var organizationId = GetOrganizationIdFromClaims();
-
-                if (userId == Guid.Empty || organizationId == Guid.Empty)
-                {
-                    return Unauthorized("Invalid user or organization claims.");
-                }
-
-                var result = await _eventOrganizerService.UpdateEventOrganizerAsync(request, organizationId, userId);
-                
-                if (result == null)
-                {
-                    return BadRequest(new { error = _eventOrganizerService.ErrorMessage });
-                }
-
-                return Ok(result);
-            }
-            catch
-            {
-                return StatusCode(500, new { error = "An error occurred while updating event organizer." });
-            }
-        }
-
-        /// <summary>
         /// Delete event organizer
         /// </summary>
-        [HttpDelete("{eventId}")]
-        public async Task<IActionResult> DeleteAsync(Guid eventId)
+        [HttpDelete("{id}/delete-event-organizer")]
+        public async Task<IActionResult> DeleteAsync(int id)
         {
             try
             {
-                var userId = GetUserIdFromClaims();
-                var organizationId = GetOrganizationIdFromClaims();
+                var result = await _eventOrganizerService.DeleteEventOrganizerAsync(id);
 
-                if (userId == Guid.Empty || organizationId == Guid.Empty)
-                {
-                    return Unauthorized("Invalid user or organization claims.");
-                }
-
-                var result = await _eventOrganizerService.DeleteEventOrganizerAsync(eventId, organizationId, userId);
-                
                 if (result == null)
                 {
                     return BadRequest(new { error = _eventOrganizerService.ErrorMessage });
@@ -145,20 +86,28 @@ namespace Runnatics.Api.Controller
             }
         }
 
-        // Helper methods to extract claims
-        private Guid GetUserIdFromClaims()
+        /// <summary>
+        /// Get all event organizers
+        /// </summary>
+        /// <returns></returns>
+        [HttpGet("all-event-organizers")]
+        public async Task<IActionResult> GetAllAsync()
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
-                           ?? User.FindFirst("sub")?.Value;
-            
-            return Guid.TryParse(userIdClaim, out var userId) ? userId : Guid.Empty;
-        }
+            try
+            {
+                var result = await _eventOrganizerService.GetAllEventOrganizersAsync();
 
-        private Guid GetOrganizationIdFromClaims()
-        {
-            var orgIdClaim = User.FindFirst("organizationId")?.Value;
-            
-            return Guid.TryParse(orgIdClaim, out var orgId) ? orgId : Guid.Empty;
+                if (result == null)
+                {
+                    return NotFound(new { error = _eventOrganizerService.ErrorMessage });
+                }
+
+                return Ok(result);
+            }
+            catch
+            {
+                return StatusCode(500, new { error = "An error occurred while retrieving event organizers." });
+            }
         }
     }
 }

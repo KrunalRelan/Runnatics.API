@@ -5,6 +5,7 @@ using Runnatics.Models.Client.Responses;
 using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Requests.Events;
+using Runnatics.Models.Data.EventOrganizers;
 
 namespace Runnatics.Services
 {
@@ -159,7 +160,12 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.MaxDisplayedRecords, opt => opt.MapFrom(src => src.MaxDisplayedRecords))
                 .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
-   
+
+                CreateMap<EventOrganizer, EventOrganizerResponse>()
+                    .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                    .ForMember(dest => dest.OrganizationId, opt => opt.MapFrom(src => src.OrganizationId))
+                    .ForMember(dest => dest.OrganizerName, opt => opt.MapFrom(src => src.OrganizerName));
+
         }
     }
 }

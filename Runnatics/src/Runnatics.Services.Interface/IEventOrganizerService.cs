@@ -20,7 +20,7 @@ namespace Runnatics.Services.Interface
         /// <param name="organizationId">Organization ID</param>
         /// <param name="userId">User ID performing the action</param>
         /// <returns>Event organizer response or null if failed</returns>
-        Task<EventOrganizerResponse?> CreateEventOrganizerAsync(EventOrganizerRequest request, Guid organizationId, Guid userId);
+        Task<EventOrganizerResponse?> CreateEventOrganizerAsync(EventOrganizerRequest request);
 
         /// <summary>
         /// Get event organizer by event ID
@@ -28,16 +28,7 @@ namespace Runnatics.Services.Interface
         /// <param name="eventId">Event ID</param>
         /// <param name="organizationId">Organization ID</param>
         /// <returns>Event organizer response or null if not found</returns>
-        Task<EventOrganizerResponse?> GetEventOrganizerAsync(Guid eventId, Guid organizationId);
-
-        /// <summary>
-        /// Update event organizer information
-        /// </summary>
-        /// <param name="request">Event organizer request</param>
-        /// <param name="organizationId">Organization ID</param>
-        /// <param name="userId">User ID performing the action</param>
-        /// <returns>Updated event organizer response or null if failed</returns>
-        Task<EventOrganizerResponse?> UpdateEventOrganizerAsync(EventOrganizerRequest request, Guid organizationId, Guid userId);
+        Task<EventOrganizerResponse?> GetEventOrganizerAsync(int Id);
 
         /// <summary>
         /// Delete event organizer
@@ -46,7 +37,9 @@ namespace Runnatics.Services.Interface
         /// <param name="organizationId">Organization ID</param>
         /// <param name="userId">User ID performing the action</param>
         /// <returns>Success message or null if failed</returns>
-        Task<string?> DeleteEventOrganizerAsync(Guid eventId, Guid organizationId, Guid userId);
+        Task<string?> DeleteEventOrganizerAsync(int Id);
+
+        Task<List<EventOrganizerResponse>?> GetAllEventOrganizersAsync();
     }
 }
 

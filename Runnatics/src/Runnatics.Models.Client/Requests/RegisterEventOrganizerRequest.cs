@@ -5,7 +5,7 @@ namespace Runnatics.API.Models.Requests;
 public class EventOrganizerRequest
 {
     [Required]
-    public Guid EventId { get; set; }
+    public int OrganizationId { get; set; }
     
     [Required]
     [MaxLength(255)]

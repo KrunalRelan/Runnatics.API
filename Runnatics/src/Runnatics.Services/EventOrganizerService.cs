@@ -7,36 +7,31 @@ using Runnatics.Data.EF;
 using Runnatics.Models.Client.Responses;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.EventOrganizers;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
 
 namespace Runnatics.Services
 {
-    public class EventOrganizerService : ServiceBase<IUnitOfWork<RaceSyncDbContext>>, IEventOrganizerService
+    public class EventOrganizerService(
+        IUnitOfWork<RaceSyncDbContext> repository,
+        IMapper mapper,
+        ILogger<EventOrganizerService> logger,
+        IConfiguration configuration,
+        IUserContextService userContext) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventOrganizerService
     {
-        protected readonly IMapper _mapper;
-        protected readonly ILogger<EventOrganizerService> _logger;
-        protected readonly IConfiguration _configuration;
+        protected readonly IMapper _mapper = mapper;
+        protected readonly ILogger<EventOrganizerService> _logger = logger;
+        protected readonly IConfiguration _configuration = configuration;
+        protected readonly IUserContextService _userContext = userContext;
 
-        public EventOrganizerService(
-            IUnitOfWork<RaceSyncDbContext> repository,
-            IMapper mapper,
-            ILogger<EventOrganizerService> logger,
-            IConfiguration configuration) 
-            : base(repository)
-        {
-            _mapper = mapper;
-            _logger = logger;
-            _configuration = configuration;
-        }
-
-        public async Task<EventOrganizerResponse?> CreateEventOrganizerAsync(
-            EventOrganizerRequest request, 
-            Guid organizationId, 
-            Guid userId)
+        public async Task<EventOrganizerResponse?> CreateEventOrganizerAsync(EventOrganizerRequest request)
         {
             try
             {
+                var organizationId = _userContext.OrganizationId;
+                var userId = _userContext.UserId;
+
                 // Validate input
                 if (request == null)
                 {
@@ -51,214 +46,159 @@ namespace Runnatics.Services
                 }
 
                 // Get event repository
-                var eventRepo = _repository.GetRepository<Event>();
-                
-                // Check if event exists and belongs to the organization
-                var existingEvent = await eventRepo
-                    .GetQuery(e => e.Id == request.EventId 
-                        && e.OrganizationId == organizationId
+                var eventRepo = _repository.GetRepository<EventOrganizer>();
+
+                // Check if eventOrganizer exists and belongs to the organization
+                var existingEventOrganizer = await eventRepo
+                    .GetQuery(e => e.OrganizationId == request.OrganizationId
                         && !e.AuditProperties.IsDeleted
                         && e.AuditProperties.IsActive)
                     .FirstOrDefaultAsync();
 
-                if (existingEvent == null)
+                if (existingEventOrganizer == null)
                 {
                     ErrorMessage = "Event not found or does not belong to this organization.";
-                    _logger.LogError("Event not found: {EventId} for organization: {OrganizationId}", 
-                        request.EventId, organizationId);
+                    _logger.LogError("Event not found: for organization: {OrganizationId}", request.OrganizationId);
                     return null;
                 }
 
                 // Check if organizer name is already set
-                if (!string.IsNullOrWhiteSpace(existingEvent.OrganizerName))
+                if (!string.IsNullOrWhiteSpace(existingEventOrganizer.OrganizerName))
                 {
-                    ErrorMessage = "Event already has an organizer assigned. Use update instead.";
-                    _logger.LogWarning("Event {EventId} already has organizer: {OrganizerName}", 
-                        existingEvent.Id, existingEvent.OrganizerName);
+                    ErrorMessage = "Event Organizer already has an organizer assigned. Use update instead.";
+                    _logger.LogWarning("Event Organizer already has organizer: {OrganizerName} for organization: {OrganizationId}",
+                        existingEventOrganizer.OrganizerName, existingEventOrganizer.OrganizationId);
                     return null;
                 }
 
                 // Update event with organizer name
-                existingEvent.OrganizerName = request.EventOrganizerName;
-                existingEvent.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                existingEvent.AuditProperties.UpdatedBy = userId;
+                existingEventOrganizer.OrganizerName = request.EventOrganizerName;
+                existingEventOrganizer.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                existingEventOrganizer.AuditProperties.UpdatedBy = userId;
 
-                await eventRepo.UpdateAsync(existingEvent);
+                await eventRepo.UpdateAsync(existingEventOrganizer);
                 await _repository.SaveChangesAsync();
 
-                _logger.LogInformation("Event organizer created for event: {EventId} by user: {UserId}", 
-                    existingEvent.Id, userId);
+                _logger.LogInformation("Event organizer created for event: {EventId} by user: {UserId}",
+                    existingEventOrganizer.OrganizationId, userId);
 
-                return new EventOrganizerResponse
-                {
-                    EventId = existingEvent.Id,
-                    EventName = existingEvent.Name,
-                    OrganizerName = existingEvent.OrganizerName,
-                    CreatedDate = existingEvent.AuditProperties.CreatedDate,
-                    IsActive = existingEvent.AuditProperties.IsActive
-                };
+                var toReturn = _mapper.Map<EventOrganizerResponse>(existingEventOrganizer);
+                return toReturn;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating event organizer for event: {EventId}", request.EventId);
+                _logger.LogError(ex, "Error creating event organizer for event: {EventId}", request.OrganizationId);
                 ErrorMessage = "Error creating event organizer.";
                 return null;
             }
         }
 
-        public async Task<EventOrganizerResponse?> GetEventOrganizerAsync(Guid eventId, Guid organizationId)
+        public async Task<EventOrganizerResponse?> GetEventOrganizerAsync(int id)
         {
             try
             {
-                var eventRepo = _repository.GetRepository<Event>();
-                
-                var eventEntity = await eventRepo
-                    .GetQuery(e => e.Id == eventId 
-                        && e.OrganizationId == organizationId
-                        && !e.AuditProperties.IsDeleted
-                        && e.AuditProperties.IsActive)
+                var organizationId = _userContext.OrganizationId;
+                var userId = _userContext.UserId;
+
+                var eventRepo = _repository.GetRepository<EventOrganizer>();
+
+                var eventOrganizer = await eventRepo
+                    .GetQuery(eo => eo.Id == id
+                              && eo.OrganizationId == organizationId
+                              && !eo.AuditProperties.IsDeleted
+                              && eo.AuditProperties.IsActive)
                     .FirstOrDefaultAsync();
 
-                if (eventEntity == null)
+                if (eventOrganizer == null)
                 {
-                    ErrorMessage = "Event not found or does not belong to this organization.";
+                    ErrorMessage = "Event organizer not found.";
                     return null;
                 }
 
-                if (string.IsNullOrWhiteSpace(eventEntity.OrganizerName))
-                {
-                    ErrorMessage = "No organizer assigned to this event.";
-                    return null;
-                }
-
-                return new EventOrganizerResponse
-                {
-                    EventId = eventEntity.Id,
-                    EventName = eventEntity.Name,
-                    OrganizerName = eventEntity.OrganizerName,
-                    CreatedDate = eventEntity.AuditProperties.CreatedDate,
-                    IsActive = eventEntity.AuditProperties.IsActive
-                };
+                var toReturn = _mapper.Map<EventOrganizerResponse>(eventOrganizer);
+                return toReturn;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving event organizer for event: {EventId}", eventId);
+                _logger.LogError(ex, "Error retrieving event organizer : {Id}", id);
                 ErrorMessage = "Error retrieving event organizer.";
                 return null;
             }
         }
 
-        public async Task<EventOrganizerResponse?> UpdateEventOrganizerAsync(
-            EventOrganizerRequest request, 
-            Guid organizationId, 
-            Guid userId)
+        public async Task<string?> DeleteEventOrganizerAsync(int id)
         {
             try
             {
-                // Validate input
-                if (request == null)
-                {
-                    ErrorMessage = "Request cannot be null.";
-                    return null;
-                }
+                var organizationId = _userContext.OrganizationId;
+                var userId = _userContext.UserId;
 
-                if (string.IsNullOrWhiteSpace(request.EventOrganizerName))
-                {
-                    ErrorMessage = "Event organizer name is required.";
-                    return null;
-                }
+                var eventOrgRepo = _repository.GetRepository<EventOrganizer>();
 
-                // Get event repository
-                var eventRepo = _repository.GetRepository<Event>();
-                
-                // Check if event exists and belongs to the organization
-                var existingEvent = await eventRepo
-                    .GetQuery(e => e.Id == request.EventId 
+                var existingOrgEvent = await eventOrgRepo
+                    .GetQuery(e => e.Id == id
                         && e.OrganizationId == organizationId
                         && !e.AuditProperties.IsDeleted
                         && e.AuditProperties.IsActive)
                     .FirstOrDefaultAsync();
 
-                if (existingEvent == null)
+                if (existingOrgEvent == null)
                 {
                     ErrorMessage = "Event not found or does not belong to this organization.";
-                    _logger.LogError("Event not found: {EventId} for organization: {OrganizationId}", 
-                        request.EventId, organizationId);
+                    _logger.LogError("Event not found: {EventId} for organization: {OrganizationId}",
+                        id, organizationId);
                     return null;
                 }
 
-                // Update event with new organizer name
-                existingEvent.OrganizerName = request.EventOrganizerName;
-                existingEvent.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                existingEvent.AuditProperties.UpdatedBy = userId;
-
-                await eventRepo.UpdateAsync(existingEvent);
-                await _repository.SaveChangesAsync();
-
-                _logger.LogInformation("Event organizer updated for event: {EventId} by user: {UserId}", 
-                    existingEvent.Id, userId);
-
-                return new EventOrganizerResponse
-                {
-                    EventId = existingEvent.Id,
-                    EventName = existingEvent.Name,
-                    OrganizerName = existingEvent.OrganizerName,
-                    CreatedDate = existingEvent.AuditProperties.CreatedDate,
-                    IsActive = existingEvent.AuditProperties.IsActive
-                };
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error updating event organizer for event: {EventId}", request.EventId);
-                ErrorMessage = "Error updating event organizer.";
-                return null;
-            }
-        }
-
-        public async Task<string?> DeleteEventOrganizerAsync(Guid eventId, Guid organizationId, Guid userId)
-        {
-            try
-            {
-                var eventRepo = _repository.GetRepository<Event>();
-                
-                var existingEvent = await eventRepo
-                    .GetQuery(e => e.Id == eventId 
-                        && e.OrganizationId == organizationId
-                        && !e.AuditProperties.IsDeleted
-                        && e.AuditProperties.IsActive)
-                    .FirstOrDefaultAsync();
-
-                if (existingEvent == null)
-                {
-                    ErrorMessage = "Event not found or does not belong to this organization.";
-                    _logger.LogError("Event not found: {EventId} for organization: {OrganizationId}", 
-                        eventId, organizationId);
-                    return null;
-                }
-
-                if (string.IsNullOrWhiteSpace(existingEvent.OrganizerName))
+                if (string.IsNullOrWhiteSpace(existingOrgEvent.OrganizerName))
                 {
                     ErrorMessage = "No organizer assigned to this event.";
                     return null;
                 }
 
                 // Remove organizer name
-                existingEvent.OrganizerName = null;
-                existingEvent.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                existingEvent.AuditProperties.UpdatedBy = userId;
+                existingOrgEvent.OrganizerName = null;
+                existingOrgEvent.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                existingOrgEvent.AuditProperties.UpdatedBy = userId;
 
-                await eventRepo.UpdateAsync(existingEvent);
+                await eventOrgRepo.UpdateAsync(existingOrgEvent);
                 await _repository.SaveChangesAsync();
 
-                _logger.LogInformation("Event organizer removed from event: {EventId} by user: {UserId}", 
-                    eventId, userId);
+                _logger.LogInformation("Event organizer removed from event: {EventId} by user: {UserId}",
+                    id, userId);
 
                 return "Event organizer removed successfully.";
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error deleting event organizer for event: {EventId}", eventId);
+                _logger.LogError(ex, "Error deleting event organizer for event: {EventId}", id);
                 ErrorMessage = "Error deleting event organizer.";
+                return null;
+            }
+        }
+
+        public async Task<List<EventOrganizerResponse>?> GetAllEventOrganizersAsync()
+        {
+            try
+            {
+                var organizationId = _userContext.OrganizationId;
+                var userId = _userContext.UserId;
+
+                var eventOrgRepo = _repository.GetRepository<EventOrganizer>();
+
+                var eventOrganizers = await eventOrgRepo
+                    .GetQuery(eo => eo.OrganizationId == organizationId
+                              && !eo.AuditProperties.IsDeleted
+                              && eo.AuditProperties.IsActive)
+                    .ToListAsync();
+
+                var toReturn = _mapper.Map<List<EventOrganizerResponse>>(eventOrganizers);
+                return toReturn;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving event organizers for organization: {OrganizationId}", _userContext.OrganizationId);
+                ErrorMessage = "Error retrieving event organizers.";
                 return null;
             }
         }

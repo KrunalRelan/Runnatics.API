@@ -7,8 +7,8 @@ public interface IGenericRepository<T> where T : class
         int? pageSize = null,
         int? pageNumber = 1,
         SortDirection sortDirection = SortDirection.Ascending,
-        bool ignoreQueryFilters = false,
         string? sortFieldName = null,
+        bool ignoreQueryFilters = false,
         bool includeNavigationProperties = false);
         
     Task<T> GetByIdAsync(int id);

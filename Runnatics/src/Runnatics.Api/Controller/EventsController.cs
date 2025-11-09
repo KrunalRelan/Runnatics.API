@@ -106,7 +106,7 @@ namespace Runnatics.Api.Controller
             }
 
             response.Message = result;
-            response.Message.TotalCount = result.TotalCount;
+            response.TotalCount = result.TotalCount;
 
             return Ok(response);
         }

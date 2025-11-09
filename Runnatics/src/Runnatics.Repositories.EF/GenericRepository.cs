@@ -17,7 +17,7 @@ namespace Runnatics.Repositories.EF
         public async Task<T> AddAsync(T entity)
         {
             await _dbSet.AddAsync(entity);
-            
+
             return entity;
         }
 
@@ -84,7 +84,7 @@ namespace Runnatics.Repositories.EF
                         query = query.Include(navigationProperty.Name);
                     }
                 }
-            }          
+            }
 
             return query;
         }
@@ -93,8 +93,8 @@ namespace Runnatics.Repositories.EF
                                                int? pageSize = null,
                                                int? pageNumber = 1,
                                                SortDirection sortDirection = SortDirection.Ascending,
-                                               bool ignoreQueryFilters = false,
                                                string? sortFieldName = null,
+                                               bool ignoreQueryFilters = false,
                                                bool includeNavigationProperties = false)
         {
             var toReturn = new PagingList<T>();
@@ -118,12 +118,13 @@ namespace Runnatics.Repositories.EF
 
             if (sortFieldName != null)
             {
+                var orderByExpression = BuildOrderByExpression(sortFieldName);
                 query = sortDirection == SortDirection.Ascending
-                    ? query.OrderBy(e => EF.Property<object>(e, sortFieldName))
-                    : query.OrderByDescending(e => EF.Property<object>(e, sortFieldName));
+                    ? Queryable.OrderBy(query, (dynamic)orderByExpression)
+                    : Queryable.OrderByDescending(query, (dynamic)orderByExpression);
             }
-            
-            toReturn.TotalCount = query.Count();
+
+            toReturn.TotalCount = await query.CountAsync();
 
             if (pageSize.HasValue && pageNumber.HasValue)
             {
@@ -135,6 +136,24 @@ namespace Runnatics.Repositories.EF
             toReturn.AddRange(results);
 
             return toReturn;
+        }
+
+        private Expression<Func<T, object>> BuildOrderByExpression(string propertyPath)
+        {
+            var parameter = Expression.Parameter(typeof(T), "e");
+            Expression propertyAccess = parameter;
+
+            // Split the property path by dots to handle nested properties
+            var properties = propertyPath.Split('.');
+            foreach (var propertyName in properties)
+            {
+                propertyAccess = Expression.PropertyOrField(propertyAccess, propertyName);
+            }
+
+            // Convert to object for consistent return type
+            var convertedProperty = Expression.Convert(propertyAccess, typeof(object));
+
+            return Expression.Lambda<Func<T, object>>(convertedProperty, parameter);
         }
 
         public async Task<T> UpdateAsync(T entity)

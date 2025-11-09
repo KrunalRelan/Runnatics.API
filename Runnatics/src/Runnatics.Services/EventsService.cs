@@ -25,6 +25,17 @@ namespace Runnatics.Services
         protected readonly IConfiguration _configuration = configuration;
         protected readonly IUserContextService _userContext = userContext;
 
+        // Map client-facing property names to database property names
+        private static readonly Dictionary<string, string> SortFieldMapping = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "CreatedAt", "AuditProperties.CreatedDate" },
+            { "UpdatedAt", "AuditProperties.UpdatedDate" },
+            { "Id", "Id" },
+            { "Name", "Name" },
+            { "EventDate", "EventDate" },
+            { "Status", "Status" }
+        };
+
         public async Task<PagingList<EventResponse>> Search(EventSearchRequest request)
         {
             try
@@ -36,23 +47,42 @@ namespace Runnatics.Services
                 // Build expression with OrganizationId from token as the primary filter
                 // When no other filters are provided, returns all events for the organization
                 Expression<Func<Event, bool>> expression = e =>
-                   e.OrganizationId == organizationId &&
-                   (!request.Id.HasValue || e.Id == request.Id.Value) &&
-                   (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
-                   (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
-                   (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
-                   (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
-                   e.AuditProperties.IsActive &&
-                   !e.AuditProperties.IsDeleted;
+                    e.OrganizationId == organizationId &&
+                    (!request.Id.HasValue || e.Id == request.Id.Value) &&
+                    (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
+                    (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
+                    (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
+                    (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted;
 
-                var data = await eventRepo.SearchAsync(expression, request.PageSize,
-                          request.PageNumber,
-                          request.SortDirection == SortDirection.Ascending ?
-                          Models.Data.Common.SortDirection.Ascending :
-                          Models.Data.Common.SortDirection.Descending,
-                          false,
-                          request.SortFieldName,
-                          false);
+                // Map the sort field name from client format to database format
+                string? mappedSortField = null;
+                if (!string.IsNullOrEmpty(request.SortFieldName))
+                {
+                    if (SortFieldMapping.TryGetValue(request.SortFieldName, out var dbFieldName))
+                    {
+                        mappedSortField = dbFieldName;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", request.SortFieldName);
+                        mappedSortField = "AuditProperties.CreatedDate"; // Default fallback
+                    }
+                }
+
+                var data = await eventRepo.SearchAsync(expression,
+                                                        request.PageSize,
+                                                        request.PageNumber,
+                                                        request.SortDirection == SortDirection.Ascending ?
+                                                        Models.Data.Common.SortDirection.Ascending :
+                                                        Models.Data.Common.SortDirection.Descending,
+                                                        mappedSortField,
+                                                        false,
+                                                        false);
+
+                // Preserve the sort order by storing IDs in order
+                var orderedIds = data.Select(d => d.Id).ToList();
 
                 // Manually load only the navigation properties we need
                 var eventsWithDetails = await eventRepo.GetQuery(e => data.Select(d => d.Id).Contains(e.Id))
@@ -63,11 +93,16 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                var mappedData = _mapper.Map<PagingList<EventResponse>>(eventsWithDetails);
+                // Restore the original sort order
+                var sortedEvents = orderedIds
+                    .Select(id => eventsWithDetails.First(e => e.Id == id))
+                    .ToList();
+
+                var mappedData = _mapper.Map<PagingList<EventResponse>>(sortedEvents);
                 mappedData.TotalCount = data.TotalCount;
 
                 _logger.LogInformation("Event search completed for Organization {OrgId} by User {UserId}. Found {Count} events.",
-                                                                organizationId, _userContext.UserId, mappedData.TotalCount);
+                    organizationId, _userContext.UserId, mappedData.TotalCount);
 
                 return mappedData;
             }
@@ -91,7 +126,7 @@ namespace Runnatics.Services
             {
                 // Get user ID and organization ID from JWT token
                 var currentUserId = _userContext.UserId;
-                var organizationId = _userContext.OrganizationId;               
+                var organizationId = _userContext.OrganizationId;
 
                 // Validate request
                 if (!ValidateEventRequest(request))
@@ -104,7 +139,7 @@ namespace Runnatics.Services
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
-                    request.Name, request.EventDate, organizationId, currentUserId);
+                        request.Name, request.EventDate, organizationId, currentUserId);
                     return null;
                 }
 
@@ -115,7 +150,7 @@ namespace Runnatics.Services
                 var createdEventId = await SaveEventAsync(eventEntity);
 
                 _logger.LogInformation("Event created successfully: {EventId} - {Name} by User {UserId}",
-                      createdEventId, eventEntity.Name, currentUserId);
+                    createdEventId, eventEntity.Name, currentUserId);
 
                 // Return response with full details
                 return await GetEventResponseAsync(createdEventId);
@@ -167,7 +202,7 @@ namespace Runnatics.Services
         /// <summary>
         /// Checks if an event with the same name and date already exists
         /// </summary>
-        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int organizationId)
+        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int organizationId, int? excludeEventId = null)
         {
             var eventRepo = _repository.GetRepository<Event>();
 
@@ -179,8 +214,8 @@ namespace Runnatics.Services
                 !e.AuditProperties.IsDeleted;
 
             return await eventRepo.GetQuery(duplicateExpression)
-              .AsNoTracking()
-           .AnyAsync();
+                .AsNoTracking()
+                .AnyAsync();
         }
 
         /// <summary>
@@ -393,8 +428,8 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                _logger.LogInformation("Event retrieved successfully: {EventId}, Name: {EventName}, HasSettings: {HasSettings}, HasLeaderboard: {HasLeaderboard}, HasOrganization: {HasOrg}, HasOrganizer: {HasOrganizer}", 
-                    createdEvent.Id, 
+                _logger.LogInformation("Event retrieved successfully: {EventId}, Name: {EventName}, HasSettings: {HasSettings}, HasLeaderboard: {HasLeaderboard}, HasOrganization: {HasOrg}, HasOrganizer: {HasOrganizer}",
+                    createdEvent.Id,
                     createdEvent.Name,
                     createdEvent.EventSettings != null,
                     createdEvent.LeaderboardSettings != null,
@@ -402,7 +437,7 @@ namespace Runnatics.Services
                     createdEvent.EventOrganizer != null);
 
                 var mappedResponse = _mapper.Map<EventResponse>(createdEvent);
-                
+
                 _logger.LogInformation("Event mapped to response successfully for ID: {EventId}", eventId);
                 
                 return mappedResponse;
@@ -416,5 +451,155 @@ namespace Runnatics.Services
         }
 
         #endregion
+
+        public async Task<bool> Delete(int id)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                var organizationId = _userContext.OrganizationId;
+
+                // Find the event and verify it belongs to the user's organization
+                var eventEntity = await eventRepo.GetQuery(e =>
+                    e.Id == id &&
+                    e.OrganizationId == organizationId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                {
+                    this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to delete it.";
+                    _logger.LogWarning("Event deletion failed: Event {EventId} not found for Organization {OrgId}",
+                        id, organizationId);
+                    return false;
+                }
+
+                // Soft delete: Mark as deleted
+                eventEntity.AuditProperties.IsDeleted = true;
+                eventEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                eventEntity.AuditProperties.UpdatedBy = _userContext.UserId;
+
+                await eventRepo.UpdateAsync(eventEntity);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Event deleted successfully: {EventId} - {Name} by User {UserId}",
+                    id, eventEntity.Name, _userContext.UserId);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "An error occurred while deleting the event.";
+                _logger.LogError(ex, "Error during event deletion for ID: {EventId}", id);
+                return false;
+            }
+        }
+
+        public async Task<EventResponse?> Update(int id, EventRequest request)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                var organizationId = _userContext.OrganizationId;
+                var currentUserId = _userContext.UserId;
+
+                // Find the event and verify it belongs to the user's organization
+                var eventEntity = await eventRepo.GetQuery(e =>
+                    e.Id == id &&
+                    e.OrganizationId == organizationId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .Include(e => e.EventSettings)
+                    .Include(e => e.LeaderboardSettings)
+                    .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                {
+                    this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
+                    _logger.LogWarning("Event update failed: Event {EventId} not found for Organization {OrgId}",
+                        id, organizationId);
+                    return null;
+                }
+
+                // Validate request
+                if (!ValidateEventRequest(request))
+                {
+                    return null;
+                }
+
+                // Check for duplicates when name or date is changed
+                if (eventEntity.Name != request.Name || eventEntity.EventDate.Date != request.EventDate.Date)
+                {
+                    if (await IsDuplicateEventAsync(request, id))
+                    {
+                        this.ErrorMessage = "Event already exists with the same name and date.";
+                        _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
+                            request.Name, request.EventDate, organizationId, currentUserId);
+                        return null;
+                    }
+                }
+
+                // Update event properties
+                _mapper.Map(request, eventEntity);
+
+                // Update audit properties
+                eventEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                eventEntity.AuditProperties.UpdatedBy = currentUserId;
+                eventEntity.OrganizationId = organizationId; // Ensure organization ID is not changed
+
+                // Update or create event settings if provided
+                if (request.EventSettings != null)
+                {
+                    if (eventEntity.EventSettings != null)
+                    {
+                        _mapper.Map(request.EventSettings, eventEntity.EventSettings);
+                        eventEntity.EventSettings.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        eventEntity.EventSettings.AuditProperties.UpdatedBy = currentUserId;
+                    }
+                    else
+                    {
+                        eventEntity.EventSettings = CreateEventSettings(request.EventSettings, currentUserId);
+                    }
+                }
+
+                // Update or create leaderboard settings if provided
+                if (request.LeaderboardSettings != null)
+                {
+                    if (eventEntity.LeaderboardSettings != null)
+                    {
+                        _mapper.Map(request.LeaderboardSettings, eventEntity.LeaderboardSettings);
+                        eventEntity.LeaderboardSettings.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        eventEntity.LeaderboardSettings.AuditProperties.UpdatedBy = currentUserId;
+                    }
+                    else
+                    {
+                        eventEntity.LeaderboardSettings = CreateLeaderboardSettings(request.LeaderboardSettings, currentUserId);
+                    }
+                }
+
+                // Save changes
+                await eventRepo.UpdateAsync(eventEntity);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Event updated successfully: {EventId} - {Name} by User {UserId}",
+                    id, eventEntity.Name, currentUserId);
+
+                // Return updated event with all details
+                return await GetEventResponseAsync(id);
+            }
+            catch (DbUpdateException dbEx)
+            {
+                this.ErrorMessage = "Database error occurred while updating the event.";
+                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}", id);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "An unexpected error occurred while updating the event.";
+                _logger.LogError(ex, "Error during event update for ID: {EventId}", id);
+                return null;
+            }
+        }
     }
 }

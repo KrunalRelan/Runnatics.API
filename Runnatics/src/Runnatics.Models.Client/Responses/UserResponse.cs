@@ -2,7 +2,7 @@ namespace Runnatics.Models.Client.Responses
 {
     public class UserResponse
     {
-        public Guid Id { get; set; }
+        public int Id { get; set; }
         public string FirstName { get; set; } = string.Empty;
         public string LastName { get; set; } = string.Empty;
         public string Email { get; set; } = string.Empty;
@@ -13,7 +13,7 @@ namespace Runnatics.Models.Client.Responses
         public DateTime? LastLoginAt { get; set; }
         public bool IsActive { get; set; }
 
-        public Guid OrganizationId { get; set; }
+        public int OrganizationId { get; set; }
         public string OrganizationName { get; set; } = string.Empty;
     }
 }

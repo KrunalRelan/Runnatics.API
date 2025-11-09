@@ -8,14 +8,14 @@ namespace Runnatics.Models.Data.Entities
     public class ReaderAssignment
     {
         [Key]
-        public Guid Id { get; set; } = Guid.NewGuid();
-        public Guid EventId { get; set; }
-        public Guid CheckpointId { get; set; }
-        public Guid ReaderDeviceId { get; set; }
+        public int Id { get; set; }
+        public int EventId { get; set; }
+        public int CheckpointId { get; set; }
+        public int ReaderDeviceId { get; set; }
         public bool IsActive { get; set; } = true;
         public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UnassignedAt { get; set; }
-        public Guid? AssignedByUserId { get; set; }
+        public int? AssignedByUserId { get; set; }
 
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;

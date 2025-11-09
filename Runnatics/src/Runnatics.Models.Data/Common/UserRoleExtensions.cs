@@ -16,6 +16,7 @@ namespace Runnatics.Models.Data.Common
         {
             return role switch
             {
+                UserRole.SuperAdmin => "Super Admin",
                 UserRole.Admin => "Administrator",
                 UserRole.Ops => "Operations",
                 UserRole.Support => "Support",

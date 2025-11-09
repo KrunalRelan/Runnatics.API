@@ -9,10 +9,10 @@ namespace Runnatics.Models.Data.Entities
     public class Chip
     {
         [Key]
-        public Guid Id { get; set; } = Guid.NewGuid();
+        public int Id { get; set; }
         
         [Required]
-        public Guid OrganizationId { get; set; }
+        public int OrganizationId { get; set; }
 
         [Required]
         [MaxLength(50)]

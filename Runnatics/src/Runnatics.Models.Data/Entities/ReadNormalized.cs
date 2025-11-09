@@ -8,17 +8,17 @@ namespace Runnatics.Models.Data.Entities
     public class ReadNormalized
     {
         [Key]
-        public Guid Id { get; set; } = Guid.NewGuid();
-        public Guid EventId { get; set; }
-        public Guid ParticipantId { get; set; }
-        public Guid CheckpointId { get; set; }
+        public int Id { get; set; }
+        public int EventId { get; set; }
+        public int ParticipantId { get; set; }
+        public int CheckpointId { get; set; }
         public long? RawReadId { get; set; }
         public DateTime ChipTime { get; set; } // Exact chip read time
         public long? GunTime { get; set; } // Milliseconds from race start
         public long? NetTime { get; set; } // Milliseconds from participant start
         public bool IsManualEntry { get; set; } = false;
         public string? ManualEntryReason { get; set; }
-        public Guid? CreatedByUserId { get; set; }
+        public int? CreatedByUserId { get; set; }
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

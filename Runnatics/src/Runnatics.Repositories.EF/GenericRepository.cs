@@ -27,7 +27,7 @@ namespace Runnatics.Repositories.EF
             return entities;
         }
 
-        public async Task<T> DeleteAsync(Guid id)
+        public async Task<T> DeleteAsync(int id)
         {
             var entity = await _dbSet.FindAsync(id);
             if (entity != null)
@@ -38,14 +38,14 @@ namespace Runnatics.Repositories.EF
             throw new InvalidOperationException($"Entity with id {id} not found.");
         }
 
-        public async Task DeleteRangeAsync(List<Guid> ids)
+        public async Task DeleteRangeAsync(List<int> ids)
         {
             var keyProperty = context.Model.FindEntityType(typeof(T))?.FindPrimaryKey()?.Properties.FirstOrDefault();
             if (keyProperty == null)
                 throw new InvalidOperationException("No primary key defined for entity.");
 
             var entities = await _dbSet.Where(e =>
-                ids.Contains((Guid)typeof(T).GetProperty(keyProperty.Name)!.GetValue(e)!)).ToListAsync();
+                ids.Contains((int)typeof(T).GetProperty(keyProperty.Name)!.GetValue(e)!)).ToListAsync();
             _dbSet.RemoveRange(entities);
         }
 
@@ -59,7 +59,7 @@ namespace Runnatics.Repositories.EF
             return await _dbSet.FirstOrDefaultAsync(filter);
         }
 
-        public async Task<T> GetByIdAsync(Guid id)
+        public async Task<T> GetByIdAsync(int id)
         {
             return await _dbSet.FindAsync(id) ?? throw new InvalidOperationException($"Entity with id {id} not found.");
         }

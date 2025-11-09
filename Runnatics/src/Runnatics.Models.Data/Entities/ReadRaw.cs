@@ -9,10 +9,10 @@ namespace Runnatics.Models.Data.Entities
         public long Id { get; set; }
 
         [Required]
-        public Guid EventId { get; set; }
+        public int EventId { get; set; }
 
         [Required]
-        public Guid ReaderDeviceId { get; set; }
+        public int ReaderDeviceId { get; set; }
 
         [Required]
         [MaxLength(50)]

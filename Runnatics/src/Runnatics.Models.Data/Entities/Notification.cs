@@ -7,10 +7,10 @@ namespace Runnatics.Models.Data.Entities
     public class Notification
     {
         [Key]
-        public Guid Id { get; set; } = Guid.NewGuid();
+        public int Id { get; set; }
         
-        public Guid? EventId { get; set; }
-        public Guid? ParticipantId { get; set; }
+        public int? EventId { get; set; }
+        public int? ParticipantId { get; set; }
 
         [Required]
         [MaxLength(20)]

@@ -15,7 +15,7 @@ namespace Runnatics.Api.Controller
     {
         private readonly IAuthenticationService _authService = authService;
 
-        [HttpPost("register")]
+        [HttpPost("register-organization")]
         [AllowAnonymous]
         public async Task<IActionResult> RegisterAsync([FromBody] RegisterOrganizationRequest request)
         {
@@ -69,12 +69,12 @@ namespace Runnatics.Api.Controller
             return Ok(toReturn);
         }
 
-        [HttpPost("invite")]
-        [Authorize(Roles = "Admin")]
+        [HttpPost("register-user")]
+        [Authorize(Roles = "Admin,SuperAdmin")]
         public async Task<IActionResult> InviteUser([FromBody] InviteUserRequest request)
         {
-            var organizationId = Guid.Parse(User.FindFirst("organizationId")!.Value);
-            var invitedBy = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+            var organizationId = int.Parse(User.FindFirst("organizationId")!.Value);
+            var invitedBy = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
 
             var result = await _authService.InviteUserAsync(request, organizationId, invitedBy);
             if (result == null)
@@ -111,7 +111,7 @@ namespace Runnatics.Api.Controller
         public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
         {
             ResponseBase<string> toReturn = new();
-            var userId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+            var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
             var result = await _authService.ChangePasswordAsync(userId, request);
             if (result == null)
             {
@@ -161,11 +161,11 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpPost("users/{userId}/revoke")]
-        [Authorize(Roles = "Admin")]
-        public async Task<IActionResult> RevokeUserAccess(Guid userId)
+        [Authorize(Roles = "Admin, SuperAdmin")]
+        public async Task<IActionResult> RevokeUserAccess(int userId)
         {
             ResponseBase<string> toReturn = new();
-            var revokedBy = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+            var revokedBy = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
             var result = await _authService.RevokeUserAccessAsync(userId, revokedBy);
             if (result == null)
             {
@@ -180,11 +180,11 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpPut("users/{userId}/role")]
-        [Authorize(Roles = "Admin")]
-        public async Task<IActionResult> UpdateUserRole(Guid userId, [FromBody] string newRole)
+        [Authorize(Roles = "Admin,SuperAdmin")]
+        public async Task<IActionResult> UpdateUserRole(int userId, [FromBody] string newRole)
         {
             ResponseBase<string> toReturn = new();
-            var updatedBy = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+            var updatedBy = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
             var result = await _authService.UpdateUserRoleAsync(userId, newRole, updatedBy);
             if (result == null)
             {

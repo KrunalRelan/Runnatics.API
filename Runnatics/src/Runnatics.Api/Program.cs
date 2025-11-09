@@ -123,6 +123,12 @@ builder.Services.AddCors(options =>
     });
 });
 
+// Register HttpContextAccessor for accessing HTTP context in services
+builder.Services.AddHttpContextAccessor();
+
+// Register user context service for accessing JWT claims
+builder.Services.AddScoped<IUserContextService, UserContextService>();
+
 // Register repositories
 builder.Services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
 builder.Services.AddScoped(typeof(IUnitOfWork<>), typeof(UnitOfWork<>));
@@ -130,6 +136,7 @@ builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactor
 
 // Register services
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
+builder.Services.AddScoped<IEventsService, EventsService>();
 
 // Add AutoMapper
 builder.Services.AddAutoMapper(typeof(AutoMapperMappingProfile));

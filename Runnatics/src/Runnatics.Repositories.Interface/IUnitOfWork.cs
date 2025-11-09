@@ -16,7 +16,7 @@ namespace Runnatics.Repositories.Interface
         Task RollbackTransactionAsync();
         
         // Multi-tenant context
-        void SetTenantId(Guid organizationId);
-        Guid? GetCurrentTenantId();
+        void SetTenantId(int organizationId);
+        int? GetCurrentTenantId();
     }
 }

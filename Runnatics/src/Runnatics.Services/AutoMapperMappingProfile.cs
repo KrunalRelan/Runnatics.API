@@ -112,7 +112,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.City, opt => opt.Ignore()) // Legacy field
-                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.Organization != null ? src.Organization.Name : string.Empty));
+                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer != null ? src.EventOrganizer.Name : string.Empty));
 
             // EventSettings mappings
             CreateMap<EventSettingsRequest, EventSettings>()
@@ -153,7 +153,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.SortByOverallGunTime, opt => opt.MapFrom(src => src.SortByOverallGunTime))
                 .ForMember(dest => dest.SortByCategoryChipTime, opt => opt.MapFrom(src => src.SortByCategoryChipTime))
                 .ForMember(dest => dest.SortByCategoryGunTime, opt => opt.MapFrom(src => src.SortByCategoryGunTime))
-                .ForMember(dest => dest.NumberOfResultsToShow, opt => opt.MapFrom(src => src.NumberOfResultsToShow))
+                .ForMember(dest => dest.NumberOfResultsToShowCategory, opt => opt.MapFrom(src => src.NumberOfResultsToShowCategory))
                 .ForMember(dest => dest.EnableLiveLeaderboard, opt => opt.MapFrom(src => src.EnableLiveLeaderboard))
                 .ForMember(dest => dest.ShowSplitTimes, opt => opt.MapFrom(src => src.ShowSplitTimes))
                 .ForMember(dest => dest.ShowPace, opt => opt.MapFrom(src => src.ShowPace))

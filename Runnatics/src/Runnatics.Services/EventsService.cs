@@ -59,6 +59,7 @@ namespace Runnatics.Services
                     .Include(e => e.EventSettings)
                     .Include(e => e.LeaderboardSettings)
                     .Include(e => e.Organization)
+                    .Include(e => e.EventOrganizer)
                     .AsNoTracking()
                     .ToListAsync();
 
@@ -233,6 +234,8 @@ namespace Runnatics.Services
         private EventSettings CreateEventSettings(EventSettingsRequest request, int userId)
         {
             var eventSettings = _mapper.Map<EventSettings>(request);
+            eventSettings.Id = 0; // Ensure EF Core generates a new ID
+            eventSettings.EventId = 0; // Will be set after Event is saved
             eventSettings.AuditProperties = CreateAuditProperties(userId);
             return eventSettings;
         }
@@ -243,6 +246,8 @@ namespace Runnatics.Services
         private LeaderboardSettings CreateLeaderboardSettings(LeaderboardSettingsRequest request, int userId)
         {
             var leaderboardSettings = _mapper.Map<LeaderboardSettings>(request);
+            leaderboardSettings.Id = 0; // Ensure EF Core generates a new ID
+            leaderboardSettings.EventId = 0; // Will be set after Event is saved
             leaderboardSettings.AuditProperties = CreateAuditProperties(userId);
             return leaderboardSettings;
         }
@@ -252,10 +257,102 @@ namespace Runnatics.Services
         /// </summary>
         private async Task<int> SaveEventAsync(Event eventEntity)
         {
-            var eventRepo = _repository.GetRepository<Event>();
-            await eventRepo.AddAsync(eventEntity);
-            await _repository.SaveChangesAsync();
-            return eventEntity.Id;
+            try
+            {
+                _logger.LogInformation("Saving event: {EventName}, HasEventSettings: {HasEventSettings}, HasLeaderboardSettings: {HasLeaderboardSettings}", 
+                    eventEntity.Name, 
+                    eventEntity.EventSettings != null, 
+                    eventEntity.LeaderboardSettings != null);
+                
+                // Store references to child entities and their data
+                EventSettings? eventSettingsData = null;
+                LeaderboardSettings? leaderboardSettingsData = null;
+                
+                if (eventEntity.EventSettings != null)
+                {
+                    eventSettingsData = eventEntity.EventSettings;
+                    eventEntity.EventSettings = null; // Detach from event
+                }
+                
+                if (eventEntity.LeaderboardSettings != null)
+                {
+                    leaderboardSettingsData = eventEntity.LeaderboardSettings;
+                    eventEntity.LeaderboardSettings = null; // Detach from event
+                }
+                
+                // Step 1: Save the Event entity first
+                var eventRepo = _repository.GetRepository<Event>();
+                var addedEvent = await eventRepo.AddAsync(eventEntity);
+                await _repository.SaveChangesAsync();
+                
+                _logger.LogInformation("Event saved with ID: {EventId}", addedEvent.Id);
+                
+                // Step 2: Now save EventSettings if it exists - create a new instance to avoid tracking issues
+                if (eventSettingsData != null)
+                {
+                    var newEventSettings = new EventSettings
+                    {
+                        EventId = addedEvent.Id,
+                        RemoveBanner = eventSettingsData.RemoveBanner,
+                        Published = eventSettingsData.Published,
+                        RankOnNet = eventSettingsData.RankOnNet,
+                        ShowResultSummaryForRaces = eventSettingsData.ShowResultSummaryForRaces,
+                        UseOldData = eventSettingsData.UseOldData,
+                        ConfirmedEvent = eventSettingsData.ConfirmedEvent,
+                        AuditProperties = eventSettingsData.AuditProperties
+                    };
+                    
+                    var settingsRepo = _repository.GetRepository<EventSettings>();
+                    await settingsRepo.AddAsync(newEventSettings);
+                    _logger.LogInformation("EventSettings prepared for Event ID: {EventId}", addedEvent.Id);
+                }
+                
+                // Step 3: Now save LeaderboardSettings if it exists - create a new instance to avoid tracking issues
+                if (leaderboardSettingsData != null)
+                {
+                    var newLeaderboardSettings = new LeaderboardSettings
+                    {
+                        EventId = addedEvent.Id,
+                        ShowOverallResults = leaderboardSettingsData.ShowOverallResults,
+                        ShowCategoryResults = leaderboardSettingsData.ShowCategoryResults,
+                        ShowGenderResults = leaderboardSettingsData.ShowGenderResults,
+                        ShowAgeGroupResults = leaderboardSettingsData.ShowAgeGroupResults,
+                        SortByOverallChipTime = leaderboardSettingsData.SortByOverallChipTime,
+                        SortByOverallGunTime = leaderboardSettingsData.SortByOverallGunTime,
+                        SortByCategoryChipTime = leaderboardSettingsData.SortByCategoryChipTime,
+                        SortByCategoryGunTime = leaderboardSettingsData.SortByCategoryGunTime,
+                        EnableLiveLeaderboard = leaderboardSettingsData.EnableLiveLeaderboard,
+                        ShowSplitTimes = leaderboardSettingsData.ShowSplitTimes,
+                        ShowPace = leaderboardSettingsData.ShowPace,
+                        ShowTeamResults = leaderboardSettingsData.ShowTeamResults,
+                        ShowMedalIcon = leaderboardSettingsData.ShowMedalIcon,
+                        AllowAnonymousView = leaderboardSettingsData.AllowAnonymousView,
+                        AutoRefreshIntervalSec = leaderboardSettingsData.AutoRefreshIntervalSec,
+                        MaxDisplayedRecords = leaderboardSettingsData.MaxDisplayedRecords,
+                        NumberOfResultsToShowOverall = leaderboardSettingsData.NumberOfResultsToShowOverall,
+                        NumberOfResultsToShowCategory = leaderboardSettingsData.NumberOfResultsToShowCategory,
+                        AuditProperties = leaderboardSettingsData.AuditProperties
+                    };
+                    
+                    var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+                    await leaderboardRepo.AddAsync(newLeaderboardSettings);
+                    _logger.LogInformation("LeaderboardSettings prepared for Event ID: {EventId}", addedEvent.Id);
+                }
+                
+                // Step 4: Save all child entities
+                if (eventSettingsData != null || leaderboardSettingsData != null)
+                {
+                    await _repository.SaveChangesAsync();
+                    _logger.LogInformation("Event settings saved successfully for Event ID: {EventId}", addedEvent.Id);
+                }
+                
+                return addedEvent.Id;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error saving event: {EventName}. Error: {Error}", eventEntity.Name, ex.Message);
+                throw;
+            }
         }
 
         /// <summary>
@@ -263,23 +360,59 @@ namespace Runnatics.Services
         /// </summary>
         private async Task<EventResponse?> GetEventResponseAsync(int eventId)
         {
-            var eventRepo = _repository.GetRepository<Event>();
-
-            var createdEvent = await eventRepo.GetQuery(e => e.Id == eventId)
-                                    .Include(e => e.EventSettings)
-                                    .Include(e => e.LeaderboardSettings)
-                                    .Include(e => e.Organization)
-                                    .AsNoTracking()
-                                    .FirstOrDefaultAsync();
-
-            if (createdEvent == null)
+            try
             {
-                this.ErrorMessage = "Event was created but could not be retrieved.";
-                _logger.LogError("Failed to retrieve event after creation: {EventId}", eventId);
-                return null;
-            }
+                var eventRepo = _repository.GetRepository<Event>();
 
-            return _mapper.Map<EventResponse>(createdEvent);
+                _logger.LogInformation("Attempting to retrieve event with ID: {EventId}", eventId);
+
+                // First, check if the event exists at all
+                var eventExists = await eventRepo.GetQuery(e => e.Id == eventId, ignoreQueryFilters: true).AnyAsync();
+                _logger.LogInformation("Event exists in database: {Exists} for ID: {EventId}", eventExists, eventId);
+
+                if (!eventExists)
+                {
+                    this.ErrorMessage = "Event was created but could not be found in database.";
+                    _logger.LogError("Event with ID {EventId} does not exist in database", eventId);
+                    return null;
+                }
+
+                // Now retrieve with all includes
+                var createdEvent = await eventRepo.GetQuery(e => e.Id == eventId, ignoreQueryFilters: true)
+                                        .Include(e => e.EventSettings)
+                                        .Include(e => e.LeaderboardSettings)
+                                        .Include(e => e.Organization)
+                                        .Include(e => e.EventOrganizer)
+                                        .AsNoTracking()
+                                        .FirstOrDefaultAsync();
+
+                if (createdEvent == null)
+                {
+                    this.ErrorMessage = "Event found but could not be retrieved with navigation properties.";
+                    _logger.LogError("Failed to retrieve event with includes for ID: {EventId}", eventId);
+                    return null;
+                }
+
+                _logger.LogInformation("Event retrieved successfully: {EventId}, Name: {EventName}, HasSettings: {HasSettings}, HasLeaderboard: {HasLeaderboard}, HasOrganization: {HasOrg}, HasOrganizer: {HasOrganizer}", 
+                    createdEvent.Id, 
+                    createdEvent.Name,
+                    createdEvent.EventSettings != null,
+                    createdEvent.LeaderboardSettings != null,
+                    createdEvent.Organization != null,
+                    createdEvent.EventOrganizer != null);
+
+                var mappedResponse = _mapper.Map<EventResponse>(createdEvent);
+                
+                _logger.LogInformation("Event mapped to response successfully for ID: {EventId}", eventId);
+                
+                return mappedResponse;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving event with ID: {EventId}. Error: {Error}", eventId, ex.Message);
+                this.ErrorMessage = $"Error retrieving event: {ex.Message}";
+                throw;
+            }
         }
 
         #endregion

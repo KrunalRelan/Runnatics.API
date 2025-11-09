@@ -71,14 +71,16 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.RegistrationDeadline)
                 .HasColumnName("RegistrationDeadline");
 
+            // JSON
             builder.Property(e => e.Settings)
                 .HasColumnName("Settings")
-                .HasColumnType("nvarchar(max)"); // JSON            // Configure AuditProperties to match your database schema
+                .HasColumnType("nvarchar(max)");
 
             builder.Property(e => e.EventOrganizerId)
-                   .HasColumnName("EventOrganizerId")
-                   .IsRequired();
+                .HasColumnName("EventOrganizerId")
+                .IsRequired();
 
+            // Configure AuditProperties to match your database schema
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.CreatedDate)

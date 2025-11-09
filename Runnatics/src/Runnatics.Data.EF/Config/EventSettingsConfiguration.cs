@@ -75,31 +75,31 @@ namespace Runnatics.Data.EF.Config
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
-               ap.Property(p => p.CreatedBy)
-                  .HasColumnName("CreatedBy")
-                  .IsRequired();
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
+                    .IsRequired();
 
-               ap.Property(p => p.CreatedDate)
-                 .HasColumnName("CreatedAt")
-                 .HasDefaultValueSql("GETUTCDATE()")
-                 .IsRequired();
+                ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
 
-               ap.Property(p => p.UpdatedBy)
-                 .HasColumnName("UpdatedBy");
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
 
-               ap.Property(p => p.UpdatedDate)
-                 .HasColumnName("UpdatedAt");
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
-               ap.Property(p => p.IsDeleted)
-                 .HasColumnName("IsDeleted")
-                 .HasDefaultValue(false)
-                 .IsRequired();
+                ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
+                    .HasDefaultValue(false)
+                    .IsRequired();
 
-               ap.Property(p => p.IsActive)
-                 .HasColumnName("IsActive")
-                 .HasDefaultValue(true)
-                 .IsRequired();
-           });
+                ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
+                    .HasDefaultValue(true)
+                    .IsRequired();
+            });
         }
     }
 }

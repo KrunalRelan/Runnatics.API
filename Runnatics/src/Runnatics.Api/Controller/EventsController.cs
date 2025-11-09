@@ -469,7 +469,7 @@ namespace Runnatics.Api.Controller
         /// <response code="404">If the event is not found or doesn't belong to user's organization</response>
         /// <response code="409">If an event with the same name and date already exists (when name/date changed)</response>
         /// <response code="500">If an internal server error occurs during update</response>
-        [HttpPut("{id}")]
+        [HttpPut("{id}/edit-event")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<EventResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -550,3 +550,4 @@ namespace Runnatics.Api.Controller
             return Ok(response);
         }
     }
+}

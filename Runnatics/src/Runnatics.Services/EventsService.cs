@@ -317,5 +317,49 @@ namespace Runnatics.Services
         }
 
         #endregion
+
+        public async Task<bool> Delete(int id)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                var organizationId = _userContext.OrganizationId;
+
+                // Find the event and verify it belongs to the user's organization
+                var eventEntity = await eventRepo.GetQuery(e =>
+                    e.Id == id &&
+                    e.OrganizationId == organizationId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                {
+                    this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to delete it.";
+                    _logger.LogWarning("Event deletion failed: Event {EventId} not found for Organization {OrgId}",
+                       id, organizationId);
+                    return false;
+                }
+
+                // Soft delete: Mark as deleted
+                eventEntity.AuditProperties.IsDeleted = true;
+                eventEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                eventEntity.AuditProperties.UpdatedBy = _userContext.UserId;
+
+                await eventRepo.UpdateAsync(eventEntity);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Event deleted successfully: {EventId} - {Name} by User {UserId}",
+                              id, eventEntity.Name, _userContext.UserId);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "An error occurred while deleting the event.";
+                _logger.LogError(ex, "Error during event deletion for ID: {EventId}", id);
+                return false;
+            }
+        }
     }
 }

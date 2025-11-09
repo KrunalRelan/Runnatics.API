@@ -279,5 +279,88 @@ namespace Runnatics.Api.Controller
             response.Message = result;
             return StatusCode((int)HttpStatusCode.Created, response);
         }
+
+        /// <summary>
+        /// Deletes an event (soft delete)
+        /// </summary>
+        /// <param name="id">The ID of the event to delete</param>
+        /// <returns>Success response if event was deleted</returns>
+        /// <remarks>
+        /// Sample request:
+        /// 
+        /// DELETE /api/events/5
+        /// 
+        /// **Authentication:**
+        /// - Requires valid JWT token in Authorization header
+        /// - Organization ID is automatically extracted from the token
+        /// - User can only delete events from their own organization
+        /// 
+        /// **Behavior:**
+        /// - Performs a soft delete (sets IsDeleted flag to true)
+        /// - Event data is retained in the database
+        /// - Deleted events will not appear in search results
+        /// - Only events belonging to the user's organization can be deleted
+        /// - Cannot delete events that don't exist
+        /// 
+        /// **Validation:**
+        /// - Verifies event exists
+        /// - Ensures event belongs to user's organization
+        /// - Prevents deletion of already deleted events
+        /// </remarks>
+        /// <response code="200">Event deleted successfully</response>
+        /// <response code="400">If the event ID is invalid</response>
+        /// <response code="401">If the user is not authenticated</response>
+        /// <response code="403">If the user is not authorized (Admin role required)</response>
+        /// <response code="404">If the event is not found or doesn't belong to user's organization</response>
+        /// <response code="500">If an internal server error occurs during deletion</response>
+        [HttpDelete("{id}")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<object>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> Delete(int id)
+        {
+            if (id <= 0)
+            {
+                return BadRequest(new { error = "Invalid event ID. ID must be greater than 0." });
+            }
+
+            var response = new ResponseBase<object>();
+            var result = await _eventService.Delete(id);
+
+            if (_eventService.HasError)
+            {
+                response.Error = new ResponseBase<object>.ErrorData()
+                {
+                    Message = _eventService.ErrorMessage
+                };
+
+                // Return 404 Not Found if event doesn't exist or unauthorized
+                if (_eventService.ErrorMessage.Contains("not found") ||
+                       _eventService.ErrorMessage.Contains("does not exist") ||
+                  _eventService.ErrorMessage.Contains("don't have permission"))
+                {
+                    return NotFound(response);
+                }
+
+                // Return 500 for database errors or unexpected errors
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (!result)
+            {
+                response.Error = new ResponseBase<object>.ErrorData()
+                {
+                    Message = "Event deletion failed. Please try again."
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = new { message = "Event deleted successfully", id };
+            return Ok(response);
+        }
     }
 }

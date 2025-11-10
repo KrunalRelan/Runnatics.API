@@ -240,44 +240,27 @@ namespace Runnatics.Api.Controller
                 });
             }
 
-            var response = new ResponseBase<EventResponse>();
-            var result = await _eventService.Create(request);
+            await _eventService.Create(request);
 
             if (_eventService.HasError)
             {
-                response.Error = new ResponseBase<EventResponse>.ErrorData()
-                {
-                    Message = _eventService.ErrorMessage
-                };
-
                 // Return 409 Conflict for duplicate events
                 if (_eventService.ErrorMessage.Contains("already exists"))
                 {
-                    return Conflict(response);
+                    return Conflict(_eventService.ErrorMessage);
                 }
 
                 // Return 400 Bad Request for validation errors
                 if (_eventService.ErrorMessage.Contains("cannot be in the past") ||
                     _eventService.ErrorMessage.Contains("cannot be null"))
                 {
-                    return BadRequest(response);
+                    return BadRequest(_eventService.ErrorMessage);
                 }
-
                 // Return 500 for database errors or unexpected errors
-                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+                return StatusCode((int)HttpStatusCode.InternalServerError, _eventService.ErrorMessage);
             }
 
-            if (result == null)
-            {
-                response.Error = new ResponseBase<EventResponse>.ErrorData()
-                {
-                    Message = "Event creation failed. Please try again."
-                };
-                return StatusCode((int)HttpStatusCode.InternalServerError, response);
-            }
-
-            response.Message = result;
-            return StatusCode((int)HttpStatusCode.Created, response);
+            return Ok(HttpStatusCode.Created);
         }
 
         /// <summary>
@@ -546,8 +529,7 @@ namespace Runnatics.Api.Controller
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 
-            response.Message = result;
-            return Ok(response);
+            return Ok(HttpStatusCode.OK);
         }
 
         [HttpGet("{eventId}/event-details")]

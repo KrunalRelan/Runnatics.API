@@ -93,7 +93,8 @@ namespace Runnatics.Services
 
                 // Restore the original sort order
                 var sortedEvents = orderedIds
-                    .Select(id => eventsWithDetails.First(e => e.Id == id))
+                    .Select(id => eventsWithDetails.FirstOrDefault(e => e.Id == id))
+                    .Where(e => e != null)
                     .ToList();
 
                 var mappedData = _mapper.Map<PagingList<EventResponse>>(sortedEvents);
@@ -118,7 +119,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<EventResponse?> Create(EventRequest request)
+        public async Task Create(EventRequest request)
         {
             try
             {
@@ -129,7 +130,7 @@ namespace Runnatics.Services
                 // Validate request
                 if (!ValidateEventRequest(request))
                 {
-                    return null;
+                    return;
                 }
 
                 // Check for duplicates
@@ -138,7 +139,7 @@ namespace Runnatics.Services
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
                         request.Name, request.EventDate, organizationId, currentUserId);
-                    return null;
+                    return;
                 }
 
                 // Create event entity with settings
@@ -151,25 +152,25 @@ namespace Runnatics.Services
                     createdEventId, eventEntity.Name, currentUserId);
 
                 // Return response with full details
-                return await GetEventResponseAsync(createdEventId);
+                return;
             }
             catch (UnauthorizedAccessException ex)
             {
                 this.ErrorMessage = "Unauthorized: " + ex.Message;
                 _logger.LogWarning(ex, "Unauthorized event creation attempt");
-                return null;
+                return;
             }
             catch (DbUpdateException dbEx)
             {
                 this.ErrorMessage = "Database error occurred while creating the event.";
                 _logger.LogError(dbEx, "Database error during event creation for: {Name}", request.Name);
-                return null;
+                return;
             }
             catch (Exception ex)
             {
                 this.ErrorMessage = "An unexpected error occurred while creating the event.";
                 _logger.LogError(ex, "Error during event creation for: {Name}", request.Name);
-                return null;
+                return;
             }
         }
 
@@ -494,7 +495,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<EventResponse?> Update(int id, EventRequest request)
+        public async Task<int?> Update(int id, EventRequest request)
         {
             try
             {
@@ -521,7 +522,7 @@ namespace Runnatics.Services
                 }
 
                 // Validate request
-                if (!ValidateEventRequest(request))
+                if (request.EventDate != eventEntity.EventDate && !ValidateEventRequest(request))
                 {
                     return null;
                 }
@@ -584,7 +585,7 @@ namespace Runnatics.Services
                     id, eventEntity.Name, currentUserId);
 
                 // Return updated event with all details
-                return await GetEventResponseAsync(id);
+                return id;
             }
             catch (DbUpdateException dbEx)
             {

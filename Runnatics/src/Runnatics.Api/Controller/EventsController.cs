@@ -208,14 +208,14 @@ namespace Runnatics.Api.Controller
         /// - Organization information
         /// - Audit information (created date, created by)
         /// </remarks>
-        /// <response code="201">Event created successfully with all details</response>
+        /// <response code="204">Event created successfully with no content returned</response>
         /// <response code="400">If the request is invalid, contains invalid data, or validation fails</response>
         /// <response code="401">If the user is not authenticated</response>
         /// <response code="409">If an event with the same name and date already exists</response>
         /// <response code="500">If an internal server error occurs during creation</response>
         [HttpPost("create")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<EventResponse>), StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -240,14 +240,16 @@ namespace Runnatics.Api.Controller
                 });
             }
 
-            var response = new ResponseBase<EventResponse>();
             var result = await _eventService.Create(request);
 
             if (_eventService.HasError)
             {
-                response.Error = new ResponseBase<EventResponse>.ErrorData()
+                var response = new ResponseBase<object>
                 {
-                    Message = _eventService.ErrorMessage
+                    Error = new ResponseBase<object>.ErrorData()
+                    {
+                        Message = _eventService.ErrorMessage
+                    }
                 };
 
                 // Return 409 Conflict for duplicate events
@@ -267,17 +269,19 @@ namespace Runnatics.Api.Controller
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 
-            if (result == null)
+            if (!result)
             {
-                response.Error = new ResponseBase<EventResponse>.ErrorData()
+                var response = new ResponseBase<object>
                 {
-                    Message = "Event creation failed. Please try again."
+                    Error = new ResponseBase<object>.ErrorData()
+                    {
+                        Message = "Event creation failed. Please try again."
+                    }
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 
-            response.Message = result;
-            return StatusCode((int)HttpStatusCode.Created, response);
+            return NoContent();
         }
 
         /// <summary>
@@ -384,31 +388,31 @@ namespace Runnatics.Api.Controller
         ///         "venueLatitude": 18.9220,
         ///         "venueLongitude": 72.8347,
         ///         "status": "Active",
-        ///    "maxParticipants": 6000,
-        ///     "registrationDeadline": "2024-12-01T23:59:59Z",
+        ///         "maxParticipants": 6000,
+        ///         "registrationDeadline": "2024-12-01T23:59:59Z",
         ///         "eventSettings": {
         ///             "removeBanner": false,
         ///             "published": true,
         ///             "rankOnNet": true,
-        /// "showResultSummaryForRaces": true,
+        ///             "showResultSummaryForRaces": true,
         ///             "useOldData": false,
         ///             "confirmedEvent": true,
-        ///       "allowNameCheck": true,
-        ///          "allowParticipantEdit": true
+        ///             "allowNameCheck": true,
+        ///             "allowParticipantEdit": true
         ///         },
         ///         "leaderboardSettings": {
         ///             "showOverallResults": true,
         ///             "showCategoryResults": true,
-        /// "showGenderResults": true,
-        ///    "showAgeGroupResults": true,
+        ///             "showGenderResults": true,
+        ///             "showAgeGroupResults": true,
         ///             "enableLiveLeaderboard": true,
-        /// "showSplitTimes": true,
+        ///             "showSplitTimes": true,
         ///             "showPace": true,
-        ///          "showTeamResults": false,
+        ///             "showTeamResults": false,
         ///             "showMedalIcon": true,
-        ///    "allowAnonymousView": true,
-        ///  "autoRefreshIntervalSec": 30,
-        ///    "maxDisplayedRecords": 100
+        ///             "allowAnonymousView": true,
+        ///             "autoRefreshIntervalSec": 30,
+        ///             "maxDisplayedRecords": 100
         ///       }
         ///   }
         /// 
@@ -515,7 +519,7 @@ namespace Runnatics.Api.Controller
                 // Return 404 Not Found if event doesn't exist or unauthorized
                 if (_eventService.ErrorMessage.Contains("not found") ||
                         _eventService.ErrorMessage.Contains("does not exist") ||
-               _eventService.ErrorMessage.Contains("don't have permission"))
+                        _eventService.ErrorMessage.Contains("don't have permission"))
                 {
                     return NotFound(response);
                 }
@@ -528,7 +532,7 @@ namespace Runnatics.Api.Controller
 
                 // Return 400 Bad Request for validation errors
                 if (_eventService.ErrorMessage.Contains("cannot be in the past") ||
-               _eventService.ErrorMessage.Contains("cannot be null"))
+                        _eventService.ErrorMessage.Contains("cannot be null"))
                 {
                     return BadRequest(response);
                 }

@@ -17,8 +17,7 @@ namespace Runnatics.Services
                                IMapper mapper,
                                ILogger<EventsService> logger,
                                IConfiguration configuration,
-                               IUserContextService userContext) :
-        ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventsService
+                               IUserContextService userContext) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventsService
     {
         protected readonly IMapper _mapper = mapper;
         protected readonly ILogger _logger = logger;
@@ -28,13 +27,9 @@ namespace Runnatics.Services
         // Map client-facing property names to database property names
         private static readonly Dictionary<string, string> SortFieldMapping = new(StringComparer.OrdinalIgnoreCase)
         {
-{ "CreatedAt", "AuditProperties.CreatedDate" },
-  { "UpdatedAt", "AuditProperties.UpdatedDate" },
-    { "Id", "Id" },
-             { "Name", "Name" },
-             { "EventDate", "EventDate" },
-        { "Status", "Status" }
-   };
+             { "CreatedAt", "AuditProperties.CreatedDate" },
+             { "UpdatedAt", "AuditProperties.UpdatedDate" }
+        };
 
         public async Task<PagingList<EventResponse>> Search(EventSearchRequest request)
         {
@@ -47,14 +42,14 @@ namespace Runnatics.Services
                 // Build expression with OrganizationId from token as the primary filter
                 // When no other filters are provided, returns all events for the organization
                 Expression<Func<Event, bool>> expression = e =>
-                    e.OrganizationId == organizationId &&
-                (!request.Id.HasValue || e.Id == request.Id.Value) &&
-                    (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
-                               (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
-               (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
-                     (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
-                     e.AuditProperties.IsActive &&
-             !e.AuditProperties.IsDeleted;
+                        e.OrganizationId == organizationId &&
+                        (!request.Id.HasValue || e.Id == request.Id.Value) &&
+                        (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
+                        (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
+                        (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
+                        (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
+                        e.AuditProperties.IsActive &&
+                        !e.AuditProperties.IsDeleted;
 
                 // Map the sort field name from client format to database format
                 string? mappedSortField = null;
@@ -67,7 +62,7 @@ namespace Runnatics.Services
                     else
                     {
                         _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", request.SortFieldName);
-                        mappedSortField = "AuditProperties.CreatedDate"; // Default fallback
+                        mappedSortField = "Id";
                     }
                 }
 
@@ -101,7 +96,7 @@ namespace Runnatics.Services
                 mappedData.TotalCount = data.TotalCount;
 
                 _logger.LogInformation("Event search completed for Organization {OrgId} by User {UserId}. Found {Count} events.",
-           organizationId, _userContext.UserId, mappedData.TotalCount);
+                                                                    organizationId, _userContext.UserId, mappedData.TotalCount);
 
                 return mappedData;
             }
@@ -109,7 +104,7 @@ namespace Runnatics.Services
             {
                 this.ErrorMessage = "Unauthorized: " + ex.Message;
                 _logger.LogWarning(ex, "Unauthorized event search attempt");
-                return new PagingList<EventResponse>();
+                return [];
             }
             catch (Exception ex)
             {
@@ -119,7 +114,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<EventResponse?> Create(EventRequest request)
+        public async Task<bool> Create(EventRequest request)
         {
             try
             {
@@ -133,7 +128,7 @@ namespace Runnatics.Services
                 // Validate request
                 if (!ValidateEventRequest(request))
                 {
-                    return null;
+                    return false;
                 }
 
                 // Check for duplicates
@@ -141,8 +136,8 @@ namespace Runnatics.Services
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
-              request.Name, request.EventDate, organizationId, currentUserId);
-                    return null;
+                                                request.Name, request.EventDate, organizationId, currentUserId);
+                    return false;
                 }
 
                 // Create event entity with settings
@@ -154,26 +149,25 @@ namespace Runnatics.Services
                 _logger.LogInformation("Event created successfully: {EventId} - {Name} by User {UserId}",
                       createdEventId, eventEntity.Name, currentUserId);
 
-                // Return response with full details
-                return await GetEventResponseAsync(createdEventId);
+                return true;
             }
             catch (UnauthorizedAccessException ex)
             {
                 this.ErrorMessage = "Unauthorized: " + ex.Message;
                 _logger.LogWarning(ex, "Unauthorized event creation attempt");
-                return null;
+                return false;
             }
             catch (DbUpdateException dbEx)
             {
                 this.ErrorMessage = "Database error occurred while creating the event.";
                 _logger.LogError(dbEx, "Database error during event creation for: {Name}", request.Name);
-                return null;
+                return false;
             }
             catch (Exception ex)
             {
                 this.ErrorMessage = "An unexpected error occurred while creating the event.";
                 _logger.LogError(ex, "Error during event creation for: {Name}", request.Name);
-                return null;
+                return false;
             }
         }
 
@@ -367,27 +361,8 @@ namespace Runnatics.Services
         {
             try
             {
-                var eventRepo = _repository.GetRepository<Event>();
-                var organizationId = _userContext.OrganizationId;
                 var currentUserId = _userContext.UserId;
-
-                // Find the event and verify it belongs to the user's organization
-                var eventEntity = await eventRepo.GetQuery(e =>
-                   e.Id == id &&
-                      e.OrganizationId == organizationId &&
-              e.AuditProperties.IsActive &&
-              !e.AuditProperties.IsDeleted)
-                            .Include(e => e.EventSettings)
-              .Include(e => e.LeaderboardSettings)
-                        .FirstOrDefaultAsync();
-
-                if (eventEntity == null)
-                {
-                    this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
-                    _logger.LogWarning("Event update failed: Event {EventId} not found for Organization {OrgId}",
-                            id, organizationId);
-                    return null;
-                }
+                var organizationId = _userContext.OrganizationId;
 
                 // Override request organization ID with token organization ID for security
                 request.OrganizationId = organizationId;
@@ -398,61 +373,34 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                // Check for duplicates when name or date is changed
-                if (eventEntity.Name != request.Name || eventEntity.EventDate.Date != request.EventDate.Date)
+                // Fetch event with related entities in a single query
+                var eventEntity = await GetEventForUpdateAsync(id, organizationId);
+                if (eventEntity == null)
                 {
-                    if (await IsDuplicateEventAsync(request, id))
-                    {
-                        this.ErrorMessage = "Event already exists with the same name and date.";
-                        _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
-                  request.Name, request.EventDate, organizationId, currentUserId);
-                        return null;
-                    }
+                    this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
+                    _logger.LogWarning("Event update failed: Event {EventId} not found for Organization {OrgId}",
+           id, organizationId);
+                    return null;
                 }
 
-                // Update event properties
-                _mapper.Map(request, eventEntity);
-
-                // Update audit properties
-                eventEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                eventEntity.AuditProperties.UpdatedBy = currentUserId;
-
-                // Update or create event settings if provided
-                if (request.EventSettings != null)
+                // Check for duplicates only if name or date changed
+                if (HasEventIdentityChanged(eventEntity, request) &&
+                        await IsDuplicateEventAsync(request, id))
                 {
-                    if (eventEntity.EventSettings != null)
-                    {
-                        _mapper.Map(request.EventSettings, eventEntity.EventSettings);
-                        eventEntity.EventSettings.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        eventEntity.EventSettings.AuditProperties.UpdatedBy = currentUserId;
-                    }
-                    else
-                    {
-                        eventEntity.EventSettings = CreateEventSettings(request.EventSettings, currentUserId);
-                    }
+                    this.ErrorMessage = "Event already exists with the same name and date.";
+                    _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
+                            request.Name, request.EventDate, organizationId, currentUserId);
+                    return null;
                 }
 
-                // Update or create leaderboard settings if provided
-                if (request.LeaderboardSettings != null)
-                {
-                    if (eventEntity.LeaderboardSettings != null)
-                    {
-                        _mapper.Map(request.LeaderboardSettings, eventEntity.LeaderboardSettings);
-                        eventEntity.LeaderboardSettings.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        eventEntity.LeaderboardSettings.AuditProperties.UpdatedBy = currentUserId;
-                    }
-                    else
-                    {
-                        eventEntity.LeaderboardSettings = CreateLeaderboardSettings(request.LeaderboardSettings, currentUserId);
-                    }
-                }
+                // Update event and related entities
+                UpdateEventEntity(eventEntity, request, currentUserId);
 
-                // Save changes
-                await eventRepo.UpdateAsync(eventEntity);
-                await _repository.SaveChangesAsync();
+                // Persist changes
+                await SaveEventChangesAsync(eventEntity);
 
                 _logger.LogInformation("Event updated successfully: {EventId} - {Name} by User {UserId}",
-              id, eventEntity.Name, currentUserId);
+                                            id, eventEntity.Name, currentUserId);
 
                 // Return updated event with all details
                 return await GetEventResponseAsync(id);
@@ -470,5 +418,114 @@ namespace Runnatics.Services
                 return null;
             }
         }
+
+        #region Update Helper Methods
+
+        /// <summary>
+        /// Fetches event entity with related settings for update operation
+        /// </summary>
+        private async Task<Event?> GetEventForUpdateAsync(int id, int organizationId)
+        {
+            var eventRepo = _repository.GetRepository<Event>();
+
+            return await eventRepo.GetQuery(e =>
+                      e.Id == id &&
+                      e.OrganizationId == organizationId &&
+                      e.AuditProperties.IsActive &&
+                      !e.AuditProperties.IsDeleted)
+                      .Include(e => e.EventSettings)
+                      .Include(e => e.LeaderboardSettings)
+                      .FirstOrDefaultAsync();
+        }
+
+        /// <summary>
+        /// Checks if event name or date has changed
+        /// </summary>
+        private static bool HasEventIdentityChanged(Event eventEntity, EventRequest request)
+        {
+            return eventEntity.Name != request.Name ||
+                eventEntity.EventDate.Date != request.EventDate.Date;
+        }
+
+        /// <summary>
+        /// Updates event entity and its related settings
+        /// </summary>
+        private void UpdateEventEntity(Event eventEntity, EventRequest request, int currentUserId)
+        {
+            // Update main event properties
+            _mapper.Map(request, eventEntity);
+
+            // Update audit properties
+            UpdateAuditProperties(eventEntity.AuditProperties, currentUserId);
+
+            // Update or create event settings
+            UpdateEventSettings(eventEntity, request.EventSettings, currentUserId);
+
+            // Update or create leaderboard settings
+            UpdateLeaderboardSettings(eventEntity, request.LeaderboardSettings, currentUserId);
+        }
+
+        /// <summary>
+        /// Updates audit properties for an entity
+        /// </summary>
+        private static void UpdateAuditProperties(Models.Data.Common.AuditProperties auditProperties, int userId)
+        {
+            auditProperties.UpdatedDate = DateTime.UtcNow;
+            auditProperties.UpdatedBy = userId;
+        }
+
+        /// <summary>
+        /// Updates or creates event settings
+        /// </summary>
+        private void UpdateEventSettings(Event eventEntity, EventSettingsRequest? settingsRequest, int currentUserId)
+        {
+            if (settingsRequest == null)
+            {
+                return;
+            }
+
+            if (eventEntity.EventSettings != null)
+            {
+                _mapper.Map(settingsRequest, eventEntity.EventSettings);
+                UpdateAuditProperties(eventEntity.EventSettings.AuditProperties, currentUserId);
+            }
+            else
+            {
+                eventEntity.EventSettings = CreateEventSettings(settingsRequest, currentUserId);
+            }
+        }
+
+        /// <summary>
+        /// Updates or creates leaderboard settings
+        /// </summary>
+        private void UpdateLeaderboardSettings(Event eventEntity, LeaderboardSettingsRequest? settingsRequest, int currentUserId)
+        {
+            if (settingsRequest == null)
+            {
+                return;
+            }
+
+            if (eventEntity.LeaderboardSettings != null)
+            {
+                _mapper.Map(settingsRequest, eventEntity.LeaderboardSettings);
+                UpdateAuditProperties(eventEntity.LeaderboardSettings.AuditProperties, currentUserId);
+            }
+            else
+            {
+                eventEntity.LeaderboardSettings = CreateLeaderboardSettings(settingsRequest, currentUserId);
+            }
+        }
+
+        /// <summary>
+        /// Saves event changes to the database
+        /// </summary>
+        private async Task SaveEventChangesAsync(Event eventEntity)
+        {
+            var eventRepo = _repository.GetRepository<Event>();
+            await eventRepo.UpdateAsync(eventEntity);
+            await _repository.SaveChangesAsync();
+        }
+
+        #endregion
     }
 }

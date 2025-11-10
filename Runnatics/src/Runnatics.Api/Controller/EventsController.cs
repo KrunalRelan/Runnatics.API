@@ -554,3 +554,4 @@ namespace Runnatics.Api.Controller
             return Ok(response);
         }
     }
+}

@@ -475,7 +475,7 @@ namespace Runnatics.Api.Controller
         /// <response code="500">If an internal server error occurs during update</response>
         [HttpPut("{id}")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<EventResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -506,14 +506,16 @@ namespace Runnatics.Api.Controller
                 });
             }
 
-            var response = new ResponseBase<EventResponse>();
             var result = await _eventService.Update(id, request);
 
             if (_eventService.HasError)
             {
-                response.Error = new ResponseBase<EventResponse>.ErrorData()
+                var response = new ResponseBase<object>
                 {
-                    Message = _eventService.ErrorMessage
+                    Error = new ResponseBase<object>.ErrorData()
+                    {
+                        Message = _eventService.ErrorMessage
+                    }
                 };
 
                 // Return 404 Not Found if event doesn't exist or unauthorized
@@ -541,17 +543,19 @@ namespace Runnatics.Api.Controller
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 
-            if (result == null)
+            if (!result)
             {
-                response.Error = new ResponseBase<EventResponse>.ErrorData()
+                var response = new ResponseBase<object>
                 {
-                    Message = "Event update failed. Please try again."
+                    Error = new ResponseBase<object>.ErrorData()
+                    {
+                        Message = "Event update failed. Please try again."
+                    }
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 
-            response.Message = result;
-            return Ok(response);
+            return NoContent();
         }
     }
 }

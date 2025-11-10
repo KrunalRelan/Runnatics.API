@@ -424,7 +424,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<EventResponse?> Update(int id, EventRequest request)
+        public async Task<bool> Update(int id, EventRequest request)
         {
             try
             {
@@ -437,7 +437,7 @@ namespace Runnatics.Services
                 // Validate request
                 if (!ValidateEventRequest(request))
                 {
-                    return null;
+                    return false;
                 }
 
                 // Fetch event with related entities in a single query
@@ -447,7 +447,7 @@ namespace Runnatics.Services
                     this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
                     _logger.LogWarning("Event update failed: Event {EventId} not found for Organization {OrgId}",
            id, organizationId);
-                    return null;
+                    return false;
                 }
 
                 // Check for duplicates only if name or date changed
@@ -457,7 +457,7 @@ namespace Runnatics.Services
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
                             request.Name, request.EventDate, organizationId, currentUserId);
-                    return null;
+                    return false;
                 }
 
                 // Update event and related entities
@@ -469,20 +469,19 @@ namespace Runnatics.Services
                 _logger.LogInformation("Event updated successfully: {EventId} - {Name} by User {UserId}",
                                             id, eventEntity.Name, currentUserId);
 
-                // Return updated event with all details
-                return await GetEventResponseAsync(id);
+                return true;
             }
             catch (DbUpdateException dbEx)
             {
                 this.ErrorMessage = "Database error occurred while updating the event.";
                 _logger.LogError(dbEx, "Database error during event update for ID: {EventId}", id);
-                return null;
+                return false;
             }
             catch (Exception ex)
             {
                 this.ErrorMessage = "An unexpected error occurred while updating the event.";
                 _logger.LogError(ex, "Error during event update for ID: {EventId}", id);
-                return null;
+                return false;
             }
         }
 

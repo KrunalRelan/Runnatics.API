@@ -32,7 +32,9 @@ namespace Runnatics.Models.Data.Entities
 
         public bool SortByCategoryGunTime { get; set; } = false;
 
-        public int NumberOfResultsToShow { get; set; } = 50;
+        public int NumberOfResultsToShowCategory { get; set; } = 50;
+
+        public int NumberOfResultsToShowOverall { get; set; } = 50;
 
         public bool EnableLiveLeaderboard { get; set; } = true;
 

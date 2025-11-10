@@ -18,7 +18,8 @@ namespace Runnatics.Models.Client.Responses.Events
         public bool SortByOverallGunTime { get; set; }
         public bool SortByCategoryChipTime { get; set; }
         public bool SortByCategoryGunTime { get; set; }
-        public int NumberOfResultsToShow { get; set; }
+        public int NumberOfResultsToShowCategory { get; set; }
+        public int NumberOfResultsToShowOverall { get; set; }
         public bool EnableLiveLeaderboard { get; set; }
 
         public bool ShowSplitTimes { get; set; }

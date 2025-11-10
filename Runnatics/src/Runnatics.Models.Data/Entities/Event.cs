@@ -38,7 +38,7 @@ namespace Runnatics.Models.Data.Entities
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
 
-        public EventStatus Status { get; set; } = EventStatus.Draft;
+        public EventStatus Status { get; set; } = EventStatus.Active; 
 
         public int? MaxParticipants { get; set; }
         public DateTime? RegistrationDeadline { get; set; }

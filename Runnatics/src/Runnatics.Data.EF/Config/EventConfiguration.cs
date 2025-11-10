@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using Runnatics.Models.Data.Entities; // Ensure this namespace contains the Event class
+using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 
 namespace Runnatics.Data.EF.Config
 {
@@ -36,8 +37,8 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnType("nvarchar(max)");
 
             builder.Property(e => e.EventDate)
-                .HasColumnName("EventDate")
-                .IsRequired();
+            .HasColumnName("EventDate")
+         .IsRequired();
 
             builder.Property(e => e.TimeZone)
                 .HasColumnName("TimeZone")
@@ -61,9 +62,11 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnType("decimal(11,8)");
 
             builder.Property(e => e.Status)
-                .HasColumnName("Status")
-                .HasMaxLength(40)
-                .HasDefaultValue("Draft");
+             .HasColumnName("Status")
+             .HasMaxLength(40)
+             .HasConversion<string>()
+             .HasDefaultValue(EventStatus.Draft);
+
 
             builder.Property(e => e.MaxParticipants)
                 .HasColumnName("MaxParticipants");
@@ -88,30 +91,30 @@ namespace Runnatics.Data.EF.Config
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedDate)
-                    .HasColumnName("UpdatedAt");
+                            ap.Property(p => p.UpdatedDate)
+                   .HasColumnName("UpdatedAt");
 
-                ap.Property(p => p.CreatedBy)
-                    .HasColumnName("CreatedBy");
+                            ap.Property(p => p.CreatedBy)
+          .HasColumnName("CreatedBy");
 
-                ap.Property(p => p.UpdatedBy)
-                    .HasColumnName("UpdatedBy");
+                            ap.Property(p => p.UpdatedBy)
+                      .HasColumnName("UpdatedBy");
 
-                ap.Property(p => p.IsActive)
-                    .HasColumnName("IsActive")
-                    .HasDefaultValue(true)
-                    .IsRequired();
+                            ap.Property(p => p.IsActive)
+                   .HasColumnName("IsActive")
+                        .HasDefaultValue(true)
+               .IsRequired();
 
-                ap.Property(p => p.IsDeleted)
-                    .HasColumnName("IsDeleted")
-                    .HasDefaultValue(false)
-                    .IsRequired();
-            });
+                            ap.Property(p => p.IsDeleted)
+              .HasColumnName("IsDeleted")
+                  .HasDefaultValue(false)
+               .IsRequired();
+                        });
 
             // Indexes
             builder.HasIndex(e => new { e.OrganizationId, e.Status });
             builder.HasIndex(e => new { e.OrganizationId, e.Slug })
-                .IsUnique();
+             .IsUnique();
             builder.HasIndex(e => e.EventDate);
 
             // Foreign Key Relationships

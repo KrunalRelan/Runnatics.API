@@ -154,6 +154,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.SortByCategoryChipTime, opt => opt.MapFrom(src => src.SortByCategoryChipTime))
                 .ForMember(dest => dest.SortByCategoryGunTime, opt => opt.MapFrom(src => src.SortByCategoryGunTime))
                 .ForMember(dest => dest.NumberOfResultsToShowCategory, opt => opt.MapFrom(src => src.NumberOfResultsToShowCategory))
+                .ForMember(dest => dest.NumberOfResultsToShowOverall, opt => opt.MapFrom(src => src.NumberOfResultsToShowOverall))
                 .ForMember(dest => dest.EnableLiveLeaderboard, opt => opt.MapFrom(src => src.EnableLiveLeaderboard))
                 .ForMember(dest => dest.ShowSplitTimes, opt => opt.MapFrom(src => src.ShowSplitTimes))
                 .ForMember(dest => dest.ShowPace, opt => opt.MapFrom(src => src.ShowPace))

@@ -11,5 +11,7 @@ namespace Runnatics.Models.Client.Common
             public int Code { get; set; }
             public string Message { get; set; } = string.Empty;
         }
+
+        public int TotalCount { get; set; }
     }
 }

@@ -1,4 +1,6 @@
-﻿namespace Runnatics.Models.Client.Responses.Events
+﻿using Runnatics.Models.Client.Common;
+
+namespace Runnatics.Models.Client.Responses.Events
 {
     public class EventResponse
     {
@@ -24,7 +26,7 @@
 
         public decimal? VenueLongitude { get; set; }
 
-        public string Status { get; set; } = string.Empty;
+        public EventStatus Status { get; set; }
 
         public int? MaxParticipants { get; set; }
 

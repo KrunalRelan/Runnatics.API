@@ -61,10 +61,13 @@ namespace Runnatics.Data.EF.Config
                     .HasDefaultValue(false)
                 .IsRequired();
 
-            builder.Property(e => e.NumberOfResultsToShow)
-              .HasColumnName("NumberOfResultsToShow")
-                    .HasDefaultValue(5)
-                .IsRequired();
+            builder.Property(e => e.NumberOfResultsToShowCategory)
+              .HasColumnName("NumberOfResultsToShowCategory")
+                    .HasDefaultValue(5);
+
+            builder.Property(e => e.NumberOfResultsToShowOverall)
+              .HasColumnName("NumberOfResultsToShowOverall")
+                    .HasDefaultValue(5);
 
             builder.Property(e => e.EnableLiveLeaderboard)
           .HasColumnName("EnableLiveLeaderboard")

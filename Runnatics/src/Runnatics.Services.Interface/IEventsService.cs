@@ -7,6 +7,8 @@ namespace Runnatics.Services.Interface
     public interface IEventsService : ISimpleServiceBase
     {
         Task<PagingList<EventResponse>> Search(EventSearchRequest request);
-        Task<EventResponse?> Create(EventRequest request);
+        Task<bool> Create(EventRequest request);
+        Task<bool> Update(int id, EventRequest request);
+        Task<bool> Delete(int id);
     }
 }

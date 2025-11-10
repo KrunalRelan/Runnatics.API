@@ -39,6 +39,16 @@ namespace Runnatics.Services
 
                 var organizationId = _userContext.OrganizationId;
 
+                // Validate date range
+                if (request.EventDateFrom.HasValue && request.EventDateTo.HasValue && 
+                    request.EventDateFrom.Value > request.EventDateTo.Value)
+                {
+                    this.ErrorMessage = "EventDateFrom must be less than or equal to EventDateTo.";
+                    _logger.LogWarning("Invalid date range in event search: From={From}, To={To}", 
+                        request.EventDateFrom.Value, request.EventDateTo.Value);
+                    return [];
+                }
+
                 // Build expression with OrganizationId from token as the primary filter
                 // When no other filters are provided, returns all events for the organization
                 Expression<Func<Event, bool>> expression = e =>

@@ -21,14 +21,14 @@ namespace Runnatics.Models.Client.Requests.Events
         public string? Name { get; set; }
 
         /// <summary>
-        /// End date for date range filter (optional)
-        /// </summary>
-        public DateTime? EventDateTo { get; set; }
-
-        /// <summary>
         /// Start date for date range filter (optional)
         /// </summary>
         public DateTime? EventDateFrom { get; set; }
+
+        /// <summary>
+        /// End date for date range filter (optional)
+        /// </summary>
+        public DateTime? EventDateTo { get; set; }
 
         /// <summary>
         /// Event status filter - Draft, Active, InProgress, Completed, Cancelled (optional)

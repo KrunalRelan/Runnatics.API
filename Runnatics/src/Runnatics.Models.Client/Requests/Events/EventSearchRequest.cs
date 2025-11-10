@@ -11,11 +11,6 @@ namespace Runnatics.Models.Client.Requests.Events
         }
 
         /// <summary>
-        /// Event ID for filtering specific event (optional)
-        /// </summary>
-        public int? Id { get; set; } 
-
-        /// <summary>
         /// Event name for partial match search (optional)
         /// </summary>
         public string? Name { get; set; }
@@ -29,10 +24,5 @@ namespace Runnatics.Models.Client.Requests.Events
         /// Start date for date range filter (optional)
         /// </summary>
         public DateTime? EventDateFrom { get; set; }
-
-        /// <summary>
-        /// Event status filter - Draft, Active, InProgress, Completed, Cancelled (optional)
-        /// </summary>
-        public string? Status { get; set; }
     }
 }

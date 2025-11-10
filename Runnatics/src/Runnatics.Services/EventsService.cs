@@ -48,9 +48,7 @@ namespace Runnatics.Services
                 // When no other filters are provided, returns all events for the organization
                 Expression<Func<Event, bool>> expression = e =>
                     e.OrganizationId == organizationId &&
-                    (!request.Id.HasValue || e.Id == request.Id.Value) &&
                     (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
-                    (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
                     (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
                     (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
                     e.AuditProperties.IsActive &&
@@ -229,7 +227,7 @@ namespace Runnatics.Services
             // Get current user ID and organization ID from context
             var currentUserId = _userContext.UserId;
             var organizationId = _userContext.OrganizationId;
-            
+
             // Set the organization ID from the JWT token
             eventEntity.OrganizationId = organizationId;
             eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
@@ -294,34 +292,34 @@ namespace Runnatics.Services
         {
             try
             {
-                _logger.LogInformation("Saving event: {EventName}, HasEventSettings: {HasEventSettings}, HasLeaderboardSettings: {HasLeaderboardSettings}", 
-                    eventEntity.Name, 
-                    eventEntity.EventSettings != null, 
+                _logger.LogInformation("Saving event: {EventName}, HasEventSettings: {HasEventSettings}, HasLeaderboardSettings: {HasLeaderboardSettings}",
+                    eventEntity.Name,
+                    eventEntity.EventSettings != null,
                     eventEntity.LeaderboardSettings != null);
-                
+
                 // Store references to child entities and their data
                 EventSettings? eventSettingsData = null;
                 LeaderboardSettings? leaderboardSettingsData = null;
-                
+
                 if (eventEntity.EventSettings != null)
                 {
                     eventSettingsData = eventEntity.EventSettings;
                     eventEntity.EventSettings = null; // Detach from event
                 }
-                
+
                 if (eventEntity.LeaderboardSettings != null)
                 {
                     leaderboardSettingsData = eventEntity.LeaderboardSettings;
                     eventEntity.LeaderboardSettings = null; // Detach from event
                 }
-                
+
                 // Step 1: Save the Event entity first
                 var eventRepo = _repository.GetRepository<Event>();
                 var addedEvent = await eventRepo.AddAsync(eventEntity);
                 await _repository.SaveChangesAsync();
-                
+
                 _logger.LogInformation("Event saved with ID: {EventId}", addedEvent.Id);
-                
+
                 // Step 2: Now save EventSettings if it exists - create a new instance to avoid tracking issues
                 if (eventSettingsData != null)
                 {
@@ -336,12 +334,12 @@ namespace Runnatics.Services
                         ConfirmedEvent = eventSettingsData.ConfirmedEvent,
                         AuditProperties = eventSettingsData.AuditProperties
                     };
-                    
+
                     var settingsRepo = _repository.GetRepository<EventSettings>();
                     await settingsRepo.AddAsync(newEventSettings);
                     _logger.LogInformation("EventSettings prepared for Event ID: {EventId}", addedEvent.Id);
                 }
-                
+
                 // Step 3: Now save LeaderboardSettings if it exists - create a new instance to avoid tracking issues
                 if (leaderboardSettingsData != null)
                 {
@@ -368,19 +366,19 @@ namespace Runnatics.Services
                         NumberOfResultsToShowCategory = leaderboardSettingsData.NumberOfResultsToShowCategory,
                         AuditProperties = leaderboardSettingsData.AuditProperties
                     };
-                    
+
                     var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
                     await leaderboardRepo.AddAsync(newLeaderboardSettings);
                     _logger.LogInformation("LeaderboardSettings prepared for Event ID: {EventId}", addedEvent.Id);
                 }
-                
+
                 // Step 4: Save all child entities
                 if (eventSettingsData != null || leaderboardSettingsData != null)
                 {
                     await _repository.SaveChangesAsync();
                     _logger.LogInformation("Event settings saved successfully for Event ID: {EventId}", addedEvent.Id);
                 }
-                
+
                 return addedEvent.Id;
             }
             catch (Exception ex)
@@ -439,7 +437,7 @@ namespace Runnatics.Services
                 var mappedResponse = _mapper.Map<EventResponse>(createdEvent);
 
                 _logger.LogInformation("Event mapped to response successfully for ID: {EventId}", eventId);
-                
+
                 return mappedResponse;
             }
             catch (Exception ex)
@@ -598,6 +596,44 @@ namespace Runnatics.Services
             {
                 this.ErrorMessage = "An unexpected error occurred while updating the event.";
                 _logger.LogError(ex, "Error during event update for ID: {EventId}", id);
+                return null;
+            }
+        }
+
+        public async Task<EventResponse?> GetEventById(int id)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                var organizationId = _userContext.OrganizationId;
+
+                var eventEntity = await eventRepo.GetQuery(e =>
+                                                           e.Id == id &&
+                                                           e.OrganizationId == _userContext.OrganizationId &&
+                                                           e.AuditProperties.IsActive &&
+                                                           !e.AuditProperties.IsDeleted)
+                                                           .Include(e => e.EventSettings)
+                                                           .Include(e => e.LeaderboardSettings)
+                                                           .Include(e => e.Organization)
+                                                           .Include(e => e.EventOrganizer)
+                                                           .AsNoTracking()
+                                                           .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                {
+                    this.ErrorMessage = "Event not found.";
+                    _logger.LogWarning("Event with ID {EventId} not found for Organization {OrgId}",
+                        id, organizationId);
+                    return null;
+                }
+
+                var toReturn = _mapper.Map<EventResponse>(eventEntity);
+                return toReturn;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving event : {Id}", id);
+                this.ErrorMessage = "Error retrieving event.";
                 return null;
             }
         }

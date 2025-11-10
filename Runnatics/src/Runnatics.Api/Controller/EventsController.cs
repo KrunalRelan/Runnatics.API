@@ -313,7 +313,7 @@ namespace Runnatics.Api.Controller
         /// <response code="403">If the user is not authorized (Admin role required)</response>
         /// <response code="404">If the event is not found or doesn't belong to user's organization</response>
         /// <response code="500">If an internal server error occurs during deletion</response>
-        [HttpDelete("{id}")]
+        [HttpDelete("{id}/delete-event")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<object>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -542,6 +542,48 @@ namespace Runnatics.Api.Controller
                 response.Error = new ResponseBase<EventResponse>.ErrorData()
                 {
                     Message = "Event update failed. Please try again."
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        [HttpGet("{eventId}/event-details")]
+        public async Task<IActionResult> GetEvent(int eventId)
+        {
+            if (eventId <= 0)
+            {
+                return BadRequest(new { error = "Invalid event ID. ID must be greater than 0." });
+            }
+
+            var response = new ResponseBase<EventResponse>();
+            var result = await _eventService.GetEventById(eventId);
+
+            if (_eventService.HasError)
+            {
+                response.Error = new ResponseBase<EventResponse>.ErrorData()
+                {
+                    Message = _eventService.ErrorMessage
+                };
+
+                // Return 404 Not Found if event doesn't exist
+                if (_eventService.ErrorMessage.Contains("not found") ||
+                    _eventService.ErrorMessage.Contains("does not exist"))
+                {
+                    return NotFound(response);
+                }
+
+                // Return 500 for database errors or unexpected errors
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (result == null)
+            {
+                response.Error = new ResponseBase<EventResponse>.ErrorData()
+                {
+                    Message = "Event retrieval failed. Please try again."
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }

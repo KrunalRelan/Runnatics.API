@@ -10,5 +10,7 @@ namespace Runnatics.Services.Interface
         Task<EventResponse?> Create(EventRequest request);
         Task<EventResponse?> Update(int id, EventRequest request);
         Task<bool> Delete(int id);
+
+        Task<EventResponse?> GetEventById(int id);
     }
 }

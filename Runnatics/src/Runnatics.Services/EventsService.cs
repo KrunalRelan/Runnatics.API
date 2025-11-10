@@ -35,80 +35,27 @@ namespace Runnatics.Services
         {
             try
             {
-                var eventRepo = _repository.GetRepository<Event>();
-
                 var organizationId = _userContext.OrganizationId;
 
                 // Validate date range
-                if (request.EventDateFrom.HasValue && request.EventDateTo.HasValue && 
-                    request.EventDateFrom.Value > request.EventDateTo.Value)
+                if (!ValidateDateRange(request))
                 {
-                    this.ErrorMessage = "EventDateFrom must be less than or equal to EventDateTo.";
-                    _logger.LogWarning("Invalid date range in event search: From={From}, To={To}", 
-                        request.EventDateFrom.Value, request.EventDateTo.Value);
                     return [];
                 }
 
-                // Build expression with OrganizationId from token as the primary filter
-                // When no other filters are provided, returns all events for the organization
-                Expression<Func<Event, bool>> expression = e =>
-                        e.OrganizationId == organizationId &&
-                        (!request.Id.HasValue || e.Id == request.Id.Value) &&
-                        (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
-                        (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
-                        (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
-                        (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
-                        e.AuditProperties.IsActive &&
-                        !e.AuditProperties.IsDeleted;
+                // Build and execute search query
+                var searchResults = await ExecuteSearchQueryAsync(request, organizationId);
 
-                // Map the sort field name from client format to database format
-                string? mappedSortField = null;
-                if (!string.IsNullOrEmpty(request.SortFieldName))
-                {
-                    if (SortFieldMapping.TryGetValue(request.SortFieldName, out var dbFieldName))
-                    {
-                        mappedSortField = dbFieldName;
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", request.SortFieldName);
-                        mappedSortField = "Id";
-                    }
-                }
+                // Load navigation properties while preserving sort order
+                var eventsWithDetails = await LoadEventsWithNavigationPropertiesAsync(searchResults);
 
-                var data = await eventRepo.SearchAsync(expression,
-                                                        request.PageSize,
-                                                        request.PageNumber,
-                                                        request.SortDirection == SortDirection.Ascending ?
-                                                        Models.Data.Common.SortDirection.Ascending :
-                                                        Models.Data.Common.SortDirection.Descending,
-                                                        mappedSortField,
-                                                        false,
-                                                        false);
-
-                // Preserve the sort order by storing IDs in order
-                var orderedIds = data.Select(d => d.Id).ToList();
-
-                // Manually load only the navigation properties we need
-                var eventsWithDetails = await eventRepo.GetQuery(e => orderedIds.Contains(e.Id))
-                            .Include(e => e.EventSettings)
-                            .Include(e => e.LeaderboardSettings)
-                            .Include(e => e.Organization)
-                            .AsNoTracking()
-                            .ToListAsync();
-
-                // Restore the original sort order
-                var sortedEvents = orderedIds
-                 .Select(id => eventsWithDetails.First(e => e.Id == id))
-                    .ToList();
-
-                var mappedData = _mapper.Map<PagingList<EventResponse>>(sortedEvents);
-                mappedData.TotalCount = data.TotalCount;
+                // Map to response and return
+                var response = MapToEventResponseList(eventsWithDetails, searchResults.TotalCount);
 
                 _logger.LogInformation("Event search completed for Organization {OrgId} by User {UserId}. Found {Count} events.",
-                                                                    organizationId, _userContext.UserId, mappedData.TotalCount);
+               organizationId, _userContext.UserId, response.TotalCount);
 
-                return mappedData;
+                return response;
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -123,6 +70,116 @@ namespace Runnatics.Services
                 return [];
             }
         }
+
+        #region Search Helper Methods
+
+        /// <summary>
+        /// Validates the date range in the search request
+        /// </summary>
+        private bool ValidateDateRange(EventSearchRequest request)
+        {
+            if (request.EventDateFrom.HasValue && request.EventDateTo.HasValue &&
+         request.EventDateFrom.Value > request.EventDateTo.Value)
+            {
+                this.ErrorMessage = "EventDateFrom must be less than or equal to EventDateTo.";
+                _logger.LogWarning("Invalid date range in event search: From={From}, To={To}",
+               request.EventDateFrom.Value, request.EventDateTo.Value);
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Builds the filter expression for event search
+        /// </summary>
+        private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int organizationId)
+        {
+            return e =>
+                e.OrganizationId == organizationId &&
+                (!request.Id.HasValue || e.Id == request.Id.Value) &&
+                (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
+                (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
+                (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
+                (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
+                e.AuditProperties.IsActive &&
+                !e.AuditProperties.IsDeleted;
+        }
+
+        /// <summary>
+        /// Maps sort field name from client format to database format
+        /// </summary>
+        private string? GetMappedSortField(string? sortFieldName)
+        {
+            if (string.IsNullOrEmpty(sortFieldName))
+            {
+                return null;
+            }
+
+            if (SortFieldMapping.TryGetValue(sortFieldName, out var dbFieldName))
+            {
+                return dbFieldName;
+            }
+
+            _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", sortFieldName);
+            return "Id";
+        }
+
+        /// <summary>
+        /// Executes the search query and returns paginated results
+        /// </summary>
+        private async Task<Models.Data.Common.PagingList<Event>> ExecuteSearchQueryAsync(EventSearchRequest request, int organizationId)
+        {
+            var eventRepo = _repository.GetRepository<Event>();
+            var expression = BuildSearchExpression(request, organizationId);
+            var mappedSortField = GetMappedSortField(request.SortFieldName);
+
+            return await eventRepo.SearchAsync(
+                       expression,
+                       request.PageSize,
+                       request.PageNumber,
+                       request.SortDirection == SortDirection.Ascending
+                            ? Models.Data.Common.SortDirection.Ascending
+                           : Models.Data.Common.SortDirection.Descending,
+                       mappedSortField,
+                       ignoreQueryFilters: false,
+                       includeNavigationProperties: false);
+        }
+
+        /// <summary>
+        /// Loads events with navigation properties while preserving original sort order
+        /// </summary>
+        private async Task<List<Event>> LoadEventsWithNavigationPropertiesAsync(Models.Data.Common.PagingList<Event> searchResults)
+        {
+            if (searchResults.Count == 0)
+            {
+                return [];
+            }
+
+            var eventRepo = _repository.GetRepository<Event>();
+            var orderedIds = searchResults.Select(e => e.Id).ToList();
+
+            var eventsWithDetails = await eventRepo.GetQuery(e => orderedIds.Contains(e.Id))
+                    .Include(e => e.EventSettings)
+                    .Include(e => e.LeaderboardSettings)
+                    .Include(e => e.Organization)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+            // Restore original sort order
+            return [.. orderedIds.Select(id => eventsWithDetails.First(e => e.Id == id))];
+        }
+
+        /// <summary>
+        /// Maps event entities to response DTOs
+        /// </summary>
+        private PagingList<EventResponse> MapToEventResponseList(List<Event> events, int totalCount)
+        {
+            var mappedData = _mapper.Map<PagingList<EventResponse>>(events);
+            mappedData.TotalCount = totalCount;
+            return mappedData;
+        }
+
+        #endregion
 
         public async Task<bool> Create(EventRequest request)
         {

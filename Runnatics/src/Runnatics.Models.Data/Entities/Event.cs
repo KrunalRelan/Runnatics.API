@@ -4,6 +4,7 @@ namespace Runnatics.Models.Data.Entities
     using System.Collections.Generic;
     using System.ComponentModel.DataAnnotations;
     using Runnatics.Models.Data.Common;
+    using Runnatics.Models.Data.Enumerations;
 
     public class Event
     {
@@ -37,8 +38,7 @@ namespace Runnatics.Models.Data.Entities
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
 
-        [MaxLength(20)]
-        public string Status { get; set; } = "Draft"; // Draft, Active, InProgress, Completed, Cancelled
+        public EventStatus Status { get; set; } = EventStatus.Draft;
 
         public int? MaxParticipants { get; set; }
         public DateTime? RegistrationDeadline { get; set; }

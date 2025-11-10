@@ -98,7 +98,7 @@ namespace Runnatics.Services
                 e.OrganizationId == organizationId &&
                 (!request.Id.HasValue || e.Id == request.Id.Value) &&
                 (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
-                (string.IsNullOrEmpty(request.Status) || e.Status == request.Status) &&
+                (!request.Status.HasValue || (int)e.Status == (int)request.Status.Value) &&
                 (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
                 (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
                 e.AuditProperties.IsActive &&

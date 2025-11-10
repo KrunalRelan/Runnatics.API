@@ -1,12 +1,11 @@
 ﻿using Runnatics.Models.Client.Common;
-
 namespace Runnatics.Models.Client.Requests.Events
 {
     public class EventSearchRequest : SearchCriteriaBase
     {
         public EventSearchRequest()
         {
-            SortFieldName = "EventDate";
+            SortFieldName = "Id";
             SortDirection = SortDirection.Descending;
         }
 
@@ -31,8 +30,8 @@ namespace Runnatics.Models.Client.Requests.Events
         public DateTime? EventDateTo { get; set; }
 
         /// <summary>
-        /// Event status filter - Draft, Active, InProgress, Completed, Cancelled (optional)
+        /// Event status filter (optional)
         /// </summary>
-        public string? Status { get; set; }
+        public EventStatus? Status { get; set; }
     }
 }

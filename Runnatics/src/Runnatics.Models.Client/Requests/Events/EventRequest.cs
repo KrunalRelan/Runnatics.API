@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using Runnatics.Models.Client.Common;
 
 namespace Runnatics.Models.Client.Requests.Events
 {
@@ -31,8 +32,7 @@ namespace Runnatics.Models.Client.Requests.Events
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
 
-        [MaxLength(20)]
-        public string Status { get; set; } = "Draft";
+        public EventStatus Status { get; set; } = EventStatus.Draft;
 
         public int? MaxParticipants { get; set; }
         public DateTime? RegistrationDeadline { get; set; }

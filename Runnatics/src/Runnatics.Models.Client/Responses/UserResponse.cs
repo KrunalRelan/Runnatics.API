@@ -13,7 +13,7 @@ namespace Runnatics.Models.Client.Responses
         public DateTime? LastLoginAt { get; set; }
         public bool IsActive { get; set; }
 
-        public int OrganizationId { get; set; }
+        public int TenantId { get; set; }
         public string OrganizationName { get; set; } = string.Empty;
     }
 }

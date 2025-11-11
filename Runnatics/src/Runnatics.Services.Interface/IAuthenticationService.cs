@@ -8,7 +8,7 @@ namespace Runnatics.Services.Interface
     {
         Task<AuthenticationResponse?>RegisterOrganizationAsync(RegisterOrganizationRequest request);
         Task<AuthenticationResponse?>LoginAsync(LoginRequest request);
-        Task<InvitationResponse?>InviteUserAsync(InviteUserRequest request, int organizationId, int invitedBy);
+        Task<InvitationResponse?>InviteUserAsync(InviteUserRequest request, int tenantId, int invitedBy);
         Task<AuthenticationResponse?>AcceptInvitationAsync(AcceptInvitationRequest request);
         Task<string?>ChangePasswordAsync(int userId, ChangePasswordRequest request);
         Task<string?>ForgotPasswordAsync(ForgotPasswordRequest request);

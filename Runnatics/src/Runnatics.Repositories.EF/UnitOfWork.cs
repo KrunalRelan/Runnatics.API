@@ -28,7 +28,7 @@ namespace Runnatics.Repositories.EF
     /// }
     /// 
     /// // Multi-tenant usage
-    /// _unitOfWork.SetTenantId(organizationId);
+    /// _unitOfWork.SetTenantId(TenantId);
     /// var currentTenant = _unitOfWork.GetCurrentTenantId();
     /// </code>
     /// </example>
@@ -137,10 +137,10 @@ namespace Runnatics.Repositories.EF
         /// <summary>
         /// Sets the tenant ID for the current context.
         /// </summary>
-        /// <param name="organizationId">The organization ID (tenant ID)</param>
-        public void SetTenantId(int organizationId)
+        /// <param name="TenantId">The organization ID (tenant ID)</param>
+        public void SetTenantId(int TenantId)
         {
-            _tenantId = organizationId;
+            _tenantId = TenantId;
         }
 
         /// <summary>

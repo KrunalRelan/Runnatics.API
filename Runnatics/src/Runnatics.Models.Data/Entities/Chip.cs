@@ -12,7 +12,7 @@ namespace Runnatics.Models.Data.Entities
         public int Id { get; set; }
         
         [Required]
-        public int OrganizationId { get; set; }
+        public int TenantId { get; set; }
 
         [Required]
         [MaxLength(50)]

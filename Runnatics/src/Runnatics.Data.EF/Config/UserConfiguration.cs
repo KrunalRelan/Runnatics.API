@@ -18,8 +18,8 @@ namespace Runnatics.Data.EF.Config
                 .ValueGeneratedOnAdd()
                 .IsRequired();
 
-            builder.Property(e => e.OrganizationId)
-                .HasColumnName("OrganizationId")
+            builder.Property(e => e.TenantId)
+                .HasColumnName("TenantId")
                 .IsRequired();
 
             builder.Property(e => e.Email)
@@ -76,8 +76,8 @@ namespace Runnatics.Data.EF.Config
             });
 
             // Indexes
-            builder.HasIndex(e => e.OrganizationId);
-            builder.HasIndex(e => new { e.OrganizationId, e.Email })
+            builder.HasIndex(e => e.TenantId);
+            builder.HasIndex(e => new { e.TenantId, e.Email })
                 .IsUnique();
         }
     }

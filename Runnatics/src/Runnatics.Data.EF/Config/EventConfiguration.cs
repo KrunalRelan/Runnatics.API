@@ -18,8 +18,8 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("Id")
                 .ValueGeneratedOnAdd();
 
-            builder.Property(e => e.OrganizationId)
-                .HasColumnName("OrganizationId")
+            builder.Property(e => e.TenantId)
+                .HasColumnName("TenantId")
                 .IsRequired();
 
             builder.Property(e => e.Name)
@@ -112,15 +112,15 @@ namespace Runnatics.Data.EF.Config
                         });
 
             // Indexes
-            builder.HasIndex(e => new { e.OrganizationId, e.Status });
-            builder.HasIndex(e => new { e.OrganizationId, e.Slug })
+            builder.HasIndex(e => new { e.TenantId, e.Status });
+            builder.HasIndex(e => new { e.TenantId, e.Slug })
              .IsUnique();
             builder.HasIndex(e => e.EventDate);
 
             // Foreign Key Relationships
             builder.HasOne(e => e.Organization)
                 .WithMany(o => o.Events)
-                .HasForeignKey(e => e.OrganizationId)
+                .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.EventOrganizer)

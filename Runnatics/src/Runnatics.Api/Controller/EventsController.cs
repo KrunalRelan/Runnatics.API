@@ -161,7 +161,7 @@ namespace Runnatics.Api.Controller
         /// 
         /// **Authentication:**
         /// - Requires valid JWT token in Authorization header
-        /// - **organizationId**: Automatically extracted from JWT token (not in request body)
+        /// - **TenantId**: Automatically extracted from JWT token (not in request body)
         /// - **createdBy**: Automatically extracted from JWT token (not in request body)
         /// - User can only create events for their own organization
         /// - Multi-tenant isolation enforced
@@ -397,7 +397,7 @@ namespace Runnatics.Api.Controller
         /// 
         /// **Authentication:**
         /// - Requires valid JWT token in Authorization header
-        /// - **organizationId**: Automatically extracted from JWT token (not in request body)
+        /// - **TenantId**: Automatically extracted from JWT token (not in request body)
         /// - **updatedBy**: Automatically extracted from JWT token (not in request body)
         /// - User can only update events for their own organization
         /// - Multi-tenant isolation enforced

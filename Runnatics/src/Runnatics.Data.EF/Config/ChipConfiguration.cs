@@ -16,8 +16,8 @@ namespace Runnatics.Data.EF.Config
                 .IsRequired();
 
             // Properties
-            builder.Property(e => e.OrganizationId)
-                .HasColumnName("OrganizationId")
+            builder.Property(e => e.TenantId)
+                .HasColumnName("TenantId")
                 .IsRequired();
 
             builder.Property(e => e.EPC)
@@ -45,13 +45,13 @@ namespace Runnatics.Data.EF.Config
                 .IsUnique()
                 .HasDatabaseName("IX_Chips_EPC");
 
-            builder.HasIndex(e => new { e.OrganizationId, e.Status })
-                .HasDatabaseName("IX_Chips_OrganizationId_Status");
+            builder.HasIndex(e => new { e.TenantId, e.Status })
+                .HasDatabaseName("IX_Chips_TenantId_Status");
 
             // Relationships
             builder.HasOne(e => e.Organization)
                 .WithMany(o => o.Chips)
-                .HasForeignKey(e => e.OrganizationId)
+                .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.OwnsOne(o => o.AuditProperties, ap =>

@@ -27,7 +27,7 @@ namespace Runnatics.Services
             // User mappings
             CreateMap<User, UserResponse>()
                 .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.OrganizationId, opt => opt.MapFrom(src => src.OrganizationId))
+                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
                 .ForMember(dest => dest.FirstName, opt => opt.MapFrom(src => src.FirstName))
                 .ForMember(dest => dest.LastName, opt => opt.MapFrom(src => src.LastName))
                 .ForMember(dest => dest.Email, opt => opt.MapFrom(src => src.Email))
@@ -54,7 +54,7 @@ namespace Runnatics.Services
             // Request mappings
             CreateMap<InviteUserRequest, UserInvitation>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore()) // Generated
-                .ForMember(dest => dest.OrganizationId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Email, opt => opt.MapFrom(src => src.Email))
                 .ForMember(dest => dest.FirstName, opt => opt.MapFrom(src => src.FirstName))
                 .ForMember(dest => dest.LastName, opt => opt.MapFrom(src => src.LastName))
@@ -75,7 +75,7 @@ namespace Runnatics.Services
             //Event mappings
             CreateMap<EventRequest, Event>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.OrganizationId, opt => opt.Ignore()) // Set by service from JWT token
+                .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service from JWT token
                 .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.LeaderboardSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
@@ -93,7 +93,7 @@ namespace Runnatics.Services
 
             CreateMap<Event, EventResponse>()
                 .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.OrganizationId, opt => opt.MapFrom(src => src.OrganizationId))
+                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
                 .ForMember(dest => dest.Slug, opt => opt.MapFrom(src => src.Slug))
                 .ForMember(dest => dest.Description, opt => opt.MapFrom(src => src.Description))
@@ -168,7 +168,7 @@ namespace Runnatics.Services
 
             CreateMap<EventOrganizer, EventOrganizerResponse>()
                 .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.OrganizationId, opt => opt.MapFrom(src => src.OrganizationId))
+                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
                 .ForMember(dest => dest.OrganizerName, opt => opt.MapFrom(src => src.Name));
 
             CreateMap<EventOrganizerResponse, EventOrganizer>()
@@ -176,7 +176,7 @@ namespace Runnatics.Services
 
             CreateMap<EventOrganizerRequest, EventOrganizer>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.OrganizationId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.EventOrganizerName));
 
         }

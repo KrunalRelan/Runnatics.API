@@ -29,7 +29,7 @@ namespace Runnatics.Services
         {
             try
             {
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
                 var userId = _userContext.UserId;
 
                 // Validate input
@@ -64,7 +64,7 @@ namespace Runnatics.Services
 
                 // Create new event organizer
                 var createEventOrganizer = _mapper.Map<EventOrganizer>(request);
-                createEventOrganizer.OrganizationId = organizationId;
+                createEventOrganizer.TenantId = tenantId;
                 createEventOrganizer.AuditProperties = new AuditProperties
                 {
                     CreatedBy = userId,
@@ -76,15 +76,15 @@ namespace Runnatics.Services
                 await eventRepo.AddAsync(createEventOrganizer);
                 await _repository.SaveChangesAsync();
 
-                _logger.LogInformation("Event organizer created for organization: {OrganizationId} by user: {UserId}",
-                    createEventOrganizer.OrganizationId, userId);
+                _logger.LogInformation("Event organizer created for tenant: {TenantId} by user: {UserId}",
+                    createEventOrganizer.TenantId, userId);
 
                 var toReturn = _mapper.Map<EventOrganizerResponse>(createEventOrganizer);
                 return toReturn;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating event organizer for organization: {OrganizationId}", _userContext.OrganizationId);
+                _logger.LogError(ex, "Error creating event organizer for tenant: {TenantId}", _userContext.TenantId);
                 ErrorMessage = "Error creating event organizer.";
                 return null;
             }
@@ -94,14 +94,14 @@ namespace Runnatics.Services
         {
             try
             {
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
                 var userId = _userContext.UserId;
 
                 var eventRepo = _repository.GetRepository<EventOrganizer>();
 
                 var eventOrganizer = await eventRepo
                     .GetQuery(eo => eo.Id == id
-                              && eo.OrganizationId == organizationId
+                              && eo.TenantId == tenantId
                               && !eo.AuditProperties.IsDeleted
                               && eo.AuditProperties.IsActive)
                     .FirstOrDefaultAsync();
@@ -127,23 +127,23 @@ namespace Runnatics.Services
         {
             try
             {
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
                 var userId = _userContext.UserId;
 
                 var eventOrgRepo = _repository.GetRepository<EventOrganizer>();
 
                 var existingOrgEvent = await eventOrgRepo
                     .GetQuery(e => e.Id == id
-                        && e.OrganizationId == organizationId
+                        && e.TenantId == tenantId
                         && !e.AuditProperties.IsDeleted
                         && e.AuditProperties.IsActive)
                     .FirstOrDefaultAsync();
 
                 if (existingOrgEvent == null)
                 {
-                    ErrorMessage = "Event not found or does not belong to this organization.";
-                    _logger.LogError("Event not found: {EventId} for organization: {OrganizationId}",
-                        id, organizationId);
+                    ErrorMessage = "Event not found or does not belong to this tenant.";
+                    _logger.LogError("Event not found: {EventId} for tenant: {TenantId}",
+                        id, tenantId);
                     return null;
                 }
 
@@ -178,13 +178,13 @@ namespace Runnatics.Services
         {
             try
             {
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
                 var userId = _userContext.UserId;
 
                 var eventOrgRepo = _repository.GetRepository<EventOrganizer>();
 
                 var eventOrganizers = await eventOrgRepo
-                    .GetQuery(eo => eo.OrganizationId == organizationId
+                    .GetQuery(eo => eo.TenantId == tenantId
                               && !eo.AuditProperties.IsDeleted
                               && eo.AuditProperties.IsActive)
                     .ToListAsync();
@@ -194,7 +194,7 @@ namespace Runnatics.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving event organizers for organization: {OrganizationId}", _userContext.OrganizationId);
+                _logger.LogError(ex, "Error retrieving event organizers for tenant: {TenantId}", _userContext.TenantId);
                 ErrorMessage = "Error retrieving event organizers.";
                 return null;
             }

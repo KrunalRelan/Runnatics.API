@@ -35,7 +35,7 @@ namespace Runnatics.Models.Client.Responses.Events
         // Deprecated - kept for backward compatibility
         public string? City { get; set; } 
 
-        public string? EventOrganizerName { get; set; }
+        public int EventOrganizerId { get; set; }
 
         // Event Settings
         public EventSettingsResponse? EventSettings { get; set; }

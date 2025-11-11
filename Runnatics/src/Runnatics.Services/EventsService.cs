@@ -139,8 +139,8 @@ namespace Runnatics.Services
                                                            !e.AuditProperties.IsDeleted)
                                                            .Include(e => e.EventSettings)
                                                            .Include(e => e.LeaderboardSettings)
-                                                           .Include(e => e.Organization)
-                                                           .Include(e => e.EventOrganizer)
+                                                           //.Include(e => e.Organization)
+                                                           //.Include(e => e.EventOrganizer)
                                                            .AsNoTracking()
                                                            .FirstOrDefaultAsync();
 

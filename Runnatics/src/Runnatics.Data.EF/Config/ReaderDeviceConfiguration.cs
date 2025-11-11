@@ -14,7 +14,7 @@ namespace Runnatics.Data.EF.Config
                    .ValueGeneratedOnAdd()
                    .IsRequired();
 
-            builder.Property(e => e.OrganizationId)
+            builder.Property(e => e.TenantId)
                 .IsRequired();
 
             builder.Property(e => e.SerialNumber)
@@ -75,7 +75,7 @@ namespace Runnatics.Data.EF.Config
             // Relationships
             builder.HasOne(e => e.Organization)
                 .WithMany()
-                .HasForeignKey(e => e.OrganizationId)
+                .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             // Indexes
@@ -84,7 +84,7 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasIndex(e => e.MacAddress);
 
-            builder.HasIndex(e => e.OrganizationId);
+            builder.HasIndex(e => e.TenantId);
 
             builder.OwnsOne(o => o.AuditProperties, ap =>
             {

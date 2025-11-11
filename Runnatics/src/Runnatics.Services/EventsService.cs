@@ -35,7 +35,7 @@ namespace Runnatics.Services
         {
             try
             {
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
 
                 // Validate date range
                 if (!ValidateDateRange(request))
@@ -44,7 +44,7 @@ namespace Runnatics.Services
                 }
 
                 // Build and execute search query
-                var searchResults = await ExecuteSearchQueryAsync(request, organizationId);
+                var searchResults = await ExecuteSearchQueryAsync(request, tenantId);
 
                 // Load navigation properties while preserving sort order
                 var eventsWithDetails = await LoadEventsWithNavigationPropertiesAsync(searchResults);
@@ -52,8 +52,8 @@ namespace Runnatics.Services
                 // Map to response and return
                 var response = MapToEventResponseList(eventsWithDetails, searchResults.TotalCount);
 
-                _logger.LogInformation("Event search completed for Organization {OrgId} by User {UserId}. Found {Count} events.",
-               organizationId, _userContext.UserId, response.TotalCount);
+                _logger.LogInformation("Event search completed for Tenant {TenantId} by User {UserId}. Found {Count} events.",
+               tenantId, _userContext.UserId, response.TotalCount);
 
                 return response;
             }
@@ -75,9 +75,9 @@ namespace Runnatics.Services
         {
             try
             {
-                // Get user ID and organization ID from JWT token
+                // Get user ID and tenant ID from JWT token
                 var currentUserId = _userContext.UserId;
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
 
                 // Validate request
                 if (!ValidateEventRequest(request))
@@ -86,11 +86,11 @@ namespace Runnatics.Services
                 }
 
                 // Check for duplicates
-                if (await IsDuplicateEventAsync(request, organizationId))
+                if (await IsDuplicateEventAsync(request, tenantId))
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
-                    _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
-                                                request.Name, request.EventDate, organizationId, currentUserId);
+                    _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Tenant {TenantId} by User {UserId}",
+                                                request.Name, request.EventDate, tenantId, currentUserId);
                     return false;
                 }
 
@@ -130,11 +130,11 @@ namespace Runnatics.Services
             try
             {
                 var eventRepo = _repository.GetRepository<Event>();
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
 
                 var eventEntity = await eventRepo.GetQuery(e =>
                                                            e.Id == id &&
-                                                           e.OrganizationId == _userContext.OrganizationId &&
+                                                           e.TenantId == _userContext.TenantId &&
                                                            e.AuditProperties.IsActive &&
                                                            !e.AuditProperties.IsDeleted)
                                                            .Include(e => e.EventSettings)
@@ -147,8 +147,8 @@ namespace Runnatics.Services
                 if (eventEntity == null)
                 {
                     this.ErrorMessage = "Event not found.";
-                    _logger.LogWarning("Event with ID {EventId} not found for Organization {OrgId}",
-                        id, organizationId);
+                    _logger.LogWarning("Event with ID {EventId} not found for Tenant {TenantId}",
+                        id, tenantId);
                     return null;
                 }
 
@@ -168,12 +168,12 @@ namespace Runnatics.Services
             try
             {
                 var eventRepo = _repository.GetRepository<Event>();
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
 
-                // Find the event and verify it belongs to the user's organization
+                // Find the event and verify it belongs to the user's tenant
                 var eventEntity = await eventRepo.GetQuery(e =>
                     e.Id == id &&
-                    e.OrganizationId == organizationId &&
+                    e.TenantId == tenantId &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted)
                     .FirstOrDefaultAsync();
@@ -181,8 +181,8 @@ namespace Runnatics.Services
                 if (eventEntity == null)
                 {
                     this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to delete it.";
-                    _logger.LogWarning("Event deletion failed: Event {EventId} not found for Organization {OrgId}",
-                        id, organizationId);
+                    _logger.LogWarning("Event deletion failed: Event {EventId} not found for Tenant {TenantId}",
+                        id, tenantId);
                     return false;
                 }
 
@@ -213,7 +213,7 @@ namespace Runnatics.Services
             try
             {
                 var currentUserId = _userContext.UserId;
-                var organizationId = _userContext.OrganizationId;
+                var tenantId = _userContext.TenantId;
 
                 // Validate request
                 if (!ValidateEventRequest(request))
@@ -222,12 +222,12 @@ namespace Runnatics.Services
                 }
 
                 // Fetch event with related entities in a single query
-                var eventEntity = await GetEventForUpdateAsync(id, organizationId);
+                var eventEntity = await GetEventForUpdateAsync(id, tenantId);
                 if (eventEntity == null)
                 {
                     this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
-                    _logger.LogWarning("Event update failed: Event {EventId} not found for Organization {OrgId}",
-           id, organizationId);
+                    _logger.LogWarning("Event update failed: Event {EventId} not found for Tenant {TenantId}",
+           id, tenantId);
                     return false;
                 }
 
@@ -236,8 +236,8 @@ namespace Runnatics.Services
                         await IsDuplicateEventAsync(request, id))
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
-                    _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
-                            request.Name, request.EventDate, organizationId, currentUserId);
+                    _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Tenant {TenantId} by User {UserId}",
+                            request.Name, request.EventDate, tenantId, currentUserId);
                     return false;
                 }
 
@@ -287,10 +287,10 @@ namespace Runnatics.Services
         /// <summary>
         /// Builds the filter expression for event search
         /// </summary>
-        private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int organizationId)
+        private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int tenantId)
         {
             return e =>
-                e.OrganizationId == organizationId &&
+                e.TenantId == tenantId &&
                 (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
                 (!request.Status.HasValue || (int)e.Status == (int)request.Status.Value) &&
                 (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
@@ -321,10 +321,10 @@ namespace Runnatics.Services
         /// <summary>
         /// Executes the search query and returns paginated results
         /// </summary>
-        private async Task<Models.Data.Common.PagingList<Event>> ExecuteSearchQueryAsync(EventSearchRequest request, int organizationId)
+        private async Task<Models.Data.Common.PagingList<Event>> ExecuteSearchQueryAsync(EventSearchRequest request, int tenantId)
         {
             var eventRepo = _repository.GetRepository<Event>();
-            var expression = BuildSearchExpression(request, organizationId);
+            var expression = BuildSearchExpression(request, tenantId);
             var mappedSortField = GetMappedSortField(request.SortFieldName);
 
             return await eventRepo.SearchAsync(
@@ -403,14 +403,14 @@ namespace Runnatics.Services
         /// <summary>
         /// Checks if an event with the same name and date already exists
         /// </summary>
-        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int organizationId, int? excludeEventId = null)
+        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int tenantId, int? excludeEventId = null)
         {
             var eventRepo = _repository.GetRepository<Event>();
 
             Expression<Func<Event, bool>> duplicateExpression = e =>
                 e.Name == request.Name &&
                 e.EventDate.Date == request.EventDate.Date &&
-                e.OrganizationId == organizationId &&
+                e.TenantId == tenantId &&
                 e.AuditProperties.IsActive &&
                 !e.AuditProperties.IsDeleted;
 
@@ -427,12 +427,12 @@ namespace Runnatics.Services
             // Map base event entity
             var eventEntity = _mapper.Map<Event>(request);
 
-            // Get current user ID and organization ID from context
+            // Get current user ID and tenant ID from context
             var currentUserId = _userContext.UserId;
-            var organizationId = _userContext.OrganizationId;
+            var tenantId = _userContext.TenantId;
 
-            // Set the organization ID from the JWT token
-            eventEntity.OrganizationId = organizationId;
+            // Set the tenant ID from the JWT token
+            eventEntity.TenantId = tenantId;
             eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
 
             // Add event settings if provided
@@ -658,13 +658,13 @@ namespace Runnatics.Services
         /// <summary>
         /// Fetches event entity with related settings for update operation
         /// </summary>
-        private async Task<Event?> GetEventForUpdateAsync(int id, int organizationId)
+        private async Task<Event?> GetEventForUpdateAsync(int id, int tenantId)
         {
             var eventRepo = _repository.GetRepository<Event>();
 
             return await eventRepo.GetQuery(e =>
                       e.Id == id &&
-                      e.OrganizationId == organizationId &&
+                      e.TenantId == tenantId &&
                       e.AuditProperties.IsActive &&
                       !e.AuditProperties.IsDeleted)
                       .Include(e => e.EventSettings)

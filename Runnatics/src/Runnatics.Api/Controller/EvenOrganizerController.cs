@@ -26,6 +26,7 @@ namespace Runnatics.Api.Controller
         {
             try
             {
+                var toReturn = new ResponseBase<EventOrganizerResponse>();
                 var result = await _eventOrganizerService.CreateEventOrganizerAsync(request);
 
                 if (result == null)
@@ -33,7 +34,9 @@ namespace Runnatics.Api.Controller
                     return BadRequest(new { error = _eventOrganizerService.ErrorMessage });
                 }
 
-                return Ok(result);
+                toReturn.Message = result;
+                
+                return Ok(toReturn);
             }
             catch
             {

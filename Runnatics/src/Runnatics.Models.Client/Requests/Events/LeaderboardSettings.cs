@@ -25,10 +25,6 @@ namespace Runnatics.Models.Client.Requests.Events
 
         public bool SortByCategoryGunTime { get; set; }
 
-        public int NumberOfResultsToShowCategory { get; set; }
-
-        public int NumberOfResultsToShowOverall { get; set; }
-
         public bool EnableLiveLeaderboard { get; set; }
 
         public bool ShowSplitTimes { get; set; }
@@ -41,8 +37,12 @@ namespace Runnatics.Models.Client.Requests.Events
 
         public bool AllowAnonymousView { get; set; }
 
-        public int AutoRefreshIntervalSec { get; set; }
+        public int? AutoRefreshIntervalSec { get; set; }
 
-        public int MaxDisplayedRecords { get; set; }
+        public int? MaxDisplayedRecords { get; set; }
+
+        public int? NumberOfResultsToShowOverall { get; set; }
+
+        public int? NumberOfResultsToShowCategory { get; set; }
     }
 }

@@ -16,41 +16,41 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         public int EventId { get; set; }
 
-        public bool ShowOverallResults { get; set; } = true;
+        public bool? ShowOverallResults { get; set; }
 
-        public bool ShowCategoryResults { get; set; } = true;
+        public bool? ShowCategoryResults { get; set; }
 
-        public bool ShowGenderResults { get; set; } = true;
+        public bool? ShowGenderResults { get; set; }
 
-        public bool ShowAgeGroupResults { get; set; } = true;
+        public bool? ShowAgeGroupResults { get; set; }
 
-        public bool SortByOverallChipTime { get; set; } = false;
+        public bool? SortByOverallChipTime { get; set; }
 
-        public bool SortByOverallGunTime { get; set; } = false;
+        public bool? SortByOverallGunTime { get; set; }
 
-        public bool SortByCategoryChipTime { get; set; } = false;
+        public bool? SortByCategoryChipTime { get; set; }
 
-        public bool SortByCategoryGunTime { get; set; } = false;
+        public bool? SortByCategoryGunTime { get; set; }
 
-        public int NumberOfResultsToShowCategory { get; set; } = 50;
+        public bool? EnableLiveLeaderboard { get; set; }
 
-        public int NumberOfResultsToShowOverall { get; set; } = 50;
+        public bool? ShowSplitTimes { get; set; }
 
-        public bool EnableLiveLeaderboard { get; set; } = true;
+        public bool? ShowPace { get; set; }
 
-        public bool ShowSplitTimes { get; set; } = true;
+        public bool? ShowTeamResults { get; set; }
 
-        public bool ShowPace { get; set; } = true;
+        public bool? ShowMedalIcon { get; set; }
 
-        public bool ShowTeamResults { get; set; } = false;
+        public bool? AllowAnonymousView { get; set; }
 
-        public bool ShowMedalIcon { get; set; } = true;
+        public int? AutoRefreshIntervalSec { get; set; }
 
-        public bool AllowAnonymousView { get; set; } = true;
+        public int? MaxDisplayedRecords { get; set; }
 
-        public int AutoRefreshIntervalSec { get; set; } = 30;
+        public int? NumberOfResultsToShowOverall { get; set; }
 
-        public int MaxDisplayedRecords { get; set; } = 100;
+        public int? NumberOfResultsToShowCategory { get; set; }
 
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;

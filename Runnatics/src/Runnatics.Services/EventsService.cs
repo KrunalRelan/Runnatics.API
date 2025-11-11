@@ -71,116 +71,6 @@ namespace Runnatics.Services
             }
         }
 
-        #region Search Helper Methods
-
-        /// <summary>
-        /// Validates the date range in the search request
-        /// </summary>
-        private bool ValidateDateRange(EventSearchRequest request)
-        {
-            if (request.EventDateFrom.HasValue && request.EventDateTo.HasValue &&
-         request.EventDateFrom.Value > request.EventDateTo.Value)
-            {
-                this.ErrorMessage = "EventDateFrom must be less than or equal to EventDateTo.";
-                _logger.LogWarning("Invalid date range in event search: From={From}, To={To}",
-               request.EventDateFrom.Value, request.EventDateTo.Value);
-                return false;
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// Builds the filter expression for event search
-        /// </summary>
-        private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int organizationId)
-        {
-            return e =>
-                e.OrganizationId == organizationId &&
-                (!request.Id.HasValue || e.Id == request.Id.Value) &&
-                (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
-                (!request.Status.HasValue || (int)e.Status == (int)request.Status.Value) &&
-                (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
-                (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
-                e.AuditProperties.IsActive &&
-                !e.AuditProperties.IsDeleted;
-        }
-
-        /// <summary>
-        /// Maps sort field name from client format to database format
-        /// </summary>
-        private string? GetMappedSortField(string? sortFieldName)
-        {
-            if (string.IsNullOrEmpty(sortFieldName))
-            {
-                return null;
-            }
-
-            if (SortFieldMapping.TryGetValue(sortFieldName, out var dbFieldName))
-            {
-                return dbFieldName;
-            }
-
-            _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", sortFieldName);
-            return "Id";
-        }
-
-        /// <summary>
-        /// Executes the search query and returns paginated results
-        /// </summary>
-        private async Task<Models.Data.Common.PagingList<Event>> ExecuteSearchQueryAsync(EventSearchRequest request, int organizationId)
-        {
-            var eventRepo = _repository.GetRepository<Event>();
-            var expression = BuildSearchExpression(request, organizationId);
-            var mappedSortField = GetMappedSortField(request.SortFieldName);
-
-            return await eventRepo.SearchAsync(
-                       expression,
-                       request.PageSize,
-                       request.PageNumber,
-                       request.SortDirection == SortDirection.Ascending
-                            ? Models.Data.Common.SortDirection.Ascending
-                           : Models.Data.Common.SortDirection.Descending,
-                       mappedSortField,
-                       ignoreQueryFilters: false,
-                       includeNavigationProperties: false);
-        }
-
-        /// <summary>
-        /// Loads events with navigation properties while preserving original sort order
-        /// </summary>
-        private async Task<List<Event>> LoadEventsWithNavigationPropertiesAsync(Models.Data.Common.PagingList<Event> searchResults)
-        {
-            if (searchResults.Count == 0)
-            {
-                return [];
-            }
-
-            var eventRepo = _repository.GetRepository<Event>();
-            var orderedIds = searchResults.Select(e => e.Id).ToList();
-
-            var eventsWithDetails = await eventRepo.GetQuery(e => orderedIds.Contains(e.Id))
-                    .Include(e => e.EventSettings)
-                    .Include(e => e.LeaderboardSettings)
-                    .Include(e => e.Organization)
-                    .AsNoTracking()
-                    .ToListAsync();
-
-            // Restore original sort order
-            return [.. orderedIds.Select(id => eventsWithDetails.First(e => e.Id == id))];
-        }
-
-        /// <summary>
-        /// Maps event entities to response DTOs
-        /// </summary>
-        private PagingList<EventResponse> MapToEventResponseList(List<Event> events, int totalCount)
-        {
-            var mappedData = _mapper.Map<PagingList<EventResponse>>(events);
-            mappedData.TotalCount = totalCount;
-            return mappedData;
-        }
-
-        #endregion
-
         public async Task<bool> Create(EventRequest request)
         {
             try
@@ -189,9 +79,6 @@ namespace Runnatics.Services
                 var currentUserId = _userContext.UserId;
                 var organizationId = _userContext.OrganizationId;
 
-                // Override request organization ID with token organization ID for security
-                request.OrganizationId = organizationId;
-
                 // Validate request
                 if (!ValidateEventRequest(request))
                 {
@@ -199,7 +86,7 @@ namespace Runnatics.Services
                 }
 
                 // Check for duplicates
-                if (await IsDuplicateEventAsync(request))
+                if (await IsDuplicateEventAsync(request, organizationId))
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event creation attempt: {Name} on {Date} for Organization {OrgId} by User {UserId}",
@@ -214,7 +101,7 @@ namespace Runnatics.Services
                 var createdEventId = await SaveEventAsync(eventEntity);
 
                 _logger.LogInformation("Event created successfully: {EventId} - {Name} by User {UserId}",
-                      createdEventId, eventEntity.Name, currentUserId);
+                    createdEventId, eventEntity.Name, currentUserId);
 
                 return true;
             }
@@ -238,147 +125,43 @@ namespace Runnatics.Services
             }
         }
 
-        #region Private Helper Methods
-
-        /// <summary>
-        /// Validates the event request
-        /// </summary>
-        private bool ValidateEventRequest(EventRequest request)
+        public async Task<EventResponse?> GetEventById(int id)
         {
-            if (request == null)
+            try
             {
-                this.ErrorMessage = "Event request cannot be null.";
-                _logger.LogWarning("Null event request received");
-                return false;
+                var eventRepo = _repository.GetRepository<Event>();
+                var organizationId = _userContext.OrganizationId;
+
+                var eventEntity = await eventRepo.GetQuery(e =>
+                                                           e.Id == id &&
+                                                           e.OrganizationId == _userContext.OrganizationId &&
+                                                           e.AuditProperties.IsActive &&
+                                                           !e.AuditProperties.IsDeleted)
+                                                           .Include(e => e.EventSettings)
+                                                           .Include(e => e.LeaderboardSettings)
+                                                           .Include(e => e.Organization)
+                                                           .Include(e => e.EventOrganizer)
+                                                           .AsNoTracking()
+                                                           .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                {
+                    this.ErrorMessage = "Event not found.";
+                    _logger.LogWarning("Event with ID {EventId} not found for Organization {OrgId}",
+                        id, organizationId);
+                    return null;
+                }
+
+                var toReturn = _mapper.Map<EventResponse>(eventEntity);
+                return toReturn;
             }
-
-            if (request.EventDate < DateTime.UtcNow.Date)
+            catch (Exception ex)
             {
-                this.ErrorMessage = "Event date cannot be in the past.";
-                _logger.LogWarning("Past event date provided: {Date}", request.EventDate);
-                return false;
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Checks if an event with the same name and date already exists
-        /// </summary>
-        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int? excludeEventId = null)
-        {
-            var eventRepo = _repository.GetRepository<Event>();
-
-            Expression<Func<Event, bool>> duplicateExpression = e =>
-                 e.Name == request.Name &&
-        e.EventDate.Date == request.EventDate.Date &&
-                  e.OrganizationId == request.OrganizationId &&
-              e.AuditProperties.IsActive &&
-      !e.AuditProperties.IsDeleted &&
-                  (!excludeEventId.HasValue || e.Id != excludeEventId.Value);
-
-            return await eventRepo.GetQuery(duplicateExpression)
-              .AsNoTracking()
-           .AnyAsync();
-        }
-
-        /// <summary>
-        /// Creates the event entity with all related settings
-        /// </summary>
-        private Event CreateEventEntity(EventRequest request)
-        {
-            // Map base event entity
-            var eventEntity = _mapper.Map<Event>(request);
-
-            // Get current user ID from context (already set in Create method)
-            var currentUserId = _userContext.UserId;
-            eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
-
-            // Add event settings if provided
-            if (request.EventSettings != null)
-            {
-                eventEntity.EventSettings = CreateEventSettings(request.EventSettings, currentUserId);
-            }
-
-            // Add leaderboard settings if provided
-            if (request.LeaderboardSettings != null)
-            {
-                eventEntity.LeaderboardSettings = CreateLeaderboardSettings(request.LeaderboardSettings, currentUserId);
-            }
-
-            return eventEntity;
-        }
-
-        /// <summary>
-        /// Creates audit properties for an entity
-        /// </summary>
-        private static Models.Data.Common.AuditProperties CreateAuditProperties(int userId)
-        {
-            return new Models.Data.Common.AuditProperties
-            {
-                IsActive = true,
-                IsDeleted = false,
-                CreatedDate = DateTime.UtcNow,
-                CreatedBy = userId
-            };
-        }
-
-        /// <summary>
-        /// Creates event settings entity
-        /// </summary>
-        private EventSettings CreateEventSettings(EventSettingsRequest request, int userId)
-        {
-            var eventSettings = _mapper.Map<EventSettings>(request);
-            eventSettings.AuditProperties = CreateAuditProperties(userId);
-            return eventSettings;
-        }
-
-        /// <summary>
-        /// Creates leaderboard settings entity
-        /// </summary>
-        private LeaderboardSettings CreateLeaderboardSettings(LeaderboardSettingsRequest request, int userId)
-        {
-            var leaderboardSettings = _mapper.Map<LeaderboardSettings>(request);
-            leaderboardSettings.AuditProperties = CreateAuditProperties(userId);
-            return leaderboardSettings;
-        }
-
-        /// <summary>
-        /// Saves the event entity to the database
-        /// </summary>
-        private async Task<int> SaveEventAsync(Event eventEntity)
-        {
-            var eventRepo = _repository.GetRepository<Event>();
-            await eventRepo.AddAsync(eventEntity);
-            await _repository.SaveChangesAsync();
-            return eventEntity.Id;
-        }
-
-        /// <summary>
-        /// Retrieves the complete event response with all related data
-        /// </summary>
-        private async Task<EventResponse?> GetEventResponseAsync(int eventId)
-        {
-            var eventRepo = _repository.GetRepository<Event>();
-
-            var createdEvent = await eventRepo.GetQuery(e => e.Id == eventId)
-      .Include(e => e.EventSettings)
-                .Include(e => e.LeaderboardSettings)
-             .Include(e => e.Organization)
-          .AsNoTracking()
-          .FirstOrDefaultAsync();
-
-            if (createdEvent == null)
-            {
-                this.ErrorMessage = "Event was created but could not be retrieved.";
-                _logger.LogError("Failed to retrieve event after creation: {EventId}", eventId);
+                _logger.LogError(ex, "Error retrieving event : {Id}", id);
+                this.ErrorMessage = "Error retrieving event.";
                 return null;
             }
-
-            return _mapper.Map<EventResponse>(createdEvent);
         }
-
-        #endregion
 
         public async Task<bool> Delete(int id)
         {
@@ -399,11 +182,12 @@ namespace Runnatics.Services
                 {
                     this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to delete it.";
                     _logger.LogWarning("Event deletion failed: Event {EventId} not found for Organization {OrgId}",
-                       id, organizationId);
+                        id, organizationId);
                     return false;
                 }
 
                 // Soft delete: Mark as deleted
+                eventEntity.AuditProperties.IsActive = false;
                 eventEntity.AuditProperties.IsDeleted = true;
                 eventEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 eventEntity.AuditProperties.UpdatedBy = _userContext.UserId;
@@ -412,7 +196,7 @@ namespace Runnatics.Services
                 await _repository.SaveChangesAsync();
 
                 _logger.LogInformation("Event deleted successfully: {EventId} - {Name} by User {UserId}",
-                              id, eventEntity.Name, _userContext.UserId);
+                    id, eventEntity.Name, _userContext.UserId);
 
                 return true;
             }
@@ -430,9 +214,6 @@ namespace Runnatics.Services
             {
                 var currentUserId = _userContext.UserId;
                 var organizationId = _userContext.OrganizationId;
-
-                // Override request organization ID with token organization ID for security
-                request.OrganizationId = organizationId;
 
                 // Validate request
                 if (!ValidateEventRequest(request))
@@ -484,6 +265,393 @@ namespace Runnatics.Services
                 return false;
             }
         }
+
+        #region Search Helper Methods
+
+        /// <summary>
+        /// Validates the date range in the search request
+        /// </summary>
+        private bool ValidateDateRange(EventSearchRequest request)
+        {
+            if (request.EventDateFrom.HasValue && request.EventDateTo.HasValue &&
+         request.EventDateFrom.Value > request.EventDateTo.Value)
+            {
+                this.ErrorMessage = "EventDateFrom must be less than or equal to EventDateTo.";
+                _logger.LogWarning("Invalid date range in event search: From={From}, To={To}",
+               request.EventDateFrom.Value, request.EventDateTo.Value);
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Builds the filter expression for event search
+        /// </summary>
+        private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int organizationId)
+        {
+            return e =>
+                e.OrganizationId == organizationId &&
+                (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
+                (!request.Status.HasValue || (int)e.Status == (int)request.Status.Value) &&
+                (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
+                (!request.EventDateTo.HasValue || e.EventDate <= request.EventDateTo.Value) &&
+                e.AuditProperties.IsActive &&
+                !e.AuditProperties.IsDeleted;
+        }
+
+        /// <summary>
+        /// Maps sort field name from client format to database format
+        /// </summary>
+        private string? GetMappedSortField(string? sortFieldName)
+        {
+            if (string.IsNullOrEmpty(sortFieldName))
+            {
+                return null;
+            }
+
+            if (SortFieldMapping.TryGetValue(sortFieldName, out var dbFieldName))
+            {
+                return dbFieldName;
+            }
+
+            _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", sortFieldName);
+            return "Id";
+        }
+
+        /// <summary>
+        /// Executes the search query and returns paginated results
+        /// </summary>
+        private async Task<Models.Data.Common.PagingList<Event>> ExecuteSearchQueryAsync(EventSearchRequest request, int organizationId)
+        {
+            var eventRepo = _repository.GetRepository<Event>();
+            var expression = BuildSearchExpression(request, organizationId);
+            var mappedSortField = GetMappedSortField(request.SortFieldName);
+
+            return await eventRepo.SearchAsync(
+                       expression,
+                       request.PageSize,
+                       request.PageNumber,
+                       request.SortDirection == SortDirection.Ascending
+                            ? Models.Data.Common.SortDirection.Ascending
+                           : Models.Data.Common.SortDirection.Descending,
+                       mappedSortField,
+                       false,
+                       false);
+        }
+
+        /// <summary>
+        /// Loads events with navigation properties while preserving original sort order
+        /// </summary>
+        private async Task<List<Event>> LoadEventsWithNavigationPropertiesAsync(Models.Data.Common.PagingList<Event> searchResults)
+        {
+            if (searchResults.Count == 0)
+            {
+                return [];
+            }
+
+            var eventRepo = _repository.GetRepository<Event>();
+            var orderedIds = searchResults.Select(e => e.Id).ToList();
+
+            var eventsWithDetails = await eventRepo.GetQuery(e => orderedIds.Contains(e.Id))
+                    .Include(e => e.EventSettings)
+                    .Include(e => e.LeaderboardSettings)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+
+            // Restore original sort order
+            return [.. orderedIds.Select(id => eventsWithDetails.First(e => e.Id == id))];
+        }
+
+        /// <summary>
+        /// Maps event entities to response DTOs
+        /// </summary>
+        private PagingList<EventResponse> MapToEventResponseList(List<Event> events, int totalCount)
+        {
+            var mappedData = _mapper.Map<PagingList<EventResponse>>(events);
+            mappedData.TotalCount = totalCount;
+            return mappedData;
+        }
+
+        #endregion
+
+
+        #region Private Helper Methods
+
+        /// <summary>
+        /// Validates the event request
+        /// </summary>
+        private bool ValidateEventRequest(EventRequest request)
+        {
+            if (request == null)
+            {
+                this.ErrorMessage = "Event request cannot be null.";
+                _logger.LogWarning("Null event request received");
+                return false;
+            }
+
+            if (request.EventDate < DateTime.UtcNow.Date)
+            {
+                this.ErrorMessage = "Event date cannot be in the past.";
+                _logger.LogWarning("Past event date provided: {Date}", request.EventDate);
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Checks if an event with the same name and date already exists
+        /// </summary>
+        private async Task<bool> IsDuplicateEventAsync(EventRequest request, int organizationId, int? excludeEventId = null)
+        {
+            var eventRepo = _repository.GetRepository<Event>();
+
+            Expression<Func<Event, bool>> duplicateExpression = e =>
+                e.Name == request.Name &&
+                e.EventDate.Date == request.EventDate.Date &&
+                e.OrganizationId == organizationId &&
+                e.AuditProperties.IsActive &&
+                !e.AuditProperties.IsDeleted;
+
+            return await eventRepo.GetQuery(duplicateExpression)
+                .AsNoTracking()
+                .AnyAsync();
+        }
+
+        /// <summary>
+        /// Creates the event entity with all related settings
+        /// </summary>
+        private Event CreateEventEntity(EventRequest request)
+        {
+            // Map base event entity
+            var eventEntity = _mapper.Map<Event>(request);
+
+            // Get current user ID and organization ID from context
+            var currentUserId = _userContext.UserId;
+            var organizationId = _userContext.OrganizationId;
+
+            // Set the organization ID from the JWT token
+            eventEntity.OrganizationId = organizationId;
+            eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
+
+            // Add event settings if provided
+            if (request.EventSettings != null)
+            {
+                eventEntity.EventSettings = CreateEventSettings(request.EventSettings, currentUserId);
+            }
+
+            // Add leaderboard settings if provided
+            if (request.LeaderboardSettings != null)
+            {
+                eventEntity.LeaderboardSettings = CreateLeaderboardSettings(request.LeaderboardSettings, currentUserId);
+            }
+
+            return eventEntity;
+        }
+
+        /// <summary>
+        /// Creates audit properties for an entity
+        /// </summary>
+        private static Models.Data.Common.AuditProperties CreateAuditProperties(int userId)
+        {
+            return new Models.Data.Common.AuditProperties
+            {
+                IsActive = true,
+                IsDeleted = false,
+                CreatedDate = DateTime.UtcNow,
+                CreatedBy = userId
+            };
+        }
+
+        /// <summary>
+        /// Creates event settings entity
+        /// </summary>
+        private EventSettings CreateEventSettings(EventSettingsRequest request, int userId)
+        {
+            var eventSettings = _mapper.Map<EventSettings>(request);
+            eventSettings.Id = 0; // Ensure EF Core generates a new ID
+            eventSettings.EventId = 0; // Will be set after Event is saved
+            eventSettings.AuditProperties = CreateAuditProperties(userId);
+            return eventSettings;
+        }
+
+        /// <summary>
+        /// Creates leaderboard settings entity
+        /// </summary>
+        private LeaderboardSettings CreateLeaderboardSettings(LeaderboardSettingsRequest request, int userId)
+        {
+            var leaderboardSettings = _mapper.Map<LeaderboardSettings>(request);
+            leaderboardSettings.Id = 0; // Ensure EF Core generates a new ID
+            leaderboardSettings.EventId = 0; // Will be set after Event is saved
+            leaderboardSettings.AuditProperties = CreateAuditProperties(userId);
+            return leaderboardSettings;
+        }
+
+        /// <summary>
+        /// Saves the event entity to the database
+        /// </summary>
+        private async Task<int> SaveEventAsync(Event eventEntity)
+        {
+            try
+            {
+                _logger.LogInformation("Saving event: {EventName}, HasEventSettings: {HasEventSettings}, HasLeaderboardSettings: {HasLeaderboardSettings}",
+                    eventEntity.Name,
+                    eventEntity.EventSettings != null,
+                    eventEntity.LeaderboardSettings != null);
+
+                // Store references to child entities and their data
+                EventSettings? eventSettingsData = null;
+                LeaderboardSettings? leaderboardSettingsData = null;
+
+                if (eventEntity.EventSettings != null)
+                {
+                    eventSettingsData = eventEntity.EventSettings;
+                    eventEntity.EventSettings = null; // Detach from event
+                }
+
+                if (eventEntity.LeaderboardSettings != null)
+                {
+                    leaderboardSettingsData = eventEntity.LeaderboardSettings;
+                    eventEntity.LeaderboardSettings = null; // Detach from event
+                }
+
+                // Step 1: Save the Event entity first
+                var eventRepo = _repository.GetRepository<Event>();
+                var addedEvent = await eventRepo.AddAsync(eventEntity);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Event saved with ID: {EventId}", addedEvent.Id);
+
+                // Step 2: Now save EventSettings if it exists - create a new instance to avoid tracking issues
+                if (eventSettingsData != null)
+                {
+                    var newEventSettings = new EventSettings
+                    {
+                        EventId = addedEvent.Id,
+                        RemoveBanner = eventSettingsData.RemoveBanner,
+                        Published = eventSettingsData.Published,
+                        RankOnNet = eventSettingsData.RankOnNet,
+                        ShowResultSummaryForRaces = eventSettingsData.ShowResultSummaryForRaces,
+                        UseOldData = eventSettingsData.UseOldData,
+                        ConfirmedEvent = eventSettingsData.ConfirmedEvent,
+                        AuditProperties = eventSettingsData.AuditProperties
+                    };
+
+                    var settingsRepo = _repository.GetRepository<EventSettings>();
+                    await settingsRepo.AddAsync(newEventSettings);
+                    _logger.LogInformation("EventSettings prepared for Event ID: {EventId}", addedEvent.Id);
+                }
+
+                // Step 3: Now save LeaderboardSettings if it exists - create a new instance to avoid tracking issues
+                if (leaderboardSettingsData != null)
+                {
+                    var newLeaderboardSettings = new LeaderboardSettings
+                    {
+                        EventId = addedEvent.Id,
+                        ShowOverallResults = leaderboardSettingsData.ShowOverallResults,
+                        ShowCategoryResults = leaderboardSettingsData.ShowCategoryResults,
+                        ShowGenderResults = leaderboardSettingsData.ShowGenderResults,
+                        ShowAgeGroupResults = leaderboardSettingsData.ShowAgeGroupResults,
+                        SortByOverallChipTime = leaderboardSettingsData.SortByOverallChipTime,
+                        SortByOverallGunTime = leaderboardSettingsData.SortByOverallGunTime,
+                        SortByCategoryChipTime = leaderboardSettingsData.SortByCategoryChipTime,
+                        SortByCategoryGunTime = leaderboardSettingsData.SortByCategoryGunTime,
+                        EnableLiveLeaderboard = leaderboardSettingsData.EnableLiveLeaderboard,
+                        ShowSplitTimes = leaderboardSettingsData.ShowSplitTimes,
+                        ShowPace = leaderboardSettingsData.ShowPace,
+                        ShowTeamResults = leaderboardSettingsData.ShowTeamResults,
+                        ShowMedalIcon = leaderboardSettingsData.ShowMedalIcon,
+                        AllowAnonymousView = leaderboardSettingsData.AllowAnonymousView,
+                        AutoRefreshIntervalSec = leaderboardSettingsData.AutoRefreshIntervalSec,
+                        MaxDisplayedRecords = leaderboardSettingsData.MaxDisplayedRecords,
+                        NumberOfResultsToShowOverall = leaderboardSettingsData.NumberOfResultsToShowOverall,
+                        NumberOfResultsToShowCategory = leaderboardSettingsData.NumberOfResultsToShowCategory,
+                        AuditProperties = leaderboardSettingsData.AuditProperties
+                    };
+
+                    var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+                    await leaderboardRepo.AddAsync(newLeaderboardSettings);
+                    _logger.LogInformation("LeaderboardSettings prepared for Event ID: {EventId}", addedEvent.Id);
+                }
+
+                // Step 4: Save all child entities
+                if (eventSettingsData != null || leaderboardSettingsData != null)
+                {
+                    await _repository.SaveChangesAsync();
+                    _logger.LogInformation("Event settings saved successfully for Event ID: {EventId}", addedEvent.Id);
+                }
+
+                return addedEvent.Id;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error saving event: {EventName}. Error: {Error}", eventEntity.Name, ex.Message);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Retrieves the complete event response with all related data
+        /// </summary>
+        private async Task<EventResponse?> GetEventResponseAsync(int eventId)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+
+                _logger.LogInformation("Attempting to retrieve event with ID: {EventId}", eventId);
+
+                // First, check if the event exists at all
+                var eventExists = await eventRepo.GetQuery(e => e.Id == eventId, ignoreQueryFilters: true).AnyAsync();
+                _logger.LogInformation("Event exists in database: {Exists} for ID: {EventId}", eventExists, eventId);
+
+                if (!eventExists)
+                {
+                    this.ErrorMessage = "Event was created but could not be found in database.";
+                    _logger.LogError("Event with ID {EventId} does not exist in database", eventId);
+                    return null;
+                }
+
+                // Now retrieve with all includes
+                var createdEvent = await eventRepo.GetQuery(e => e.Id == eventId, ignoreQueryFilters: true)
+                                        .Include(e => e.EventSettings)
+                                        .Include(e => e.LeaderboardSettings)
+                                        .Include(e => e.Organization)
+                                        .Include(e => e.EventOrganizer)
+                                        .AsNoTracking()
+                                        .FirstOrDefaultAsync();
+
+                if (createdEvent == null)
+                {
+                    this.ErrorMessage = "Event found but could not be retrieved with navigation properties.";
+                    _logger.LogError("Failed to retrieve event with includes for ID: {EventId}", eventId);
+                    return null;
+                }
+
+                _logger.LogInformation("Event retrieved successfully: {EventId}, Name: {EventName}, HasSettings: {HasSettings}, HasLeaderboard: {HasLeaderboard}, HasOrganization: {HasOrg}, HasOrganizer: {HasOrganizer}",
+                    createdEvent.Id,
+                    createdEvent.Name,
+                    createdEvent.EventSettings != null,
+                    createdEvent.LeaderboardSettings != null,
+                    createdEvent.Organization != null,
+                    createdEvent.EventOrganizer != null);
+
+                var mappedResponse = _mapper.Map<EventResponse>(createdEvent);
+
+                _logger.LogInformation("Event mapped to response successfully for ID: {EventId}", eventId);
+
+                return mappedResponse;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving event with ID: {EventId}. Error: {Error}", eventId, ex.Message);
+                this.ErrorMessage = $"Error retrieving event: {ex.Message}";
+                throw;
+            }
+        }
+
+        #endregion
 
         #region Update Helper Methods
 
@@ -593,5 +761,6 @@ namespace Runnatics.Services
         }
 
         #endregion
+
     }
 }

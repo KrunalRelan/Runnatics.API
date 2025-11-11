@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Runnatics.Models.Data.Common;
+using Runnatics.Models.Data.EventOrganizers;
 
 namespace Runnatics.Models.Data.Entities
 {
@@ -68,6 +69,7 @@ namespace Runnatics.Models.Data.Entities
         [NotMapped]
         public int PendingInvitations => UserInvitations?.Count(i => !i.IsAccepted && !i.IsExpired && i.ExpiryDate > DateTime.UtcNow) ?? 0;
 
+        public virtual ICollection<EventOrganizer> EventOrganizers { get; set; } = [];
         //[NotMapped]
         //public string AccessUrl => $"https://{Domain}.runnatics.com";
 

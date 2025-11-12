@@ -355,6 +355,7 @@ namespace Runnatics.Services
             var eventsWithDetails = await eventRepo.GetQuery(e => orderedIds.Contains(e.Id))
                     .Include(e => e.EventSettings)
                     .Include(e => e.LeaderboardSettings)
+                    .Include(e => e.EventOrganizer)
                     .AsNoTracking()
                     .ToListAsync();
 

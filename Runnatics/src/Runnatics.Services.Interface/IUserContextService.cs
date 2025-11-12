@@ -13,7 +13,7 @@ namespace Runnatics.Services.Interface
         /// <summary>
         /// Gets the current user's organization ID from the JWT token
         /// </summary>
-        int OrganizationId { get; }
+        int TenantId { get; }
 
         /// <summary>
         /// Gets the current user's email from the JWT token

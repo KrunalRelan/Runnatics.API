@@ -73,10 +73,10 @@ namespace Runnatics.Api.Controller
         [Authorize(Roles = "Admin,SuperAdmin")]
         public async Task<IActionResult> InviteUser([FromBody] InviteUserRequest request)
         {
-            var organizationId = int.Parse(User.FindFirst("organizationId")!.Value);
+            var tenantId = int.Parse(User.FindFirst("tenantId")!.Value);
             var invitedBy = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
 
-            var result = await _authService.InviteUserAsync(request, organizationId, invitedBy);
+            var result = await _authService.InviteUserAsync(request, tenantId, invitedBy);
             if (result == null)
             {
                 return BadRequest("Invitation failed.");

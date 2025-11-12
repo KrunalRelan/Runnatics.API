@@ -6,7 +6,7 @@ namespace Runnatics.Models.Client.Responses.Events
     {
         public int Id { get; set; }
 
-        public int OrganizationId { get; set; }
+        public int TenantId { get; set; }
 
         public string Name { get; set; } = string.Empty;
 

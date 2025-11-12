@@ -26,7 +26,7 @@
       "lastName": "Doe",
       "email": "john@example.com",
       "role": "Admin",
-      "organizationId": "org-guid",
+      "TenantId": "org-guid",
       "organizationName": "Acme Corp",
       "isActive": true,
       "createdAt": "2025-01-01T00:00:00Z",

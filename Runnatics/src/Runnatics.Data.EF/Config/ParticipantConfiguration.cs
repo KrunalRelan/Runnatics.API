@@ -16,8 +16,8 @@ namespace Runnatics.Data.EF.Config
                    .IsRequired();
 
             // Properties
-            builder.Property(e => e.OrganizationId)
-                .HasColumnName("OrganizationId")
+            builder.Property(e => e.TenantId)
+                .HasColumnName("TenantId")
                 .IsRequired();
 
             builder.Property(e => e.EventId)
@@ -112,8 +112,8 @@ namespace Runnatics.Data.EF.Config
                 .HasDatabaseName("IX_Participants_EventId_BibNumber")
                 .HasFilter("[BibNumber] IS NOT NULL");
 
-            builder.HasIndex(e => new { e.OrganizationId, e.Email })
-                .HasDatabaseName("IX_Participants_OrganizationId_Email");
+            builder.HasIndex(e => new { e.TenantId, e.Email })
+                .HasDatabaseName("IX_Participants_TenantId_Email");
 
             builder.HasIndex(e => e.RaceCategoryId)
                 .HasDatabaseName("IX_Participants_RaceCategoryId");
@@ -121,7 +121,7 @@ namespace Runnatics.Data.EF.Config
             // Relationships
             builder.HasOne(e => e.Organization)
                 .WithMany(o => o.Participants)
-                .HasForeignKey(e => e.OrganizationId)
+                .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.Event)

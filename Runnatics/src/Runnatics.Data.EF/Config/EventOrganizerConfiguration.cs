@@ -17,8 +17,8 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("Id")
                 .ValueGeneratedOnAdd();
 
-            builder.Property(eo => eo.OrganizationId)
-                .HasColumnName("OrganizationId")
+            builder.Property(eo => eo.TenantId)
+                .HasColumnName("TenantId")
                 .IsRequired();
 
             builder.Property(eo => eo.Name)
@@ -28,7 +28,7 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasOne(eo => eo.Organization)
                 .WithMany(e => e.EventOrganizers)
-                .HasForeignKey(eo => eo.OrganizationId)
+                .HasForeignKey(eo => eo.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.OwnsOne(e => e.AuditProperties, ap =>

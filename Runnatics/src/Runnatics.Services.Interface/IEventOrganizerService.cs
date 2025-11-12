@@ -17,7 +17,7 @@ namespace Runnatics.Services.Interface
         /// Create or update event organizer information
         /// </summary>
         /// <param name="request">Event organizer request</param>
-        /// <param name="organizationId">Organization ID</param>
+        /// <param name="tenantId">Tenant ID</param>
         /// <param name="userId">User ID performing the action</param>
         /// <returns>Event organizer response or null if failed</returns>
         Task<EventOrganizerResponse?> CreateEventOrganizerAsync(EventOrganizerRequest request);
@@ -26,7 +26,7 @@ namespace Runnatics.Services.Interface
         /// Get event organizer by event ID
         /// </summary>
         /// <param name="eventId">Event ID</param>
-        /// <param name="organizationId">Organization ID</param>
+        /// <param name="tenantId">Tenant ID</param>
         /// <returns>Event organizer response or null if not found</returns>
         Task<EventOrganizerResponse?> GetEventOrganizerAsync(int Id);
 
@@ -34,7 +34,7 @@ namespace Runnatics.Services.Interface
         /// Delete event organizer
         /// </summary>
         /// <param name="eventId">Event ID</param>
-        /// <param name="organizationId">Organization ID</param>
+        /// <param name="tenantId">Tenant ID</param>
         /// <param name="userId">User ID performing the action</param>
         /// <returns>Success message or null if failed</returns>
         Task<string?> DeleteEventOrganizerAsync(int Id);

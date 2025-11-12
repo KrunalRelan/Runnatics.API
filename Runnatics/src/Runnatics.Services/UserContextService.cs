@@ -31,20 +31,20 @@ namespace Runnatics.Services
         }
 
         /// <summary>
-        /// Gets the current user's organization ID from the JWT token claim "organizationId"
+        /// Gets the current user's tenant ID from the JWT token claim "tenantId"
         /// </summary>
-        public int OrganizationId
+        public int TenantId
         {
             get
             {
-                var orgIdClaim = _httpContextAccessor.HttpContext?.User?.FindFirst("organizationId");
+                var tenantIdClaim = _httpContextAccessor.HttpContext?.User?.FindFirst("tenantId");
 
-                if (orgIdClaim != null && int.TryParse(orgIdClaim.Value, out int orgId))
+                if (tenantIdClaim != null && int.TryParse(tenantIdClaim.Value, out int tenantId))
                 {
-                    return orgId;
+                    return tenantId;
                 }
 
-                throw new UnauthorizedAccessException("Organization ID not found in token or user is not authenticated.");
+                throw new UnauthorizedAccessException("Tenant ID not found in token or user is not authenticated.");
             }
         }
 

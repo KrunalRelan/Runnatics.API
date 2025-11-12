@@ -28,6 +28,8 @@
         /// <summary>
         /// Event has been cancelled
         /// </summary>
-        Cancelled = 4
+        Cancelled = 4,
+
+        Published = 5,
     }
 }

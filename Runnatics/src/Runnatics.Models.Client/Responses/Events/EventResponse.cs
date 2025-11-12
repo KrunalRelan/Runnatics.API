@@ -37,6 +37,8 @@ namespace Runnatics.Models.Client.Responses.Events
 
         public int EventOrganizerId { get; set; }
 
+        public string? EventOrganizerName { get; set; }
+
         // Event Settings
         public EventSettingsResponse? EventSettings { get; set; }
 

@@ -9,9 +9,9 @@ namespace Runnatics.Data.EF.Config
         public virtual void Configure(EntityTypeBuilder<User> builder)
         {
             builder.ToTable("Users");
-            
+
             builder.HasKey(e => e.Id);
-            
+
             // Map to actual database columns (Pascal case)
             builder.Property(e => e.Id)
                 .HasColumnName("Id")
@@ -74,6 +74,13 @@ namespace Runnatics.Data.EF.Config
                     .HasDefaultValue(false)
                     .IsRequired();
             });
+
+            // Foreign Key Relationships
+            builder.HasOne(e => e.Organization)
+                .WithMany(o => o.Users)
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+
 
             // Indexes
             builder.HasIndex(e => e.TenantId);

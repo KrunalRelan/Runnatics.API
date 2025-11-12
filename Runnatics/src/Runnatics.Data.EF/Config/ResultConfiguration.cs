@@ -24,8 +24,8 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("ParticipantId")
                 .IsRequired();
 
-            builder.Property(e => e.RaceCategoryId)
-                .HasColumnName("RaceCategoryId")
+            builder.Property(e => e.RaceId)
+                .HasColumnName("RaceId")
                 .IsRequired();
 
             builder.Property(e => e.FinishTime)
@@ -92,10 +92,10 @@ namespace Runnatics.Data.EF.Config
                 .HasForeignKey<Results>(e => e.ParticipantId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            builder.HasOne(e => e.RaceCategory)
+            builder.HasOne(e => e.Race)
                 .WithMany(rc => rc.Results)
-                .HasForeignKey(e => e.RaceCategoryId)
-                .OnDelete(DeleteBehavior.Restrict);
+                .HasForeignKey(e => e.RaceId)
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure AuditProperties as owned entity
             builder.OwnsOne(o => o.AuditProperties, ap =>

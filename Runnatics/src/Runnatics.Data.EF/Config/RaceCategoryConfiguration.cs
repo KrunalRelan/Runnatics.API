@@ -4,110 +4,94 @@ using Runnatics.Models.Data.Entities;
 
 namespace Runnatics.Data.EF.Config
 {
-    public class RaceCategoryConfiguration : IEntityTypeConfiguration<RaceCategory>
+    public class RaceConfiguration : IEntityTypeConfiguration<Race>
     {
-        public void Configure(EntityTypeBuilder<RaceCategory> builder)
+        public void Configure(EntityTypeBuilder<Race> builder)
         {
-            builder.ToTable("RaceCategories");
+            builder.ToTable("Races");
 
             builder.HasKey(e => e.Id);
+  
             builder.Property(e => e.Id)
-                   .HasColumnName("Id")
-                   .ValueGeneratedOnAdd()
-                   .IsRequired();
-                   
-            // Properties
+                .HasColumnName("Id")
+                .ValueGeneratedOnAdd()
+                .IsRequired();
+
             builder.Property(e => e.EventId)
                 .HasColumnName("EventId")
                 .IsRequired();
 
-            builder.Property(e => e.Name)
-                .HasColumnName("Name")
-                .HasMaxLength(100)
+            builder.Property(e => e.Title)
+                .HasColumnName("Title")
+                .HasMaxLength(255)
                 .IsRequired();
 
-            builder.Property(e => e.DistanceKm)
-                .HasColumnName("DistanceKm")
-                .HasColumnType("decimal(6,3)")
-                .IsRequired();
+            builder.Property(e => e.Description)
+                .HasColumnName("Description")
+                .HasColumnType("nvarchar(max)");
+
+            builder.Property(e => e.Distance)
+                .HasColumnName("Distance")
+                .HasColumnType("decimal(10,2)");
 
             builder.Property(e => e.StartTime)
                 .HasColumnName("StartTime")
-                .IsRequired();
+                .HasColumnType("datetime2(7)");
 
-            builder.Property(e => e.CutoffTime)
-                .HasColumnName("CutoffTime");
+            builder.Property(e => e.EndTime)
+                .HasColumnName("EndTime")
+                .HasColumnType("datetime2(7)");
 
             builder.Property(e => e.MaxParticipants)
                 .HasColumnName("MaxParticipants");
 
-            builder.Property(e => e.EntryFee)
-                .HasColumnName("EntryFee")
-                .HasColumnType("decimal(10,2)");
-
-            builder.Property(e => e.AgeMin)
-                .HasColumnName("AgeMin")
-                .HasDefaultValue(0);
-
-            builder.Property(e => e.AgeMax)
-                .HasColumnName("AgeMax")
-                .HasDefaultValue(120);
-
-            builder.Property(e => e.GenderRestriction)
-                .HasColumnName("GenderRestriction")
-                .HasMaxLength(20);
-
-            builder.Property(e => e.IsActive)
-                .HasColumnName("IsActive")
-                .HasDefaultValue(true);
-
-            // Indexes
-            builder.HasIndex(e => e.EventId)
-                .HasDatabaseName("IX_RaceCategories_EventId");
-
-            builder.HasIndex(e => new { e.EventId, e.Name })
-                .HasDatabaseName("IX_RaceCategories_EventId_Name");
-
-            // Relationships
-            builder.HasOne(e => e.Event)
-                .WithMany(ev => ev.RaceCategories)
-                .HasForeignKey(e => e.EventId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            builder.HasMany(e => e.Participants)
-                .WithOne(p => p.RaceCategory)
-                .HasForeignKey(p => p.RaceCategoryId)
-                .OnDelete(DeleteBehavior.Restrict);
-
-            builder.OwnsOne(o => o.AuditProperties, ap =>
+            // Configure AuditProperties as owned entity
+            builder.OwnsOne(e => e.AuditProperties, ap =>
             {
-                ap.Property(p => p.CreatedBy)
-                    .HasColumnName("CreatedBy")
-                    .HasMaxLength(100)
-                    .IsRequired();
-
                 ap.Property(p => p.CreatedDate)
                     .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy)
-                    .HasColumnName("UpdatedBy")
-                    .HasMaxLength(100);
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy");
 
                 ap.Property(p => p.UpdatedDate)
                     .HasColumnName("UpdatedAt");
 
-                ap.Property(p => p.IsDeleted)
-                    .HasColumnName("IsDeleted")
-                    .HasDefaultValue(false)
-                    .IsRequired();
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
 
                 ap.Property(p => p.IsActive)
                     .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
+
+                ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
+                    .HasDefaultValue(false)
+                    .IsRequired();
             });
+
+            // Indexes
+            builder.HasIndex(e => e.EventId)
+                .HasDatabaseName("IX_Races_EventId");
+
+            // Relationships
+            builder.HasOne(e => e.Event)
+                .WithMany(ev => ev.Races)
+                .HasForeignKey(e => e.EventId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            builder.HasMany(e => e.Participants)
+                .WithOne(p => p.Race)
+                .HasForeignKey(p => p.RaceId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            builder.HasMany(e => e.Results)
+                .WithOne(r => r.Race)
+                .HasForeignKey(r => r.RaceId)
+                .OnDelete(DeleteBehavior.NoAction);
         }
     }
 }

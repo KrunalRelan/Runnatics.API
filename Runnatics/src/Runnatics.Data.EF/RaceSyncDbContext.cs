@@ -15,7 +15,8 @@ namespace Runnatics.Data.EF
         public DbSet<Event> Events { get; set; }
         public DbSet<EventSettings> EventSettings { get; set; }
         public DbSet<LeaderboardSettings> LeaderboardSettings { get; set; }
-        public DbSet<RaceCategory> RaceCategories { get; set; }
+        public DbSet<Race> Races { get; set; }
+        public DbSet<RaceSettings> RaceSettings { get; set; }
         public DbSet<Participant> Participants { get; set; }
         public DbSet<Checkpoint> Checkpoints { get; set; }
         public DbSet<Chip> Chips { get; set; }
@@ -41,7 +42,8 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new EventConfiguration());
             modelBuilder.ApplyConfiguration(new EventSettingsConfiguration());
             modelBuilder.ApplyConfiguration(new LeaderboardSettingsConfiguration());
-            modelBuilder.ApplyConfiguration(new RaceCategoryConfiguration());
+            modelBuilder.ApplyConfiguration(new RaceConfiguration());
+            modelBuilder.ApplyConfiguration(new RaceSettingsConfiguration());
             modelBuilder.ApplyConfiguration(new ParticipantConfiguration());
             modelBuilder.ApplyConfiguration(new CheckpointConfiguration());
             modelBuilder.ApplyConfiguration(new ChipConfiguration());

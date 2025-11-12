@@ -10,7 +10,7 @@ namespace Runnatics.Models.Data.Entities
         public int Id { get; set; }
         public int EventId { get; set; }
         public int ParticipantId { get; set; }
-        public int RaceCategoryId { get; set; }
+        public int RaceId { get; set; }
         public long? FinishTime { get; set; } // Total race time in milliseconds
         public long? GunTime { get; set; } // Time from gun start
         public long? NetTime { get; set; } // Time from participant crossing start line
@@ -29,6 +29,6 @@ namespace Runnatics.Models.Data.Entities
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;
         public virtual Participant Participant { get; set; } = null!;
-        public virtual RaceCategory RaceCategory { get; set; } = null!;
+        public virtual Race Race { get; set; } = null!;
     }
 }

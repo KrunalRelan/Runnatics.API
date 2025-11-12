@@ -81,7 +81,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Organization, opt => opt.Ignore())
                 .ForMember(dest => dest.EventOrganizer, opt => opt.Ignore())
-                .ForMember(dest => dest.RaceCategories, opt => opt.Ignore())
+                .ForMember(dest => dest.Races, opt => opt.Ignore())
                 .ForMember(dest => dest.Checkpoints, opt => opt.Ignore())
                 .ForMember(dest => dest.Participants, opt => opt.Ignore())
                 .ForMember(dest => dest.ChipAssignments, opt => opt.Ignore())

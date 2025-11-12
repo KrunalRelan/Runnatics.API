@@ -1,12 +1,10 @@
-using System.ComponentModel.DataAnnotations;
 using Runnatics.Models.Data.Common;
-using Runnatics.Models.Data.Entities;
 namespace Runnatics.Models.Data.Entities
 {
     using System;
     using System.Collections.Generic;
     using System.ComponentModel.DataAnnotations;
-    public class RaceCategory
+    public class Race
     {
         [Key]
         public int Id { get; set; } 
@@ -15,27 +13,20 @@ namespace Runnatics.Models.Data.Entities
         public int EventId { get; set; }
 
         [Required]
-        [MaxLength(100)]
-        public string Name { get; set; } = string.Empty; // "5K", "10K", "Half Marathon"
+        [MaxLength(255)]
+        public string Title { get; set; } = string.Empty;
 
+        public string? Description { get; set; }
 
-        public decimal DistanceKm { get; set; }
+        public decimal? Distance { get; set; }
 
-        [Required]
-        public DateTime StartTime { get; set; }
+        public DateTime? StartTime { get; set; }
 
-        public DateTime? CutoffTime { get; set; }
+        public DateTime? EndTime { get; set; }
+
         public int? MaxParticipants { get; set; }
-        public decimal? EntryFee { get; set; }
-        public int AgeMin { get; set; } = 0;
-        public int AgeMax { get; set; } = 120;
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
-
-        [MaxLength(20)]
-        public string? GenderRestriction { get; set; } // "Male", "Female", null for open
-
-        public bool IsActive { get; set; } = true;
 
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;

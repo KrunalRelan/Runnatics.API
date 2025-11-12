@@ -57,7 +57,7 @@ namespace Runnatics.Models.Data.Entities
         public virtual EventOrganizer EventOrganizer { get; set; } = null!;
         public virtual EventSettings? EventSettings { get; set; }
         public virtual LeaderboardSettings? LeaderboardSettings { get; set; }
-        public virtual ICollection<RaceCategory> RaceCategories { get; set; } = [];
+        public virtual ICollection<Race> Races { get; set; } = [];
         public virtual ICollection<Checkpoint> Checkpoints { get; set; } = [];
         public virtual ICollection<Participant> Participants { get; set; } = [];
         public virtual ICollection<ChipAssignment> ChipAssignments { get; set; } = [];

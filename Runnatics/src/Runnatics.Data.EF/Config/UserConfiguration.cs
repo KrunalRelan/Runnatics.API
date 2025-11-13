@@ -79,6 +79,12 @@ namespace Runnatics.Data.EF.Config
             builder.HasIndex(e => e.TenantId);
             builder.HasIndex(e => new { e.TenantId, e.Email })
                 .IsUnique();
+
+            // Configure relationship with Organization
+            builder.HasOne(e => e.Organization)
+                .WithMany(o => o.Users)
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
         }
     }
 }

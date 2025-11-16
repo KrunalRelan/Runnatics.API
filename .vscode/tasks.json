@@ -1,0 +1,19 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "dotnet",
+			"task": "build",
+			"group": "build",
+			"problemMatcher": [],
+			"label": "dotnet: build"
+		},
+		{
+			"type": "dotnet",
+			"task": "watch Runnatics.Api",
+			"file": "/Users/kunalrelan/Desktop/Projects/Runnatics.API-new/Runnatics/src/Runnatics.Api/Runnatics.Api.csproj",
+			"problemMatcher": [],
+			"label": "dotnet: watch Runnatics.Api"
+		}
+	]
+}

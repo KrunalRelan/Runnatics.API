@@ -107,20 +107,34 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorization();
 
 // Add CORS
+// Add CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowSpecificOrigins", policy =>
+    if (builder.Environment.IsDevelopment())
     {
-        policy.WithOrigins(
-            "https://app.runnatics.com",
-            "https://admin.runnatics.com",
-            "http://localhost:3000",
-            "http://localhost:3001"
-        )
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
-    });
+        // More permissive CORS policy for development
+        options.AddPolicy("AllowSpecificOrigins", policy =>
+        {
+            policy.SetIsOriginAllowed(origin => new Uri(origin).Host == "localhost")
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials();
+        });
+    }
+    else
+    {
+        // Strict CORS policy for production
+        options.AddPolicy("AllowSpecificOrigins", policy =>
+        {
+            policy.WithOrigins(
+                "https://app.runnatics.com",
+                "https://admin.runnatics.com"
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+        });
+    }
 });
 
 // Register HttpContextAccessor for accessing HTTP context in services
@@ -179,7 +193,10 @@ else
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseCors("AllowSpecificOrigins");
 

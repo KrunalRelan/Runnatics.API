@@ -12,7 +12,7 @@ namespace Runnatics.Data.EF.Config
             builder.ToTable("Events");
 
             builder.HasKey(e => e.Id);
-            
+
             // Map to actual database columns
             builder.Property(e => e.Id)
                 .HasColumnName("Id")
@@ -91,25 +91,25 @@ namespace Runnatics.Data.EF.Config
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                            ap.Property(p => p.UpdatedDate)
-                   .HasColumnName("UpdatedAt");
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
-                            ap.Property(p => p.CreatedBy)
-          .HasColumnName("CreatedBy");
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy");
 
-                            ap.Property(p => p.UpdatedBy)
-                      .HasColumnName("UpdatedBy");
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
 
-                            ap.Property(p => p.IsActive)
-                   .HasColumnName("IsActive")
-                        .HasDefaultValue(true)
-               .IsRequired();
+                ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
+                    .HasDefaultValue(true)
+                    .IsRequired();
 
-                            ap.Property(p => p.IsDeleted)
-              .HasColumnName("IsDeleted")
-                  .HasDefaultValue(false)
-               .IsRequired();
-                        });
+                ap.Property(p => p.IsDeleted)
+                     .HasColumnName("IsDeleted")
+                     .HasDefaultValue(false)
+                     .IsRequired();
+            });
 
             // Indexes
             builder.HasIndex(e => new { e.TenantId, e.Status });

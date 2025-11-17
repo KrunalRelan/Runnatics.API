@@ -1,16 +1,7 @@
-﻿using Runnatics.Models.Data.Common;
-using System.ComponentModel.DataAnnotations;
-
-namespace Runnatics.Models.Data.Entities
+﻿namespace Runnatics.Models.Client.Requests.Races
 {
-    public class RaceSettings
+    public class RaceSettingsRequest
     {
-        [Key]
-        public int Id { get; set; }
-
-        [Required]
-        public int RaceId { get; set; }
-
         public bool Published { get; set; }
 
         public bool SendSms { get; set; }
@@ -34,11 +25,5 @@ namespace Runnatics.Models.Data.Entities
         public decimal? LoopLength { get; set; }
 
         public string? DataHeader { get; set; }
-
-        // Navigation Properties
-        public virtual Race Race { get; set; } = null!;
-
-        // Audit Properties
-        public AuditProperties AuditProperties { get; set; } = new AuditProperties();
     }
 }

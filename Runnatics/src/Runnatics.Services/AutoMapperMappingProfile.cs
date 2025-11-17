@@ -1,12 +1,13 @@
 using AutoMapper;
-using Runnatics.Models.Data.Entities;
-using Runnatics.Models.Data.Common;
-using Runnatics.Models.Client.Responses;
-using Runnatics.Models.Client.Requests;
-using Runnatics.Models.Client.Responses.Events;
-using Runnatics.Models.Client.Requests.Events;
-using Runnatics.Models.Data.EventOrganizers;
 using Runnatics.API.Models.Requests;
+using Runnatics.Models.Client.Requests;
+using Runnatics.Models.Client.Requests.Events;
+using Runnatics.Models.Client.Requests.Races;
+using Runnatics.Models.Client.Responses;
+using Runnatics.Models.Client.Responses.Events;
+using Runnatics.Models.Data.Common;
+using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.EventOrganizers;
 
 namespace Runnatics.Services
 {
@@ -179,6 +180,21 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.EventOrganizerName));
+
+            //Races
+            CreateMap<RaceRequest, Race>()
+                .ForMember(d => d.Id, opt => opt.Ignore())
+                .ForMember(d => d.AuditProperties, opt => opt.Ignore())
+                .ForMember(d => d.RaceSettings, opt => opt.Ignore())
+                .ForMember(d => d.Participants, opt => opt.Ignore())
+                .ForMember(d => d.Results, opt => opt.Ignore());
+
+            CreateMap<RaceSettingsRequest, RaceSettings>()
+                .ForMember(d => d.Id, opt => opt.Ignore())
+                .ForMember(d => d.RaceId, opt => opt.Ignore())
+                .ForMember(d => d.AuditProperties, opt => opt.Ignore())
+                .ForMember(d => d.Race, opt => opt.Ignore());
+
 
         }
     }

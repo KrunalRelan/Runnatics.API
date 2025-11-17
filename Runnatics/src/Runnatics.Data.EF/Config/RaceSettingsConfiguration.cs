@@ -1,11 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Runnatics.Models.Data.Entities;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Data.EF.Config
 {
@@ -55,6 +50,25 @@ namespace Runnatics.Data.EF.Config
                    .HasColumnName("IsTimed")
                    .HasDefaultValue(false)
                    .IsRequired();
+
+            builder.Property(e => e.DedUpSeconds)
+                   .HasColumnName("DedUpSeconds");
+
+            builder.Property(e => e.EarlyStartCutOff)
+                   .HasColumnName("EarlyStartCutOff");
+
+            builder.Property(e => e.LateStartCutOff)
+                   .HasColumnName("LateStartCutOff");
+
+            builder.Property(e => e.HasLoops)
+                   .HasColumnName("HasLoops");
+
+            builder.Property(e => e.LoopLength)
+                   .HasColumnName("LoopLength");
+
+            builder.Property(e => e.DataHeader)
+                   .HasColumnName("DataHeader")
+                   .HasColumnType("nvarchar(max)");
 
             //// Indexes
             //builder.HasIndex(e => e.RaceId)

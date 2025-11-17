@@ -138,6 +138,7 @@ builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactor
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddScoped<IEventsService, EventsService>();
 builder.Services.AddScoped<IEventOrganizerService, EventOrganizerService>();
+builder.Services.AddScoped<IRacesService, RaceService>();
 
 // Add AutoMapper
 builder.Services.AddAutoMapper(typeof(AutoMapperMappingProfile));

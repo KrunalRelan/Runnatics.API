@@ -42,6 +42,8 @@ namespace Runnatics.Models.Data.Entities
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
 
+        public string EventType { get; set; } = string.Empty;
+
         //TODO: Add Zip Code
 
         public EventStatus Status { get; set; } = EventStatus.Active; 

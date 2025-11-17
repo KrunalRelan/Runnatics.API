@@ -37,6 +37,8 @@ namespace Runnatics.Models.Client.Requests.Events
         public int? MaxParticipants { get; set; }
         public DateTime? RegistrationDeadline { get; set; }
 
+        public string EventType { get; set; } = string.Empty;
+
         // Event Settings
         public EventSettingsRequest? EventSettings { get; set; }
 

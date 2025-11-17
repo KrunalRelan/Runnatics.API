@@ -13,7 +13,7 @@ using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Add controllers + JSON options
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -21,7 +21,7 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
     });
 
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+// Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -37,7 +37,6 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Add JWT Bearer token support in Swagger
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
@@ -63,27 +62,30 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Add Entity Framework with connection pooling optimizations
+// EF Core
 builder.Services.AddDbContextPool<RaceSyncDbContext>(options =>
 {
     options.UseSqlServer(builder.Configuration.GetConnectionString("RunnaticsDB"), sqlOptions =>
     {
-        // Command timeout for long-running queries
         sqlOptions.CommandTimeout(30);
     });
-    
-    // Performance optimizations
-    options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking); // Default to no tracking for better performance
-    options.EnableServiceProviderCaching(); // Cache service providers
+
+    options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
+    options.EnableServiceProviderCaching();
     options.EnableSensitiveDataLogging(builder.Environment.IsDevelopment());
     options.EnableDetailedErrors(builder.Environment.IsDevelopment());
-}, poolSize: 128); // DbContext pool size for better performance
+}, poolSize: 128);
 
-// Add JWT Authentication
+// JWT Auth
 var jwtSettings = builder.Configuration.GetSection("JWT");
 var secretKey = jwtSettings["Key"];
 var issuer = jwtSettings["Issuer"];
 var audience = jwtSettings["Audience"];
+
+if (string.IsNullOrWhiteSpace(secretKey))
+{
+    throw new InvalidOperationException("JWT:Key is not configured.");
+}
 
 builder.Services.AddAuthentication(options =>
 {
@@ -100,33 +102,30 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = issuer,
         ValidAudience = audience,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey!)),
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
         ClockSkew = TimeSpan.Zero
     };
 });
 
 builder.Services.AddAuthorization();
 
-// Add CORS
+// 🚨 DEV-ONLY: ultra-relaxed CORS to prove it’s not CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowSpecificOrigins", policy =>
+    options.AddPolicy("DevCors", policy =>
     {
-        policy.WithOrigins(
-            "https://app.runnatics.com",
-            "https://admin.runnatics.com",
-            "http://localhost:3000",
-            "http://localhost:3001"
-        )
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
+        policy
+            .AllowAnyOrigin()   // no origin restriction at all
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+        // NO .AllowCredentials() here, because that conflicts with AllowAnyOrigin
     });
 });
 
-// Register HttpContextAccessor for accessing HTTP context in services
+// HttpContext accessor
 builder.Services.AddHttpContextAccessor();
 
+// Encryption Singletons
 builder.Services.AddSingleton<IdEncryptor>();
 builder.Services.AddSingleton<IdDecryptor>();
 builder.Services.AddSingleton<IdListEncryptor>();
@@ -134,24 +133,26 @@ builder.Services.AddSingleton<IdListDecryptor>();
 builder.Services.AddSingleton<NullableIdEncryptor>();
 builder.Services.AddSingleton<NullableIdDecryptor>();
 
-// Register user context service for accessing JWT claims
+// User context
 builder.Services.AddScoped<IUserContextService, UserContextService>();
 
-// Register repositories
+// Repositories
 builder.Services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
 builder.Services.AddScoped(typeof(IUnitOfWork<>), typeof(UnitOfWork<>));
 builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactory<>));
 
-// Register services
+// Services
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddScoped<IEventsService, EventsService>();
 builder.Services.AddScoped<IEventOrganizerService, EventOrganizerService>();
-// Add Encryption Service
+
+// Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);
-// Add AutoMapper
+
+// AutoMapper
 builder.Services.AddAutoMapper(typeof(AutoMapperMappingProfile));
 
-// Add logging
+// Logging
 builder.Services.AddLogging(logging =>
 {
     logging.ClearProviders();
@@ -159,26 +160,21 @@ builder.Services.AddLogging(logging =>
     logging.AddDebug();
 });
 
-// Add health checks
+// Health checks & misc
 builder.Services.AddHealthChecks();
-    // .AddDbContextCheck<RaceSyncDbContext>(); // Requires Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore package
-
-// Add memory cache
 builder.Services.AddMemoryCache();
-
-// Add HTTP client
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Runnatics API V1");
-        c.RoutePrefix = string.Empty; // Set Swagger UI at the app's root
+        c.RoutePrefix = string.Empty;
     });
     app.UseDeveloperExceptionPage();
 }
@@ -188,50 +184,34 @@ else
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// ❗ For now, disable HTTPS redirection to avoid preflight redirects in dev
+// app.UseHttpsRedirection();
 
-app.UseCors("AllowSpecificOrigins");
+app.UseRouting();
+
+// ✅ CORS: after routing, before auth
+app.UseCors("DevCors");
 
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-
-// Add health check endpoint
 app.MapHealthChecks("/health");
 
-// Seed database on startup (optional - remove in production)
+// (Optional) seeding
 if (app.Environment.IsDevelopment())
 {
-    using (var scope = app.Services.CreateScope())
+    using var scope = app.Services.CreateScope();
+    try
     {
-        try
-        {
-            var context = scope.ServiceProvider.GetRequiredService<RaceSyncDbContext>();
-            // Uncomment the next line if you want to ensure database is created
-            // context.Database.EnsureCreated();
-            
-            // You can add seed data here if needed
-            // await SeedDatabase(context);
-        }
-        catch (Exception ex)
-        {
-            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            logger.LogError(ex, "An error occurred while seeding the database.");
-        }
+        var context = scope.ServiceProvider.GetRequiredService<RaceSyncDbContext>();
+        // context.Database.EnsureCreated();
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred while seeding the database.");
     }
 }
 
 app.Run();
-
-// Optional: Add seed data method
-// static async Task SeedDatabase(RaceSyncDbContext context)
-// {
-//     // Add seed data logic here
-//     if (!context.Organizations.Any())
-//     {
-//         // Add sample organizations, users, etc.
-//     }
-//     
-//     await context.SaveChangesAsync();
-// }

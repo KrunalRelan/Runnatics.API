@@ -154,6 +154,8 @@ namespace Runnatics.Api.Controller
             }
 
             response.Message = result;
+            response.TotalCount = 1; //TODO
+
             return Ok(response);
         }
 

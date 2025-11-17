@@ -116,7 +116,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.City, opt => opt.Ignore()) // Legacy field
                 .ForMember(dest => dest.EventOrganizerId, opt => opt.MapFrom(src => src.EventOrganizerId))
                 .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer.Name));
-
+                
             // EventSettings mappings
             CreateMap<EventSettingsRequest, EventSettings>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())

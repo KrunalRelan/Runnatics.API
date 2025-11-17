@@ -168,14 +168,15 @@ namespace Runnatics.Services
             {
                 var raceRepo = _repository.GetRepository<Race>();
 
+                // Project directly to DTO so EF only selects the fields we need and AutoMapper
+                // mapping ignores Event collection navigation properties (Event.Races, etc.).
                 var raceEntity = await raceRepo.GetQuery(e =>
-                                                           e.Id == id &&
-                                                           e.AuditProperties.IsActive &&
-                                                           !e.AuditProperties.IsDeleted)
-                                                           .Include(e => e.RaceSettings)
-                                                           .Include(e => e.Event)                                                           
-                                                           .AsNoTracking()
-                                                           .FirstOrDefaultAsync();
+                                                       e.Id == id &&
+                                                       e.AuditProperties.IsActive &&
+                                                       !e.AuditProperties.IsDeleted)
+                                                       .AsNoTracking()
+                                                       .ProjectTo<RaceResponse>(_mapper.ConfigurationProvider)
+                                                       .FirstOrDefaultAsync();
 
                 if (raceEntity == null)
                 {
@@ -185,8 +186,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                var toReturn = _mapper.Map<RaceResponse>(raceEntity);
-                return toReturn;
+                return raceEntity;
             }
             catch (Exception ex)
             {

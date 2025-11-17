@@ -1,4 +1,4 @@
-namespace Runnatics.Models.Client.DTOs
+namespace Runnatics.Services
 {
     public class EncryptionOptions
     {

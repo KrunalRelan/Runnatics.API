@@ -1,6 +1,8 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Races;
+using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Services.Interface;
 using System.Net;
 
@@ -20,6 +22,52 @@ namespace Runnatics.Api.Controller
         {
             _raceService = raceService;
         }
+
+        [HttpPost("search")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<PagingList<RaceResponse>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> Search([FromBody] RaceSearchRequest request)
+        {
+            if (request == null)
+            {
+                return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
+            }
+
+            // Validate model state
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                          .SelectMany(v => v.Errors)
+                          .Select(e => e.ErrorMessage)
+                          .ToList()
+                });
+            }
+
+            var response = new ResponseBase<PagingList<RaceResponse>>();
+            var result = await _raceService.Search(request);
+
+            if (_raceService.HasError)
+            {
+                response.Error = new ResponseBase<PagingList<RaceResponse>>.ErrorData()
+                {
+                    Message = _raceService.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            response.TotalCount = result.TotalCount;
+
+            return Ok(response);
+        }
+
 
         [HttpPost("create")]
         [Authorize(Roles = "SuperAdmin,Admin")]

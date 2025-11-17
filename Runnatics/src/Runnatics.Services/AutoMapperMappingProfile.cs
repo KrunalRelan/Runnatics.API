@@ -5,6 +5,7 @@ using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses;
 using Runnatics.Models.Client.Responses.Events;
+using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Models.Data.EventOrganizers;
@@ -195,7 +196,38 @@ namespace Runnatics.Services
                 .ForMember(d => d.AuditProperties, opt => opt.Ignore())
                 .ForMember(d => d.Race, opt => opt.Ignore());
 
+            CreateMap<Race, RaceResponse>()
+                .ForMember(d => d.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(d => d.EventId, opt => opt.MapFrom(src => src.EventId))
+                .ForMember(d => d.Title, opt => opt.MapFrom(src => src.Title))
+                .ForMember(d => d.Distance, opt => opt.MapFrom(src => src.Distance))
+                .ForMember(d => d.StartTime, opt => opt.MapFrom(src => src.StartTime))
+                .ForMember(d => d.EndTime, opt => opt.MapFrom(src => src.EndTime))
+                .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
+                .ForMember(d => d.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
+                .ForMember(d => d.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
+                .ForMember(d => d.Description, opt => opt.MapFrom(src => src.Description))
+                .ForMember(d => d.MaxParticipants, opt => opt.MapFrom(src => src.MaxParticipants))
+                .ForMember(d => d.RaceSettings, opt => opt.MapFrom(src => src.RaceSettings))
+                .ForMember(d => d.Event, opt => opt.MapFrom(src => src.Event));
 
+            CreateMap<RaceSettings, RaceSettingsResponse>()
+                .ForMember(d => d.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(d => d.RaceId, opt => opt.MapFrom(src => src.RaceId))
+                .ForMember(d => d.Published, opt => opt.MapFrom(src => src.Published))
+                .ForMember(d => d.SendSms, opt => opt.MapFrom(src => src.SendSms))
+                .ForMember(d => d.CheckValidation, opt => opt.MapFrom(src => src.CheckValidation))
+                .ForMember(d => d.ShowLeaderboard, opt => opt.MapFrom(src => src.ShowLeaderboard))
+                .ForMember(d => d.ShowResultTable, opt => opt.MapFrom(src => src.ShowResultTable))
+                .ForMember(d => d.IsTimed, opt => opt.MapFrom(src => src.IsTimed))
+                .ForMember(d => d.DedUpSeconds, opt => opt.MapFrom(src => src.DedUpSeconds))
+                .ForMember(d => d.EarlyStartCutOff, opt => opt.MapFrom(src => src.EarlyStartCutOff))
+                .ForMember(d => d.LateStartCutOff, opt => opt.MapFrom(src => src.LateStartCutOff))
+                .ForMember(d => d.HasLoops, opt => opt.MapFrom(src => src.HasLoops))
+                .ForMember(d => d.LoopLength, opt => opt.MapFrom(src => src.LoopLength))
+                .ForMember(d => d.DataHeader, opt => opt.MapFrom(src => src.DataHeader))
+                .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
+                .ForMember(d => d.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
         }
     }
 }

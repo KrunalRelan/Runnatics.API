@@ -274,7 +274,7 @@ namespace Runnatics.Services
         private bool ValidateDateRange(EventSearchRequest request)
         {
             if (request.EventDateFrom.HasValue && request.EventDateTo.HasValue &&
-         request.EventDateFrom.Value > request.EventDateTo.Value)
+                 request.EventDateFrom.Value > request.EventDateTo.Value)
             {
                 this.ErrorMessage = "EventDateFrom must be less than or equal to EventDateTo.";
                 _logger.LogWarning("Invalid date range in event search: From={From}, To={To}",

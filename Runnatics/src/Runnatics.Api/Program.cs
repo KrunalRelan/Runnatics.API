@@ -36,6 +36,10 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
+    // Ensure unique schema Ids for types that share the same simple name across namespaces
+    // Use the full name (namespace + type) which prevents collisions like EventStatus in different assemblies
+    c.CustomSchemaIds(type => (type.FullName ?? type.Name).Replace('+', '.'));
+
     // Add JWT Bearer token support in Swagger
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {

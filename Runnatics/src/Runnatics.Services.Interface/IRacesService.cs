@@ -9,5 +9,11 @@ namespace Runnatics.Services.Interface
         Task<PagingList<RaceResponse>> Search(RaceSearchRequest request);
         Task<bool> Create(RaceRequest request);
 
+        //Task<bool> Update(RaceRequest request);
+
+        //Task<RaceResponse?> GetById(int raceId);
+
+        Task<bool> Delete(int raceId);
+
     }
 }

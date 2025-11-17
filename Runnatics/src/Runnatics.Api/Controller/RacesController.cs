@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
+using Runnatics.Services;
 using Runnatics.Services.Interface;
 using System.Net;
 
@@ -114,5 +115,56 @@ namespace Runnatics.Api.Controller
 
             return Ok(HttpStatusCode.Created);
         }
+
+        [HttpDelete("{id}/delete-race")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<object>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> Delete(int id)
+        {
+            if (id <= 0)
+            {
+                return BadRequest(new { error = "Invalid race ID. ID must be greater than 0." });
+            }
+
+            var response = new ResponseBase<object>();
+            var result = await _raceService.Delete(id);
+
+            if (_raceService.HasError)
+            {
+                response.Error = new ResponseBase<object>.ErrorData()
+                {
+                    Message = _raceService.ErrorMessage
+                };
+
+                // Return 404 Not Found if race doesn't exist or unauthorized
+                if (_raceService.ErrorMessage.Contains("not found") ||
+                       _raceService.ErrorMessage.Contains("does not exist") ||
+                  _raceService.ErrorMessage.Contains("don't have permission"))
+                {
+                    return NotFound(response);
+                }
+
+                // Return 500 for database errors or unexpected errors
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (!result)
+            {
+                response.Error = new ResponseBase<object>.ErrorData()
+                {
+                    Message = "Race deletion failed. Please try again."
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = new { message = "Race deleted successfully", id };
+            return Ok(response);
+        }
+
     }
 }

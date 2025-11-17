@@ -77,7 +77,7 @@ namespace Runnatics.Services
                 return false;
             }
 
-            var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId :0;
+            var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
             try
             {
@@ -161,6 +161,51 @@ namespace Runnatics.Services
                 return false;
             }
         }
+
+        public async Task<bool> Delete(int id)
+        {
+            try
+            {
+                var raceRepo = _repository.GetRepository<Race>();
+                var tenantId = _userContext.TenantId;
+
+                // Find the race
+                var raceEntity = await raceRepo.GetQuery(e =>
+                    e.Id == id &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (raceEntity == null)
+                {
+                    this.ErrorMessage = $"Race with ID {id} not found or you don't have permission to delete it.";
+                    _logger.LogWarning("Race deletion failed: Race {RaceId} not found for Tenant {TenantId}",
+                        id, tenantId);
+                    return false;
+                }
+
+                // Soft delete: Mark as deleted
+                raceEntity.AuditProperties.IsActive = false;
+                raceEntity.AuditProperties.IsDeleted = true;
+                raceEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                raceEntity.AuditProperties.UpdatedBy = _userContext.UserId;
+
+                await raceRepo.UpdateAsync(raceEntity);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Race deleted successfully: {RaceId} by User {UserId}",
+                    id, _userContext.UserId);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "An error occurred while deleting the race.";
+                _logger.LogError(ex, "Error during race deletion for ID: {RaceId}", id);
+                return false;
+            }
+        }
+
 
         #region Helpers
 
@@ -271,7 +316,7 @@ namespace Runnatics.Services
         /// </summary>
         private async Task<List<RaceResponse>> LoadRaceResponsesAsync(Models.Data.Common.PagingList<Race> searchResults)
         {
-            if (searchResults == null || searchResults.Count ==0)
+            if (searchResults == null || searchResults.Count == 0)
             {
                 return [];
             }

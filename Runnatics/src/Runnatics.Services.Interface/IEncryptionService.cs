@@ -1,4 +1,4 @@
-namespace Runnatics.Repositories.Interface
+namespace Runnatics.Services.Interface
 {
     public interface IEncryptionService : ISimpleServiceBase
     {

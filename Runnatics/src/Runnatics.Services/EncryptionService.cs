@@ -1,4 +1,7 @@
 using Runnatics.Repositories.Interface;
+using System.Security.Cryptography;
+using System.Text;
+using Runnatics.Services.Interface;
 
 namespace Runnatics.Services
 {
@@ -6,8 +9,8 @@ namespace Runnatics.Services
     {
         private readonly byte[] _key;
         private readonly byte[] _iv;
-        
-        public AesEncryptionService(string encryptionKey)
+
+        public EncryptionService(string encryptionKey)
         {
             if (string.IsNullOrWhiteSpace(encryptionKey))
                 throw new ArgumentException("Encryption key cannot be null or empty", nameof(encryptionKey));

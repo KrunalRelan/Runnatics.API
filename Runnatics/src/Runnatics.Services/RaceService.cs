@@ -1,4 +1,5 @@
 ﻿using AutoMapper;
+using AutoMapper.QueryableExtensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -40,16 +41,19 @@ namespace Runnatics.Services
                 // Build and execute search query
                 var searchResults = await ExecuteSearchQueryAsync(request, tenantId);
 
-                // Load navigation properties while preserving sort order
-                var racesWithDetails = await LoadRacesWithNavigationPropertiesAsync(searchResults);
+                // Project to DTOs (AutoMapper.ProjectTo) — Event collections are ignored in the mapping profile
+                var raceResponses = await LoadRaceResponsesAsync(searchResults);
 
-                // Map to response and return
-                var response = MapToRaceResponseList(racesWithDetails, searchResults.TotalCount);
+                // Create paging result
+                var paging = new PagingList<RaceResponse>(raceResponses)
+                {
+                    TotalCount = searchResults.TotalCount
+                };
 
                 _logger.LogInformation("Race search completed for Event {EventId} by User {UserId}. Found {Count} races.",
-               request.EventId, _userContext.UserId, response.TotalCount);
+               request.EventId, _userContext.UserId, paging.TotalCount);
 
-                return response;
+                return paging;
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -73,7 +77,7 @@ namespace Runnatics.Services
                 return false;
             }
 
-            var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
+            var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId :0;
 
             try
             {
@@ -262,11 +266,12 @@ namespace Runnatics.Services
         }
 
         /// <summary>
-        /// Loads races with navigation properties while preserving original sort order
+        /// Loads races and projects them directly to RaceResponse DTOs using AutoMapper.ProjectTo.
+        /// Event collection navigation properties are ignored in the mapping profile so returned Event has no nested Races.
         /// </summary>
-        private async Task<List<Race>> LoadRacesWithNavigationPropertiesAsync(Models.Data.Common.PagingList<Race> searchResults)
+        private async Task<List<RaceResponse>> LoadRaceResponsesAsync(Models.Data.Common.PagingList<Race> searchResults)
         {
-            if (searchResults.Count == 0)
+            if (searchResults == null || searchResults.Count ==0)
             {
                 return [];
             }
@@ -274,25 +279,17 @@ namespace Runnatics.Services
             var raceRepo = _repository.GetRepository<Race>();
             var orderedIds = searchResults.Select(e => e.Id).ToList();
 
-            var racesWithDetails = await raceRepo.GetQuery(e => orderedIds.Contains(e.Id))
-                    .Include(e => e.RaceSettings)
-                    .Include(e => e.Event)
-                    .AsNoTracking()
-                    .ToListAsync();
+            // Prepare base query for the relevant races
+            var baseQuery = raceRepo.GetQuery(e => orderedIds.Contains(e.Id)).AsNoTracking();
 
+            // Project to DTO. AutoMapper mapping must ignore Event collection properties.
+            var projected = await baseQuery
+                .ProjectTo<RaceResponse>(_mapper.ConfigurationProvider)
+                .ToListAsync();
 
-            // Restore original sort order
-            return [.. orderedIds.Select(id => racesWithDetails.First(e => e.Id == id))];
-        }
-
-        /// <summary>
-        /// Maps race entities to response DTOs
-        /// </summary>
-        private PagingList<RaceResponse> MapToRaceResponseList(List<Race> races, int totalCount)
-        {
-            var mappedData = _mapper.Map<PagingList<RaceResponse>>(races);
-            mappedData.TotalCount = totalCount;
-            return mappedData;
+            // Restore original order based on orderedIds
+            var ordered = orderedIds.Select(id => projected.First(p => p.Id == id)).ToList();
+            return ordered;
         }
 
         /// <summary>

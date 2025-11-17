@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Runnatics.Services.Interface;
 
 namespace Runnatics.Services
 {
@@ -17,8 +16,8 @@ namespace Runnatics.Services
             if (config == null || string.IsNullOrWhiteSpace(config.Key))
                 throw new InvalidOperationException("Encryption key is not configured. Add 'Encryption:Key' to your configuration.");
 
-                return new EncryptionService(config.Key);
-            });
+            return new AesEncryptionService(config.Key);
+        });
 
             return services;
         }

@@ -7,6 +7,7 @@ using Runnatics.Repositories.EF;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services;
 using Runnatics.Services.Interface;
+using Runnatics.Services.Mappings;
 using System.Text;
 using System.Text.Json.Serialization;
 
@@ -126,6 +127,13 @@ builder.Services.AddCors(options =>
 // Register HttpContextAccessor for accessing HTTP context in services
 builder.Services.AddHttpContextAccessor();
 
+builder.Services.AddSingleton<IdEncryptor>();
+builder.Services.AddSingleton<IdDecryptor>();
+builder.Services.AddSingleton<IdListEncryptor>();
+builder.Services.AddSingleton<IdListDecryptor>();
+builder.Services.AddSingleton<NullableIdEncryptor>();
+builder.Services.AddSingleton<NullableIdDecryptor>();
+
 // Register user context service for accessing JWT claims
 builder.Services.AddScoped<IUserContextService, UserContextService>();
 
@@ -138,7 +146,8 @@ builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactor
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddScoped<IEventsService, EventsService>();
 builder.Services.AddScoped<IEventOrganizerService, EventOrganizerService>();
-
+// Add Encryption Service
+builder.Services.AddEncryptionService(builder.Configuration);
 // Add AutoMapper
 builder.Services.AddAutoMapper(typeof(AutoMapperMappingProfile));
 

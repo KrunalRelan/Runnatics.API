@@ -6,7 +6,7 @@ namespace Runnatics.Models.Client.Requests.Events
     public class EventRequest
     {
         [Required]
-        public int EventOrganizerId { get; set; }
+        public string EventOrganizerId { get; set; } = string.Empty;
 
         [Required]
         [MaxLength(255)]

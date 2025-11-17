@@ -48,7 +48,7 @@ namespace Runnatics.Api.Controller
         /// Get event organizer by event ID
         /// </summary>
         [HttpGet("{id}/event-organizer")]
-        public async Task<IActionResult> GetAsync(int id)
+        public async Task<IActionResult> GetAsync(string id)
         {
             try
             {
@@ -71,7 +71,7 @@ namespace Runnatics.Api.Controller
         /// Delete event organizer
         /// </summary>
         [HttpDelete("{id}/delete-event-organizer")]
-        public async Task<IActionResult> DeleteAsync(int id)
+        public async Task<IActionResult> DeleteAsync(string id)
         {
             try
             {

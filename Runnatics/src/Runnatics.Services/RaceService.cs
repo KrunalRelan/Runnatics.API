@@ -162,6 +162,40 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<RaceResponse?> GetRaceById(int id)
+        {
+            try
+            {
+                var raceRepo = _repository.GetRepository<Race>();
+
+                var raceEntity = await raceRepo.GetQuery(e =>
+                                                           e.Id == id &&
+                                                           e.AuditProperties.IsActive &&
+                                                           !e.AuditProperties.IsDeleted)
+                                                           .Include(e => e.RaceSettings)
+                                                           .Include(e => e.Event)                                                           
+                                                           .AsNoTracking()
+                                                           .FirstOrDefaultAsync();
+
+                if (raceEntity == null)
+                {
+                    this.ErrorMessage = "Race not found.";
+                    _logger.LogWarning("Race with ID {RaceId} not found.",
+                        id);
+                    return null;
+                }
+
+                var toReturn = _mapper.Map<RaceResponse>(raceEntity);
+                return toReturn;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving race : {Id}", id);
+                this.ErrorMessage = "Error retrieving race.";
+                return null;
+            }
+        }
+
         public async Task<bool> Delete(int id)
         {
             try
@@ -169,7 +203,7 @@ namespace Runnatics.Services
                 var raceRepo = _repository.GetRepository<Race>();
                 var tenantId = _userContext.TenantId;
 
-                // Find the race
+                // Load only the Race entity (do NOT include Event or other navigation collections)
                 var raceEntity = await raceRepo.GetQuery(e =>
                     e.Id == id &&
                     e.AuditProperties.IsActive &&
@@ -184,7 +218,7 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                // Soft delete: Mark as deleted
+                // Soft delete: Mark as deleted. Event navigation is not loaded so no nested graphs are affected.
                 raceEntity.AuditProperties.IsActive = false;
                 raceEntity.AuditProperties.IsDeleted = true;
                 raceEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;

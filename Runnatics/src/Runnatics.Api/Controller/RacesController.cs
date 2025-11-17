@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
-using Runnatics.Services;
 using Runnatics.Services.Interface;
 using System.Net;
 
@@ -114,6 +113,48 @@ namespace Runnatics.Api.Controller
             }
 
             return Ok(HttpStatusCode.Created);
+        }
+
+        [HttpGet("{raceId}/race-details")]
+        public async Task<IActionResult> GetRace(int raceId)
+        {
+            if (raceId <= 0)
+            {
+                return BadRequest(new { error = "Invalid race ID. ID must be greater than 0." });
+            }
+
+            var response = new ResponseBase<RaceResponse>();
+            var result = await _raceService.GetRaceById(raceId);
+
+            if (_raceService.HasError)
+            {
+                response.Error = new ResponseBase<RaceResponse>.ErrorData()
+                {
+                    Message = _raceService.ErrorMessage
+                };
+
+                // Return 404 Not Found if race doesn't exist
+                if (_raceService.ErrorMessage.Contains("not found") ||
+                    _raceService.ErrorMessage.Contains("does not exist"))
+                {
+                    return NotFound(response);
+                }
+
+                // Return 500 for database errors or unexpected errors
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (result == null)
+            {
+                response.Error = new ResponseBase<RaceResponse>.ErrorData()
+                {
+                    Message = "Race retrieval failed. Please try again."
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
         }
 
         [HttpDelete("{id}/delete-race")]

@@ -11,7 +11,7 @@ namespace Runnatics.Services.Interface
 
         //Task<bool> Update(RaceRequest request);
 
-        //Task<RaceResponse?> GetById(int raceId);
+        Task<RaceResponse?> GetRaceById(int raceId);
 
         Task<bool> Delete(int raceId);
 

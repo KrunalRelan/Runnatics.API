@@ -143,8 +143,8 @@ namespace Runnatics.Services
                                                            !e.AuditProperties.IsDeleted)
                                                            .Include(e => e.EventSettings)
                                                            .Include(e => e.LeaderboardSettings)
-                                                           //.Include(e => e.Organization)
-                                                           //.Include(e => e.EventOrganizer)
+                                                           .Include(e => e.Organization)
+                                                           .Include(e => e.EventOrganizer)
                                                            .AsNoTracking()
                                                            .FirstOrDefaultAsync();
 
@@ -157,6 +157,7 @@ namespace Runnatics.Services
                 }
 
                 var toReturn = _mapper.Map<EventResponse>(eventEntity);
+                toReturn.EventOrganizerName = eventEntity.EventOrganizer.Name;
                 return toReturn;
             }
             catch (Exception ex)

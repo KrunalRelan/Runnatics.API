@@ -24,6 +24,6 @@
 
         public decimal? LoopLength { get; set; }
 
-        public string? DataHeader { get; set; }
+        public string? DataHeaders { get; set; }
     }
 }

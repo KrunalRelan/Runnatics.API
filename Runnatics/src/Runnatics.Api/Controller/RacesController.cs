@@ -1,8 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
+using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
+using Runnatics.Services;
 using Runnatics.Services.Interface;
 using System.Net;
 
@@ -23,16 +25,16 @@ namespace Runnatics.Api.Controller
             _raceService = raceService;
         }
 
-        [HttpPost("search")]
+        [HttpPost("{eventId}/search")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<PagingList<RaceResponse>>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Search([FromBody] RaceSearchRequest request)
+        public async Task<IActionResult> Search(int eventId, [FromBody] RaceSearchRequest request)
         {
-            if (request == null)
+            if (eventId <= 0 || request == null)
             {
                 return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
             }
@@ -51,7 +53,7 @@ namespace Runnatics.Api.Controller
             }
 
             var response = new ResponseBase<PagingList<RaceResponse>>();
-            var result = await _raceService.Search(request);
+            var result = await _raceService.Search(eventId, request);
 
             if (_raceService.HasError)
             {
@@ -69,16 +71,16 @@ namespace Runnatics.Api.Controller
         }
 
 
-        [HttpPost("create")]
+        [HttpPost("{eventId}/create")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status409Conflict)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Create([FromBody] RaceRequest request)
+        public async Task<IActionResult> Create(int eventId, [FromBody] RaceRequest request)
         {
-            if (request == null || request.EventId == 0)
+            if (eventId <= 0 || request == null)
             {
                 return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
             }
@@ -96,7 +98,7 @@ namespace Runnatics.Api.Controller
                 });
             }
 
-            await _raceService.Create(request);
+            await _raceService.Create(eventId, request);
 
             if (_raceService.HasError)
             {
@@ -115,8 +117,8 @@ namespace Runnatics.Api.Controller
             return Ok(HttpStatusCode.Created);
         }
 
-        [HttpGet("{raceId}/race-details")]
-        public async Task<IActionResult> GetRace(int raceId)
+        [HttpGet("{eventId}/{raceId}/race-details")]
+        public async Task<IActionResult> GetRace(int eventId, int raceId)
         {
             if (raceId <= 0)
             {
@@ -124,7 +126,7 @@ namespace Runnatics.Api.Controller
             }
 
             var response = new ResponseBase<RaceResponse>();
-            var result = await _raceService.GetRaceById(raceId);
+            var result = await _raceService.GetRaceById(eventId, raceId);
 
             if (_raceService.HasError)
             {
@@ -159,7 +161,92 @@ namespace Runnatics.Api.Controller
             return Ok(response);
         }
 
-        [HttpDelete("{id}/delete-race")]
+        [HttpPut("{eventId}/{id}/edit-race")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> Update(int eventId, int id, [FromBody] RaceRequest request)
+        {
+            if (eventId <= 0 || id <= 0)
+            {
+                return BadRequest(new { error = "Invalid event ID or race ID. ID must be greater than 0." });
+            }
+
+            if (request == null)
+            {
+                return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
+            }
+
+            // Validate model state
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                    .SelectMany(v => v.Errors)
+                    .Select(e => e.ErrorMessage)
+                    .ToList()
+                });
+            }
+
+            var result = await _raceService.Update(eventId, id, request);
+
+            if (_raceService.HasError)
+            {
+                var response = new ResponseBase<object>
+                {
+                    Error = new ResponseBase<object>.ErrorData()
+                    {
+                        Message = _raceService.ErrorMessage
+                    }
+                };
+
+                // Return 404 Not Found if race doesn't exist or unauthorized
+                if (_raceService.ErrorMessage.Contains("not found") ||
+                        _raceService.ErrorMessage.Contains("does not exist") ||
+                        _raceService.ErrorMessage.Contains("don't have permission"))
+                {
+                    return NotFound(response);
+                }
+
+                // Return 409 Conflict for duplicate races
+                if (_raceService.ErrorMessage.Contains("already exists"))
+                {
+                    return Conflict(response);
+                }
+
+                // Return 400 Bad Request for validation errors
+                if (_raceService.ErrorMessage.Contains("cannot be in the past") ||
+                        _raceService.ErrorMessage.Contains("cannot be null"))
+                {
+                    return BadRequest(response);
+                }
+
+                // Return 500 for database errors or unexpected errors
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (!result)
+            {
+                var response = new ResponseBase<object>
+                {
+                    Error = new ResponseBase<object>.ErrorData()
+                    {
+                        Message = "Race update failed. Please try again."
+                    }
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            return Ok(HttpStatusCode.OK);
+        }
+
+        [HttpDelete("{eventId}/{id}/delete-race")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<object>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -167,15 +254,15 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Delete(int id)
+        public async Task<IActionResult> Delete(int eventId, int id)
         {
-            if (id <= 0)
+            if (eventId <= 0 || id <= 0)
             {
                 return BadRequest(new { error = "Invalid race ID. ID must be greater than 0." });
             }
 
             var response = new ResponseBase<object>();
-            var result = await _raceService.Delete(id);
+            var result = await _raceService.Delete(eventId, id);
 
             if (_raceService.HasError)
             {

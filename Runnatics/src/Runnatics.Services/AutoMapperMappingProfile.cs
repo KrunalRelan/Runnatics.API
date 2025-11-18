@@ -225,7 +225,7 @@ namespace Runnatics.Services
                 .ForMember(d => d.LateStartCutOff, opt => opt.MapFrom(src => src.LateStartCutOff))
                 .ForMember(d => d.HasLoops, opt => opt.MapFrom(src => src.HasLoops))
                 .ForMember(d => d.LoopLength, opt => opt.MapFrom(src => src.LoopLength))
-                .ForMember(d => d.DataHeader, opt => opt.MapFrom(src => src.DataHeader))
+                .ForMember(d => d.DataHeaders, opt => opt.MapFrom(src => src.DataHeaders))
                 .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(d => d.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
         }

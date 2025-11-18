@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
+using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Data.Entities;
@@ -26,7 +27,7 @@ namespace Runnatics.Services
         protected readonly IConfiguration _configuration = configuration;
         protected readonly IUserContextService _userContext = userContext;
 
-        public async Task<PagingList<RaceResponse>> Search(RaceSearchRequest request)
+        public async Task<PagingList<RaceResponse>> Search(int eventId, RaceSearchRequest request)
         {
             try
             {
@@ -39,7 +40,7 @@ namespace Runnatics.Services
                 }
 
                 // Build and execute search query
-                var searchResults = await ExecuteSearchQueryAsync(request, tenantId);
+                var searchResults = await ExecuteSearchQueryAsync(eventId, request);
 
                 // Project to DTOs (AutoMapper.ProjectTo) — Event collections are ignored in the mapping profile
                 var raceResponses = await LoadRaceResponsesAsync(searchResults);
@@ -51,7 +52,7 @@ namespace Runnatics.Services
                 };
 
                 _logger.LogInformation("Race search completed for Event {EventId} by User {UserId}. Found {Count} races.",
-               request.EventId, _userContext.UserId, paging.TotalCount);
+               eventId, _userContext.UserId, paging.TotalCount);
 
                 return paging;
             }
@@ -69,7 +70,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Create(RaceRequest request)
+        public async Task<bool> Create(int eventId, RaceRequest request)
         {
             // Validate request
             if (!ValidateRaceRequest(request))
@@ -84,7 +85,7 @@ namespace Runnatics.Services
                 // Quick existence and tenant-scope check for parent Event
                 var eventRepo = _repository.GetRepository<Event>();
                 var parentEvent = await eventRepo.GetQuery(e =>
-                        e.Id == request.EventId &&
+                        e.Id == eventId &&
                         e.AuditProperties.IsActive &&
                         !e.AuditProperties.IsDeleted)
                     .AsNoTracking()
@@ -93,7 +94,7 @@ namespace Runnatics.Services
                 if (parentEvent == null)
                 {
                     ErrorMessage = "Event not found or inactive.";
-                    _logger.LogWarning("Race creation aborted - event not found or inactive. EventId: {EventId}, UserId: {UserId}", request.EventId, currentUserId);
+                    _logger.LogWarning("Race creation aborted - event not found or inactive. EventId: {EventId}, UserId: {UserId}", eventId, currentUserId);
                     return false;
                 }
 
@@ -103,16 +104,21 @@ namespace Runnatics.Services
                 {
                     // Map DTO to domain entity and set service controlled fields
                     var race = _mapper.Map<Race>(request);
+                    race.EventId = eventId;
+
                     race.AuditProperties = CreateAuditProperties(currentUserId);
 
                     // If settings supplied, map and attach to the race so EF can persist in one SaveChanges
                     if (request.RaceSettings != null)
                     {
-                        var settings = _mapper.Map<RaceSettings>(request.RaceSettings);
-                        settings.AuditProperties = CreateAuditProperties(currentUserId);
+                        //var settings = _mapper.Map<RaceSettings>(request.RaceSettings);
+                        //settings.AuditProperties = CreateAuditProperties(currentUserId);
 
-                        // Attach via navigation so EF will set FK when saving
-                        race.RaceSettings = settings;
+                        //// Attach via navigation so EF will set FK when saving
+                        //race.RaceSettings = settings;
+
+                        race.RaceSettings = CreateRaceSettings(request.RaceSettings, currentUserId);
+
                     }
 
                     var raceRepo = _repository.GetRepository<Race>();
@@ -134,17 +140,17 @@ namespace Runnatics.Services
                     }
                     catch (Exception rbEx)
                     {
-                        _logger.LogWarning(rbEx, "Rollback failed after error while creating race for EventId: {EventId}", request.EventId);
+                        _logger.LogWarning(rbEx, "Rollback failed after error while creating race for EventId: {EventId}", eventId);
                     }
 
-                    _logger.LogError(exInner, "Error creating race for EventId: {EventId}", request.EventId);
+                    _logger.LogError(exInner, "Error creating race for EventId: {EventId}", eventId);
                     ErrorMessage = "Error creating race.";
                     return false;
                 }
             }
             catch (DbUpdateException dbEx)
             {
-                _logger.LogError(dbEx, "Database error while creating race for EventId: {EventId}", request?.EventId);
+                _logger.LogError(dbEx, "Database error while creating race for EventId: {EventId}", eventId);
                 ErrorMessage = "Database error occurred while creating the race.";
                 return false;
             }
@@ -156,13 +162,13 @@ namespace Runnatics.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unexpected error while creating race for EventId: {EventId}", request?.EventId);
+                _logger.LogError(ex, "Unexpected error while creating race for EventId: {EventId}", eventId);
                 ErrorMessage = "An unexpected error occurred while creating the race.";
                 return false;
             }
         }
 
-        public async Task<RaceResponse?> GetRaceById(int id)
+        public async Task<RaceResponse?> GetRaceById(int eventId, int id)
         {
             try
             {
@@ -172,6 +178,7 @@ namespace Runnatics.Services
                 // mapping ignores Event collection navigation properties (Event.Races, etc.).
                 var raceEntity = await raceRepo.GetQuery(e =>
                                                        e.Id == id &&
+                                                       e.EventId == eventId &&
                                                        e.AuditProperties.IsActive &&
                                                        !e.AuditProperties.IsDeleted)
                                                        .AsNoTracking()
@@ -196,7 +203,63 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Delete(int id)
+        public async Task<bool> Update(int eventId, int id, RaceRequest request)
+        {
+            try
+            {
+                var currentUserId = _userContext.UserId;
+                var tenantId = _userContext.TenantId;
+
+                // Validate request
+                if (!ValidateRaceRequest(request))
+                {
+                    return false;
+                }
+
+                // Fetch event with related entities in a single query
+                var raceEntity = await GetRaceForUpdateAsync(id, eventId);
+                if (raceEntity == null)
+                {
+                    this.ErrorMessage = $"Race with ID {id} not found or you don't have permission to update it.";
+                    _logger.LogWarning("Race update failed: Race {RaceId} not found for Event {EventId}", id, eventId);
+                    return false;
+                }
+
+                // Check for duplicates only if name or date changed
+                if (HasRaceIdentityChanged(raceEntity, request) &&
+                        await IsDuplicateRaceAsync(request, id))
+                {
+                    this.ErrorMessage = "Race already exists with the same name and date.";
+                    _logger.LogWarning("Duplicate race update attempt: {Name} by User {UserId}", request.Title, currentUserId);
+                    return false;
+                }
+
+                // Update event and related entities
+                UpdateRaceEntity(raceEntity, request, currentUserId);
+
+                // Persist changes
+                await SaveRaceChangesAsync(raceEntity);
+
+                _logger.LogInformation("Race updated successfully: {RaceId} - {Name} by User {UserId}",
+                                            id, raceEntity.Title, currentUserId);
+
+                return true;
+            }
+            catch (DbUpdateException dbEx)
+            {
+                this.ErrorMessage = "Database error occurred while updating the event.";
+                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}", id);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "An unexpected error occurred while updating the event.";
+                _logger.LogError(ex, "Error during event update for ID: {EventId}", id);
+                return false;
+            }
+        }
+
+        public async Task<bool> Delete(int eventId, int id)
         {
             try
             {
@@ -205,6 +268,7 @@ namespace Runnatics.Services
 
                 // Load only the Race entity (do NOT include Event or other navigation collections)
                 var raceEntity = await raceRepo.GetQuery(e =>
+                    e.EventId == eventId &&
                     e.Id == id &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted)
@@ -242,6 +306,111 @@ namespace Runnatics.Services
 
 
         #region Helpers
+
+        /// <summary>
+        /// Fetches event entity with related settings for update operation
+        /// </summary>
+        private async Task<Race?> GetRaceForUpdateAsync(int id, int eventId)
+        {
+            var raceRepo = _repository.GetRepository<Race>();
+
+            return await raceRepo.GetQuery(e =>
+                      e.Id == id &&
+                      e.EventId == eventId &&
+                      e.AuditProperties.IsActive &&
+                      !e.AuditProperties.IsDeleted)
+                      .Include(e => e.RaceSettings)
+                      .FirstOrDefaultAsync();
+        }
+
+        /// <summary>
+        /// Updates race entity and its related settings
+        /// </summary>
+        private void UpdateRaceEntity(Race raceEntity, RaceRequest request, int currentUserId)
+        {
+            // Update main race properties
+            _mapper.Map(request, raceEntity);
+
+            // Update audit properties
+            UpdateAuditProperties(raceEntity.AuditProperties, currentUserId);
+
+            // Update or create race settings
+            UpdateRaceSettings(raceEntity, request.RaceSettings, currentUserId);
+        }
+
+        /// <summary>
+        /// Saves race changes to the database
+        /// </summary>
+        private async Task SaveRaceChangesAsync(Race raceEntity)
+        {
+            var raceRepo = _repository.GetRepository<Race>();
+            await raceRepo.UpdateAsync(raceEntity);
+            await _repository.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Creates race settings entity
+        /// </summary>
+        private RaceSettings CreateRaceSettings(RaceSettingsRequest request, int userId)
+        {
+            var raceSettings = _mapper.Map<RaceSettings>(request);
+            raceSettings.Id = 0; // Ensure EF Core generates a new ID
+            raceSettings.RaceId = 0; // Will be set after Race is saved
+            raceSettings.AuditProperties = CreateAuditProperties(userId);
+            return raceSettings;
+        }
+
+        /// <summary>
+        /// Updates or creates race settings
+        /// </summary>
+        private void UpdateRaceSettings(Race raceEntity, RaceSettingsRequest? settingsRequest, int currentUserId)
+        {
+            if (settingsRequest == null)
+            {
+                return;
+            }
+
+            if (raceEntity.RaceSettings != null)
+            {
+                _mapper.Map(settingsRequest, raceEntity.RaceSettings);
+                UpdateAuditProperties(raceEntity.RaceSettings.AuditProperties, currentUserId);
+            }
+            else
+            {
+                raceEntity.RaceSettings = CreateRaceSettings(settingsRequest, currentUserId);
+            }
+        }
+
+        /// <summary>
+        /// Checks if race name or date has changed
+        /// </summary>
+        private static bool HasRaceIdentityChanged(Race raceEntity, RaceRequest request)
+        {
+            return raceEntity.Title != request.Title ||
+                raceEntity.StartTime != request.StartTime ||
+                raceEntity.EndTime != request.EndTime ||
+                raceEntity.Distance != request.Distance;
+        }
+
+        /// <summary>
+        /// Checks if a race with the same name and date already exists
+        /// </summary>
+        private async Task<bool> IsDuplicateRaceAsync(RaceRequest request, int tenantId, int? excludeRaceId = null)
+        {
+            var raceRepo = _repository.GetRepository<Race>();
+
+            Expression<Func<Race, bool>> duplicateExpression = e =>
+                e.Title == request.Title &&
+                e.StartTime == request.StartTime &&
+                e.EndTime == request.EndTime &&
+                e.Distance == request.Distance &&
+                e.AuditProperties.IsActive &&
+                !e.AuditProperties.IsDeleted;
+
+            return await raceRepo.GetQuery(duplicateExpression)
+                .AsNoTracking()
+                .AnyAsync();
+        }
 
         private bool ValidateRaceRequest(RaceRequest request)
         {
@@ -289,10 +458,10 @@ namespace Runnatics.Services
         /// <summary>
         /// Executes the search query and returns paginated results
         /// </summary>
-        private async Task<Models.Data.Common.PagingList<Race>> ExecuteSearchQueryAsync(RaceSearchRequest request, int tenantId)
+        private async Task<Models.Data.Common.PagingList<Race>> ExecuteSearchQueryAsync(int eventId, RaceSearchRequest request)
         {
             var raceRepo = _repository.GetRepository<Race>();
-            var expression = BuildSearchExpression(request);
+            var expression = BuildSearchExpression(eventId, request);
             var mappedSortField = GetMappedSortField(request.SortFieldName);
 
             return await raceRepo.SearchAsync(
@@ -310,10 +479,10 @@ namespace Runnatics.Services
         /// <summary>
         /// Builds the filter expression for race search
         /// </summary>
-        private static Expression<Func<Race, bool>> BuildSearchExpression(RaceSearchRequest request)
+        private static Expression<Func<Race, bool>> BuildSearchExpression(int eventId, RaceSearchRequest request)
         {
             return e =>
-                e.EventId == request.EventId &&
+                e.EventId == eventId &&
                 (string.IsNullOrEmpty(request.Title) || e.Title.Contains(request.Title)) &&
                 (string.IsNullOrEmpty(request.Description) || e.Description != null && e.Description.Contains(request.Description)) &&
                 (!request.Distance.HasValue || e.Distance == request.Distance.Value) &&
@@ -383,6 +552,15 @@ namespace Runnatics.Services
                 CreatedDate = DateTime.UtcNow,
                 CreatedBy = userId
             };
+        }
+
+        /// <summary>
+        /// Updates audit properties for an entity
+        /// </summary>
+        private static void UpdateAuditProperties(Models.Data.Common.AuditProperties auditProperties, int userId)
+        {
+            auditProperties.UpdatedDate = DateTime.UtcNow;
+            auditProperties.UpdatedBy = userId;
         }
 
         // Map client-facing property names to database property names

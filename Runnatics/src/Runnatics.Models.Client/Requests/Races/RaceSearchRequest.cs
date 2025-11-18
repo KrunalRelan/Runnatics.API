@@ -10,8 +10,6 @@ namespace Runnatics.Models.Client.Requests.Races
             SortDirection = SortDirection.Descending;
         }
 
-        public int EventId { get; set; }
-
         public string? Title { get; set; } 
 
         public string? Description { get; set; }

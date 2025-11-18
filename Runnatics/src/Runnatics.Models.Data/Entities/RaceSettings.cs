@@ -33,7 +33,7 @@ namespace Runnatics.Models.Data.Entities
 
         public decimal? LoopLength { get; set; }
 
-        public string? DataHeader { get; set; }
+        public string? DataHeaders { get; set; }
 
         // Navigation Properties
         public virtual Race Race { get; set; } = null!;

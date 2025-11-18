@@ -6,14 +6,14 @@ namespace Runnatics.Services.Interface
 {
     public interface IRacesService : ISimpleServiceBase
     {
-        Task<PagingList<RaceResponse>> Search(RaceSearchRequest request);
-        Task<bool> Create(RaceRequest request);
+        Task<PagingList<RaceResponse>> Search(int eventId, RaceSearchRequest request);
+        Task<bool> Create(int eventId, RaceRequest request);
 
-        //Task<bool> Update(RaceRequest request);
+        Task<bool> Update(int eventId, int raceId, RaceRequest request);
 
-        Task<RaceResponse?> GetRaceById(int raceId);
+        Task<RaceResponse?> GetRaceById(int eventId, int raceId);
 
-        Task<bool> Delete(int raceId);
+        Task<bool> Delete(int eventId, int raceId);
 
     }
 }

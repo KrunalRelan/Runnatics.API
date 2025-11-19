@@ -2,7 +2,7 @@ namespace Runnatics.Models.Client.Responses
 {
     public class InvitationResponse
     {
-        public int InvitationId { get; set; }
+        public string InvitationId { get; set; } = string.Empty;
         public string Email { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty;
         public string Status { get; set; } = string.Empty;

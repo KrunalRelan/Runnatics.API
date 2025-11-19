@@ -28,7 +28,7 @@ namespace Runnatics.Services.Interface
         /// <param name="eventId">Event ID</param>
         /// <param name="tenantId">Tenant ID</param>
         /// <returns>Event organizer response or null if not found</returns>
-        Task<EventOrganizerResponse?> GetEventOrganizerAsync(int Id);
+        Task<EventOrganizerResponse?> GetEventOrganizerAsync(string Id);
 
         /// <summary>
         /// Delete event organizer
@@ -37,7 +37,7 @@ namespace Runnatics.Services.Interface
         /// <param name="tenantId">Tenant ID</param>
         /// <param name="userId">User ID performing the action</param>
         /// <returns>Success message or null if failed</returns>
-        Task<string?> DeleteEventOrganizerAsync(int Id);
+        Task<string?> DeleteEventOrganizerAsync(string Id);
 
         Task<List<EventOrganizerResponse>?> GetAllEventOrganizersAsync();
     }

@@ -7,6 +7,7 @@ using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Data.EventOrganizers;
 using Runnatics.API.Models.Requests;
+using Runnatics.Services.Mappings;
 
 namespace Runnatics.Services
 {
@@ -19,15 +20,15 @@ namespace Runnatics.Services
         {
             // Organization mappings
             CreateMap<Organization, OrganizationResponse>()
-                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate));
 
             // User mappings
             CreateMap<User, UserResponse>()
-                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.TenantId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.TenantId))
                 .ForMember(dest => dest.FirstName, opt => opt.MapFrom(src => src.FirstName))
                 .ForMember(dest => dest.LastName, opt => opt.MapFrom(src => src.LastName))
                 .ForMember(dest => dest.Email, opt => opt.MapFrom(src => src.Email))
@@ -41,7 +42,7 @@ namespace Runnatics.Services
 
             // UserInvitation mappings
             CreateMap<UserInvitation, InvitationResponse>()
-                .ForMember(dest => dest.InvitationId, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.InvitationId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
                 .ForMember(dest => dest.Email, opt => opt.MapFrom(src => src.Email))
                 .ForMember(dest => dest.Role, opt => opt.MapFrom(src => src.Role.ToString()))
                 .ForMember(dest => dest.Status, opt => opt.MapFrom(src =>
@@ -89,11 +90,11 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.ReadNormalized, opt => opt.Ignore())
                 .ForMember(dest => dest.SplitTimes, opt => opt.Ignore())
                 .ForMember(dest => dest.Results, opt => opt.Ignore())
-                .ForMember(dest => dest.EventOrganizerId, opt => opt.MapFrom(src => src.EventOrganizerId));
+                .ForMember(dest => dest.EventOrganizerId, opt => opt.ConvertUsing<IdDecryptor, string>(src => src.EventOrganizerId));
 
             CreateMap<Event, EventResponse>()
-                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.TenantId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.TenantId))
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
                 .ForMember(dest => dest.Slug, opt => opt.MapFrom(src => src.Slug))
                 .ForMember(dest => dest.Description, opt => opt.MapFrom(src => src.Description))
@@ -112,7 +113,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.City, opt => opt.Ignore()) // Legacy field
-                .ForMember(dest => dest.EventOrganizerId, opt => opt.MapFrom(src => src.EventOrganizerId))
+                .ForMember(dest => dest.EventOrganizerId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventOrganizerId))
                 .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer.Name));
 
             // EventSettings mappings
@@ -123,8 +124,8 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()); // Set by service
 
             CreateMap<EventSettings, EventSettingsResponse>()
-                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.EventId, opt => opt.MapFrom(src => src.EventId))
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
                 .ForMember(dest => dest.RemoveBanner, opt => opt.MapFrom(src => src.RemoveBanner))
                 .ForMember(dest => dest.Published, opt => opt.MapFrom(src => src.Published))
                 .ForMember(dest => dest.RankOnNet, opt => opt.MapFrom(src => src.RankOnNet))
@@ -141,11 +142,16 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.EventId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Event, opt => opt.Ignore())
-                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()); // Set by service
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+                .ForMember(dst => dst.AutoRefreshIntervalSec, opt => opt.MapFrom(src => src.AutoRefreshIntervalSec ?? 0))
+                .ForMember(dst => dst.MaxDisplayedRecords, opt => opt.MapFrom(src => src.MaxDisplayedRecords ?? 0))
+                .ForMember(dst => dst.NumberOfResultsToShowCategory, opt => opt.MapFrom(src => src.NumberOfResultsToShowCategory ?? 0))
+                .ForMember(dst => dst.NumberOfResultsToShowOverall, opt => opt.MapFrom(src => src.NumberOfResultsToShowOverall ?? 0))
+                .ForMember(dst => dst.EnableLiveLeaderboard, opt => opt.MapFrom(src => false));
 
             CreateMap<LeaderboardSettings, LeaderboardSettingsResponse>()
-                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.EventId, opt => opt.MapFrom(src => src.EventId))
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
                 .ForMember(dest => dest.ShowOverallResults, opt => opt.MapFrom(src => src.ShowOverallResults))
                 .ForMember(dest => dest.ShowCategoryResults, opt => opt.MapFrom(src => src.ShowCategoryResults))
                 .ForMember(dest => dest.ShowGenderResults, opt => opt.MapFrom(src => src.ShowGenderResults))
@@ -168,8 +174,8 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
 
             CreateMap<EventOrganizer, EventOrganizerResponse>()
-                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.TenantId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.TenantId))
                 .ForMember(dest => dest.OrganizerName, opt => opt.MapFrom(src => src.Name));
 
             CreateMap<EventOrganizerResponse, EventOrganizer>()

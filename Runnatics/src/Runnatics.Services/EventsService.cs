@@ -17,12 +17,15 @@ namespace Runnatics.Services
                                IMapper mapper,
                                ILogger<EventsService> logger,
                                IConfiguration configuration,
-                               IUserContextService userContext) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventsService
+                               IUserContextService userContext,
+                               IEncryptionService encryptionService
+                               ) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventsService
     {
         protected readonly IMapper _mapper = mapper;
         protected readonly ILogger _logger = logger;
         protected readonly IConfiguration _configuration = configuration;
         protected readonly IUserContextService _userContext = userContext;
+        protected readonly IEncryptionService _encryptionService = encryptionService;
 
         // Map client-facing property names to database property names
         private static readonly Dictionary<string, string> SortFieldMapping = new(StringComparer.OrdinalIgnoreCase)
@@ -125,22 +128,23 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<EventResponse?> GetEventById(int id)
+        public async Task<EventResponse?> GetEventById(string id)
         {
             try
             {
                 var eventRepo = _repository.GetRepository<Event>();
                 var tenantId = _userContext.TenantId;
+                var eventId = Convert.ToInt32(_encryptionService.Decrypt(id));
 
                 var eventEntity = await eventRepo.GetQuery(e =>
-                                                           e.Id == id &&
+                                                           e.Id == eventId &&
                                                            e.TenantId == _userContext.TenantId &&
                                                            e.AuditProperties.IsActive &&
                                                            !e.AuditProperties.IsDeleted)
                                                            .Include(e => e.EventSettings)
                                                            .Include(e => e.LeaderboardSettings)
-                                                           //.Include(e => e.Organization)
-                                                           //.Include(e => e.EventOrganizer)
+                                                           .Include(e => e.Organization)
+                                                           .Include(e => e.EventOrganizer)
                                                            .AsNoTracking()
                                                            .FirstOrDefaultAsync();
 
@@ -153,6 +157,7 @@ namespace Runnatics.Services
                 }
 
                 var toReturn = _mapper.Map<EventResponse>(eventEntity);
+                toReturn.EventOrganizerName = eventEntity.EventOrganizer.Name;
                 return toReturn;
             }
             catch (Exception ex)
@@ -163,7 +168,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Delete(int id)
+        public async Task<bool> Delete(string id)
         {
             try
             {
@@ -172,7 +177,7 @@ namespace Runnatics.Services
 
                 // Find the event and verify it belongs to the user's tenant
                 var eventEntity = await eventRepo.GetQuery(e =>
-                    e.Id == id &&
+                    e.Id == Convert.ToInt32(_encryptionService.Decrypt(id)) &&
                     e.TenantId == tenantId &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted)
@@ -208,13 +213,13 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Update(int id, EventRequest request)
+        public async Task<bool> Update(string id, EventRequest request)
         {
             try
             {
                 var currentUserId = _userContext.UserId;
                 var tenantId = _userContext.TenantId;
-
+                var eventId = Convert.ToInt32(_encryptionService.Decrypt(id));
                 // Validate request
                 if (!ValidateEventRequest(request))
                 {
@@ -222,18 +227,18 @@ namespace Runnatics.Services
                 }
 
                 // Fetch event with related entities in a single query
-                var eventEntity = await GetEventForUpdateAsync(id, tenantId);
+                var eventEntity = await GetEventForUpdateAsync(eventId, tenantId);
                 if (eventEntity == null)
                 {
                     this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
                     _logger.LogWarning("Event update failed: Event {EventId} not found for Tenant {TenantId}",
-           id, tenantId);
+                                        id, tenantId);
                     return false;
                 }
 
                 // Check for duplicates only if name or date changed
                 if (HasEventIdentityChanged(eventEntity, request) &&
-                        await IsDuplicateEventAsync(request, id))
+                        await IsDuplicateEventAsync(request, eventId))
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Tenant {TenantId} by User {UserId}",
@@ -440,7 +445,7 @@ namespace Runnatics.Services
             if (request.EventSettings != null)
             {
                 eventEntity.EventSettings = CreateEventSettings(request.EventSettings, currentUserId);
-            }
+            } 
 
             // Add leaderboard settings if provided
             if (request.LeaderboardSettings != null)

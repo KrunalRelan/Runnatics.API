@@ -304,11 +304,11 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Delete(int id)
+        public async Task<IActionResult> Delete(string id)
         {
-            if (id <= 0)
+            if (string.IsNullOrEmpty(id))
             {
-                return BadRequest(new { error = "Invalid event ID. ID must be greater than 0." });
+                return BadRequest(new { error = "Invalid event ID. ID must be a valid string." });
             }
 
             var response = new ResponseBase<object>();
@@ -460,11 +460,11 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status409Conflict)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Update(int id, [FromBody] EventRequest request)
+        public async Task<IActionResult> Update(string id, [FromBody] EventRequest request)
         {
-            if (id <= 0)
+            if (string.IsNullOrEmpty(id))
             {
-                return BadRequest(new { error = "Invalid event ID. ID must be greater than 0." });
+                return BadRequest(new { error = "Invalid event ID. ID must be a valid string." });
             }
 
             if (request == null)
@@ -538,11 +538,11 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpGet("{eventId}/event-details")]
-        public async Task<IActionResult> GetEvent(int eventId)
+        public async Task<IActionResult> GetEvent(string eventId)
         {
-            if (eventId <= 0)
+            if (string.IsNullOrEmpty(eventId))
             {
-                return BadRequest(new { error = "Invalid event ID. ID must be greater than 0." });
+                return BadRequest(new { error = "Invalid event ID. ID must be a valid string." });
             }
 
             var response = new ResponseBase<EventResponse>();

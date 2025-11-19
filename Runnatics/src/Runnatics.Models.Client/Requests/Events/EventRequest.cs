@@ -35,6 +35,8 @@ namespace Runnatics.Models.Client.Requests.Events
 
         public string? Country { get; set; }
 
+        public string? ZipCode { get; set; }
+
         public string? VenuePostalCode { get; set; }
 
         public string EventType { get; set; } = string.Empty;

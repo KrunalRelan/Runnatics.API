@@ -33,8 +33,10 @@ namespace Runnatics.Models.Client.Responses.Events
         public DateTime? RegistrationDeadline { get; set; }
 
         // Deprecated - kept for backward compatibility
-        public string? City { get; set; } 
-
+        public string? City { get; set; }
+        public string? State { get; set; }
+        public string? Country { get; set; }
+        public string? ZipCode { get; set; }
         public string EventOrganizerId { get; set; } = string.Empty;
 
         public string? EventOrganizerName { get; set; }

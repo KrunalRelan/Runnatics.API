@@ -44,7 +44,10 @@ namespace Runnatics.Models.Data.Entities
 
         public string? EventType { get; set; } = string.Empty;
 
-        //TODO: Add Zip Code
+        public string? City { get; set; }
+        public string? State { get; set; }
+        public string? Country { get; set; }
+        public string? ZipCode { get; set; }
 
         public EventStatus Status { get; set; } = EventStatus.Active; 
 

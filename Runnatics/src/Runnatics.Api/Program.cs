@@ -37,6 +37,11 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
+    // Ensure unique schema Ids for types that share the same simple name across namespaces
+    // Use the full name (namespace + type) which prevents collisions like EventStatus in different assemblies
+    c.CustomSchemaIds(type => (type.FullName ?? type.Name).Replace('+', '.'));
+
+    // Add JWT Bearer token support in Swagger
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
@@ -145,8 +150,9 @@ builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactor
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddScoped<IEventsService, EventsService>();
 builder.Services.AddScoped<IEventOrganizerService, EventOrganizerService>();
+builder.Services.AddScoped<IRacesService, RaceService>();
 
-// Encryption Service
+// Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);
 
 // AutoMapper

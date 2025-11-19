@@ -142,7 +142,12 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.EventId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Event, opt => opt.Ignore())
-                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()); // Set by service
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+                .ForMember(dst => dst.AutoRefreshIntervalSec, opt => opt.MapFrom(src => src.AutoRefreshIntervalSec ?? 0))
+                .ForMember(dst => dst.MaxDisplayedRecords, opt => opt.MapFrom(src => src.MaxDisplayedRecords ?? 0))
+                .ForMember(dst => dst.NumberOfResultsToShowCategory, opt => opt.MapFrom(src => src.NumberOfResultsToShowCategory ?? 0))
+                .ForMember(dst => dst.NumberOfResultsToShowOverall, opt => opt.MapFrom(src => src.NumberOfResultsToShowOverall ?? 0))
+                .ForMember(dst => dst.EnableLiveLeaderboard, opt => opt.MapFrom(src => false));
 
             CreateMap<LeaderboardSettings, LeaderboardSettingsResponse>()
                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))

@@ -232,7 +232,7 @@ namespace Runnatics.Services
                 {
                     this.ErrorMessage = $"Event with ID {id} not found or you don't have permission to update it.";
                     _logger.LogWarning("Event update failed: Event {EventId} not found for Tenant {TenantId}",
-           id, tenantId);
+                                        id, tenantId);
                     return false;
                 }
 

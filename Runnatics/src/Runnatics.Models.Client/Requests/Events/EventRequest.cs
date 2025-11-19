@@ -12,9 +12,9 @@ namespace Runnatics.Models.Client.Requests.Events
         [MaxLength(255)]
         public string Name { get; set; } = string.Empty;
 
-        [Required]
-        [MaxLength(100)]
-        public string Slug { get; set; } = string.Empty;
+        // [Required]
+        // [MaxLength(100)]
+        // public string Slug { get; set; } = string.Empty;
 
         public string? Description { get; set; }
 
@@ -29,15 +29,20 @@ namespace Runnatics.Models.Client.Requests.Events
 
         public string? VenueAddress { get; set; }
 
+        public string? City { get; set; }
+
+        public string? State { get; set; }
+
+        public string? Country { get; set; }
+
+        public string? VenuePostalCode { get; set; }
+
+        public string EventType { get; set; } = string.Empty;
+
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
 
-        public EventStatus Status { get; set; } = EventStatus.Draft;
-
-        public int? MaxParticipants { get; set; }
-        public DateTime? RegistrationDeadline { get; set; }
-
-        public string EventType { get; set; } = string.Empty;
+        public EventStatus Status { get; set; } = EventStatus.Active;
 
         // Event Settings
         public EventSettingsRequest? EventSettings { get; set; }

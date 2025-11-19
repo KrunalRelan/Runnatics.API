@@ -1,15 +1,13 @@
-﻿using Runnatics.Models.Data.Common;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
-namespace Runnatics.Models.Data.Entities
+namespace Runnatics.Models.Client.Responses.Races
 {
-    public class RaceSettings
+    public class RaceSettingsResponse
     {
-        [Key]
-        public int Id { get; set; }
+        public string Id { get; set; } = string.Empty;
 
         [Required]
-        public int RaceId { get; set; }
+        public string RaceId { get; set; } = string.Empty;
 
         public bool Published { get; set; }
 
@@ -35,10 +33,8 @@ namespace Runnatics.Models.Data.Entities
 
         public string? DataHeaders { get; set; }
 
-        // Navigation Properties
-        public virtual Race Race { get; set; } = null!;
+        public DateTime CreatedAt { get; set; }
 
-        // Audit Properties
-        public AuditProperties AuditProperties { get; set; } = new AuditProperties();
+        public DateTime? UpdatedAt { get; set; }
     }
 }

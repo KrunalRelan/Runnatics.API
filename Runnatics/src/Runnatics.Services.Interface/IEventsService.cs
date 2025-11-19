@@ -8,8 +8,9 @@ namespace Runnatics.Services.Interface
     {
         Task<PagingList<EventResponse>> Search(EventSearchRequest request);
         Task<bool> Create(EventRequest request);
-        Task<bool> Update(int id, EventRequest request);
-        Task<bool> Delete(int id);
-        Task<EventResponse?> GetEventById(int id);
+        Task<bool> Update(string id, EventRequest request);
+        Task<bool> Delete(string id);
+
+        Task<EventResponse?> GetEventById(string id);
     }
 }

@@ -6,6 +6,7 @@ using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Services;
 using Runnatics.Services.Interface;
+using StackExchange.Redis;
 using System.Net;
 
 namespace Runnatics.Api.Controller
@@ -32,9 +33,9 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Search(int eventId, [FromBody] RaceSearchRequest request)
+        public async Task<IActionResult> Search(string eventId, [FromBody] RaceSearchRequest request)
         {
-            if (eventId <= 0 || request == null)
+            if (string.IsNullOrEmpty(eventId) || request == null)
             {
                 return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
             }
@@ -78,9 +79,9 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status409Conflict)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Create(int eventId, [FromBody] RaceRequest request)
+        public async Task<IActionResult> Create(string eventId, [FromBody] RaceRequest request)
         {
-            if (eventId <= 0 || request == null)
+            if (string.IsNullOrEmpty(eventId) || request == null)
             {
                 return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
             }
@@ -118,9 +119,9 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpGet("{eventId}/{raceId}/race-details")]
-        public async Task<IActionResult> GetRace(int eventId, int raceId)
+        public async Task<IActionResult> GetRace(string eventId, string raceId)
         {
-            if (raceId <= 0)
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
             {
                 return BadRequest(new { error = "Invalid race ID. ID must be greater than 0." });
             }
@@ -169,9 +170,9 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status409Conflict)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Update(int eventId, int id, [FromBody] RaceRequest request)
+        public async Task<IActionResult> Update(string eventId, string id, [FromBody] RaceRequest request)
         {
-            if (eventId <= 0 || id <= 0)
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(id))
             {
                 return BadRequest(new { error = "Invalid event ID or race ID. ID must be greater than 0." });
             }
@@ -254,9 +255,9 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Delete(int eventId, int id)
+        public async Task<IActionResult> Delete(string eventId, string id)
         {
-            if (eventId <= 0 || id <= 0)
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(id))
             {
                 return BadRequest(new { error = "Invalid race ID. ID must be greater than 0." });
             }

@@ -2,9 +2,9 @@ namespace Runnatics.Models.Client.Responses.Events
 {
     public class EventSettingsResponse
     {
-        public int Id { get; set; }
+        public string Id { get; set; } = string.Empty;
 
-        public int EventId { get; set; }
+        public string EventId { get; set; } = string.Empty;
 
         public bool RemoveBanner { get; set; }
 

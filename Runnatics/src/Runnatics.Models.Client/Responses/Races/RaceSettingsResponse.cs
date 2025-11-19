@@ -4,10 +4,10 @@ namespace Runnatics.Models.Client.Responses.Races
 {
     public class RaceSettingsResponse
     {
-        public int Id { get; set; }
+        public string Id { get; set; } = string.Empty;
 
         [Required]
-        public int RaceId { get; set; }
+        public string RaceId { get; set; } = string.Empty;
 
         public bool Published { get; set; }
 

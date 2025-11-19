@@ -18,13 +18,14 @@ namespace Runnatics.Services
         IMapper mapper,
         ILogger<EventOrganizerService> logger,
         IConfiguration configuration,
-        IUserContextService userContext) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventOrganizerService
+        IUserContextService userContext,
+        IEncryptionService encryptionService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IEventOrganizerService
     {
         protected readonly IMapper _mapper = mapper;
         protected readonly ILogger<EventOrganizerService> _logger = logger;
         protected readonly IConfiguration _configuration = configuration;
         protected readonly IUserContextService _userContext = userContext;
-
+        private readonly IEncryptionService _encryptionService = encryptionService;
         public async Task<EventOrganizerResponse?> CreateEventOrganizerAsync(EventOrganizerRequest request)
         {
             try
@@ -90,7 +91,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<EventOrganizerResponse?> GetEventOrganizerAsync(int id)
+        public async Task<EventOrganizerResponse?> GetEventOrganizerAsync(string id)
         {
             try
             {
@@ -100,7 +101,7 @@ namespace Runnatics.Services
                 var eventRepo = _repository.GetRepository<EventOrganizer>();
 
                 var eventOrganizer = await eventRepo
-                    .GetQuery(eo => eo.Id == id
+                    .GetQuery(eo => eo.Id == Convert.ToInt32(_encryptionService.Decrypt(id))
                               && eo.TenantId == tenantId
                               && !eo.AuditProperties.IsDeleted
                               && eo.AuditProperties.IsActive)
@@ -123,7 +124,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<string?> DeleteEventOrganizerAsync(int id)
+        public async Task<string?> DeleteEventOrganizerAsync(string id)
         {
             try
             {
@@ -133,7 +134,7 @@ namespace Runnatics.Services
                 var eventOrgRepo = _repository.GetRepository<EventOrganizer>();
 
                 var existingOrgEvent = await eventOrgRepo
-                    .GetQuery(e => e.Id == id
+                    .GetQuery(e => e.Id == Convert.ToInt32(_encryptionService.Decrypt(id))
                         && e.TenantId == tenantId
                         && !e.AuditProperties.IsDeleted
                         && e.AuditProperties.IsActive)

@@ -12,7 +12,7 @@ namespace Runnatics.Data.EF.Config
             builder.ToTable("Events");
 
             builder.HasKey(e => e.Id);
-
+            
             // Map to actual database columns
             builder.Property(e => e.Id)
                 .HasColumnName("Id")
@@ -37,8 +37,8 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnType("nvarchar(max)");
 
             builder.Property(e => e.EventDate)
-            .HasColumnName("EventDate")
-         .IsRequired();
+                   .HasColumnName("EventDate")
+                   .IsRequired();
 
             builder.Property(e => e.TimeZone)
                 .HasColumnName("TimeZone")
@@ -83,6 +83,11 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("EventOrganizerId")
                 .IsRequired();
 
+            builder.Property(e => e.EventType)
+                .HasColumnName("EventType")
+                .HasMaxLength(250);
+                
+
             // Configure AuditProperties to match your database schema
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
@@ -92,23 +97,23 @@ namespace Runnatics.Data.EF.Config
                     .IsRequired();
 
                 ap.Property(p => p.UpdatedDate)
-                    .HasColumnName("UpdatedAt");
+                  .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.CreatedBy)
-                    .HasColumnName("CreatedBy");
+                  .HasColumnName("CreatedBy");
 
                 ap.Property(p => p.UpdatedBy)
-                    .HasColumnName("UpdatedBy");
+                  .HasColumnName("UpdatedBy");
 
                 ap.Property(p => p.IsActive)
-                    .HasColumnName("IsActive")
-                    .HasDefaultValue(true)
-                    .IsRequired();
+                  .HasColumnName("IsActive")
+                  .HasDefaultValue(true)
+                  .IsRequired();
 
                 ap.Property(p => p.IsDeleted)
-                     .HasColumnName("IsDeleted")
-                     .HasDefaultValue(false)
-                     .IsRequired();
+                  .HasColumnName("IsDeleted")
+                  .HasDefaultValue(false)
+                  .IsRequired();
             });
 
             // Indexes

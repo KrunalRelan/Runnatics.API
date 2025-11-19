@@ -4,9 +4,9 @@ namespace Runnatics.Models.Client.Responses.Events
 {
     public class EventResponse
     {
-        public int Id { get; set; }
+        public string Id { get; set; } = string.Empty;
 
-        public int TenantId { get; set; }
+        public string TenantId { get; set; } = string.Empty;
 
         public string Name { get; set; } = string.Empty;
 
@@ -35,7 +35,7 @@ namespace Runnatics.Models.Client.Responses.Events
         // Deprecated - kept for backward compatibility
         public string? City { get; set; } 
 
-        public int EventOrganizerId { get; set; }
+        public string EventOrganizerId { get; set; } = string.Empty;
 
         public string? EventOrganizerName { get; set; }
 
@@ -51,5 +51,7 @@ namespace Runnatics.Models.Client.Responses.Events
         public DateTime? UpdatedAt { get; set; }
 
         public bool IsActive { get; set; }
+
+        public string EventType { get; set; } = string.Empty;
     }
 }

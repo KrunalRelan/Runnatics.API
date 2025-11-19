@@ -5,9 +5,6 @@ namespace Runnatics.Services.Mappings
 {
     public  class IdEncryptor(IEncryptionService encryptionService) : IValueConverter<int, string>
     {
-        public  string Convert(int sourceMember, ResolutionContext context)
-        {
-            return encryptionService.Encrypt(sourceMember.ToString());
-        }
+        public string Convert(int sourceMember, ResolutionContext context) => encryptionService.Encrypt(sourceMember.ToString());
     }
 }

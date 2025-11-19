@@ -4,8 +4,8 @@ namespace Runnatics.Models.Client.Responses.Races
 {
     public class RaceResponse
     {
-        public int Id { get; set; }
-        public int EventId { get; set; }
+        public string Id { get; set; } = string.Empty;
+        public string EventId { get; set; } = string.Empty;
 
         public string? Title { get; set; } 
 

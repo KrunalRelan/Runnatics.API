@@ -1,11 +1,9 @@
 ﻿using AutoMapper;
-using AutoMapper.QueryableExtensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
-using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Data.Entities;
@@ -20,18 +18,21 @@ namespace Runnatics.Services
                                IMapper mapper,
                                ILogger<RaceService> logger,
                                IConfiguration configuration,
-                               IUserContextService userContext) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IRacesService
+                               IUserContextService userContext,
+                               IEncryptionService encryptionService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IRacesService
     {
         protected readonly IMapper _mapper = mapper;
         protected readonly ILogger<RaceService> _logger = logger;
         protected readonly IConfiguration _configuration = configuration;
         protected readonly IUserContextService _userContext = userContext;
+        protected readonly IEncryptionService _encryptionService = encryptionService;
 
-        public async Task<PagingList<RaceResponse>> Search(int eventId, RaceSearchRequest request)
+
+        public async Task<PagingList<RaceResponse>> Search(string eId, RaceSearchRequest request)
         {
             try
             {
-                var tenantId = _userContext.TenantId;
+                var eventId = Convert.ToInt32(_encryptionService.Decrypt(eId));
 
                 // Validate date range
                 if (!ValidateDateRange(request))
@@ -70,13 +71,15 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Create(int eventId, RaceRequest request)
+        public async Task<bool> Create(string eId, RaceRequest request)
         {
             // Validate request
             if (!ValidateRaceRequest(request))
             {
                 return false;
             }
+
+            var eventId = Convert.ToInt32(_encryptionService.Decrypt(eId));
 
             var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
@@ -168,30 +171,38 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<RaceResponse?> GetRaceById(int eventId, int id)
+        public async Task<RaceResponse?> GetRaceById(string eId, string id)
         {
             try
             {
+                var eventId = Convert.ToInt32(_encryptionService.Decrypt(eId));
+                var raceId = Convert.ToInt32(_encryptionService.Decrypt(id));
+
                 var raceRepo = _repository.GetRepository<Race>();
 
-                // Project directly to DTO so EF only selects the fields we need and AutoMapper
-                // mapping ignores Event collection navigation properties (Event.Races, etc.).
-                var raceEntity = await raceRepo.GetQuery(e =>
-                                                       e.Id == id &&
+                // Load the entity from the database first (EF returns numeric Ids)
+                // and then map to the DTO in-memory. This avoids AutoMapper.ProjectTo
+                // trying to build an expression that converts numeric IDs to strings
+                // (or invoking services) which cannot be translated to SQL.
+                var raceDb = await raceRepo.GetQuery(e =>
+                                                       e.Id == raceId &&
                                                        e.EventId == eventId &&
                                                        e.AuditProperties.IsActive &&
                                                        !e.AuditProperties.IsDeleted)
+                                                       .Include(e => e.RaceSettings)
                                                        .AsNoTracking()
-                                                       .ProjectTo<RaceResponse>(_mapper.ConfigurationProvider)
                                                        .FirstOrDefaultAsync();
 
-                if (raceEntity == null)
+                if (raceDb == null)
                 {
                     this.ErrorMessage = "Race not found.";
-                    _logger.LogWarning("Race with ID {RaceId} not found.",
-                        id);
+                    _logger.LogWarning("Race with ID {RaceId} not found.", id);
                     return null;
                 }
+
+                // Map in-memory so any converters/resolvers (e.g. encryption to produce string IDs)
+                // run in CLR rather than being part of the EF expression tree.
+                var raceEntity = _mapper.Map<RaceResponse>(raceDb);
 
                 return raceEntity;
             }
@@ -203,12 +214,11 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Update(int eventId, int id, RaceRequest request)
+        public async Task<bool> Update(string eventId, string id, RaceRequest request)
         {
             try
             {
                 var currentUserId = _userContext.UserId;
-                var tenantId = _userContext.TenantId;
 
                 // Validate request
                 if (!ValidateRaceRequest(request))
@@ -227,7 +237,7 @@ namespace Runnatics.Services
 
                 // Check for duplicates only if name or date changed
                 if (HasRaceIdentityChanged(raceEntity, request) &&
-                        await IsDuplicateRaceAsync(request, id))
+                        await IsDuplicateRaceAsync(request))
                 {
                     this.ErrorMessage = "Race already exists with the same name and date.";
                     _logger.LogWarning("Duplicate race update attempt: {Name} by User {UserId}", request.Title, currentUserId);
@@ -259,17 +269,19 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Delete(int eventId, int id)
+        public async Task<bool> Delete(string eId, string id)
         {
             try
             {
                 var raceRepo = _repository.GetRepository<Race>();
-                var tenantId = _userContext.TenantId;
+
+                var eventId = Convert.ToInt32(_encryptionService.Decrypt(eId));
+                var raceId = Convert.ToInt32(_encryptionService.Decrypt(id));
 
                 // Load only the Race entity (do NOT include Event or other navigation collections)
                 var raceEntity = await raceRepo.GetQuery(e =>
                     e.EventId == eventId &&
-                    e.Id == id &&
+                    e.Id == raceId &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted)
                     .FirstOrDefaultAsync();
@@ -277,8 +289,7 @@ namespace Runnatics.Services
                 if (raceEntity == null)
                 {
                     this.ErrorMessage = $"Race with ID {id} not found or you don't have permission to delete it.";
-                    _logger.LogWarning("Race deletion failed: Race {RaceId} not found for Tenant {TenantId}",
-                        id, tenantId);
+                    _logger.LogWarning("Race deletion failed: Race {RaceId} not found.", id);
                     return false;
                 }
 
@@ -310,12 +321,15 @@ namespace Runnatics.Services
         /// <summary>
         /// Fetches event entity with related settings for update operation
         /// </summary>
-        private async Task<Race?> GetRaceForUpdateAsync(int id, int eventId)
+        private async Task<Race?> GetRaceForUpdateAsync(string id, string eId)
         {
             var raceRepo = _repository.GetRepository<Race>();
 
+            int eventId = Convert.ToInt32(_encryptionService.Decrypt(eId));
+            int raceId = Convert.ToInt32(_encryptionService.Decrypt(id));
+
             return await raceRepo.GetQuery(e =>
-                      e.Id == id &&
+                      e.Id == raceId &&
                       e.EventId == eventId &&
                       e.AuditProperties.IsActive &&
                       !e.AuditProperties.IsDeleted)
@@ -395,7 +409,7 @@ namespace Runnatics.Services
         /// <summary>
         /// Checks if a race with the same name and date already exists
         /// </summary>
-        private async Task<bool> IsDuplicateRaceAsync(RaceRequest request, int tenantId, int? excludeRaceId = null)
+        private async Task<bool> IsDuplicateRaceAsync(RaceRequest request, int? excludeRaceId = null)
         {
             var raceRepo = _repository.GetRepository<Race>();
 
@@ -530,14 +544,18 @@ namespace Runnatics.Services
             // Prepare base query for the relevant races
             var baseQuery = raceRepo.GetQuery(e => orderedIds.Contains(e.Id)).AsNoTracking();
 
-            // Project to DTO. AutoMapper mapping must ignore Event collection properties.
-            var projected = await baseQuery
-                .ProjectTo<RaceResponse>(_mapper.ConfigurationProvider)
-                .ToListAsync();
+            // Fetch entities from DB (EF will return numeric Ids)
+            var entities = await baseQuery.ToListAsync();
 
-            // Restore original order based on orderedIds
-            var ordered = orderedIds.Select(id => projected.First(p => p.Id == id)).ToList();
-            return ordered;
+            // Restore original order based on orderedIds (safely handle any missing items)
+            var orderedEntities = orderedIds
+                .Select(id => entities.FirstOrDefault(e => e.Id == id))
+                .Where(e => e != null)
+                .ToList()!;
+
+            // Map entities to DTOs in-memory. Mapper will still produce the encrypted string Ids as configured.
+            var responses = _mapper.Map<List<RaceResponse>>(orderedEntities);
+            return responses;
         }
 
         /// <summary>

@@ -76,7 +76,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.AcceptedByUser, opt => opt.Ignore());
 
 
-            //Event mappings
+            #region Event mappings
             CreateMap<EventRequest, Event>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service from JWT token
@@ -117,7 +117,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.EventOrganizerId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventOrganizerId))
                 .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer.Name));
-                
+
             // EventSettings mappings
             CreateMap<EventSettingsRequest, EventSettings>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
@@ -187,8 +187,8 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.EventOrganizerName));
-
-            //Races
+            #endregion
+            #region Races mappings
             CreateMap<RaceRequest, Race>()
                 .ForMember(d => d.Id, opt => opt.Ignore())
                 .ForMember(d => d.AuditProperties, opt => opt.Ignore())
@@ -234,6 +234,7 @@ namespace Runnatics.Services
                 .ForMember(d => d.DataHeaders, opt => opt.MapFrom(src => src.DataHeaders))
                 .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(d => d.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
+            #endregion
         }
     }
 }

@@ -190,6 +190,7 @@ namespace Runnatics.Services
                                                        e.AuditProperties.IsActive &&
                                                        !e.AuditProperties.IsDeleted)
                                                        .Include(e => e.RaceSettings)
+                                                       .Include(e => e.Event)
                                                        .AsNoTracking()
                                                        .FirstOrDefaultAsync();
 

@@ -1,4 +1,5 @@
-﻿using Runnatics.Models.Data.Entities;
+﻿using Runnatics.Models.Client.Responses.Events;
+using Runnatics.Models.Data.Entities;
 
 namespace Runnatics.Models.Client.Responses.Races
 {
@@ -29,7 +30,8 @@ namespace Runnatics.Models.Client.Responses.Races
         // Navigation Properties
         public RaceSettingsResponse? RaceSettings { get; set; }
 
-        public Event Event { get; set; } = null!;
+        public EventResponse? Event { get; set; }
 
+        public List<Participant> Participants { get; set; } = [];
     }
 }

@@ -21,16 +21,16 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         public int TotalRecords { get; set; }
 
-        public int SuccessCount { get; set; } = 0;
+        //public int SuccessCount { get; set; } = 0;
 
-        public int ErrorCount { get; set; } = 0;
+        //public int ErrorCount { get; set; } = 0;
 
         [Required]
         [MaxLength(20)]
         public string Status { get; set; } = "Pending"; // Pending, Completed, PartiallyCompleted
 
-        [Required]
-        public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+        // [Required]
+        // public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 
         public DateTime? ProcessedAt { get; set; }
 

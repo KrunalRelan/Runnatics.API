@@ -259,10 +259,10 @@ namespace Runnatics.Services
                 .ForMember(d => d.ImportBatchId, opt => opt.MapFrom(src => src.Id))
                 .ForMember(d => d.FileName, opt => opt.MapFrom(src => src.FileName))
                 .ForMember(d => d.TotalRecords, opt => opt.MapFrom(src => src.TotalRecords))
-                .ForMember(d => d.ValidRecords, opt => opt.MapFrom(src => src.SuccessCount))
-                .ForMember(d => d.InvalidRecords, opt => opt.MapFrom(src => src.ErrorCount))
+                // .ForMember(d => d.ValidRecords, opt => opt.MapFrom(src => src.SuccessCount))
+                // .ForMember(d => d.InvalidRecords, opt => opt.MapFrom(src => src.ErrorCount))
                 .ForMember(d => d.Status, opt => opt.MapFrom(src => src.Status))
-                .ForMember(d => d.UploadedAt, opt => opt.MapFrom(src => src.UploadedAt))
+                // .ForMember(d => d.UploadedAt, opt => opt.MapFrom(src => src.UploadedAt))
                 .ForMember(d => d.Errors, opt => opt.Ignore());
             #endregion
         }

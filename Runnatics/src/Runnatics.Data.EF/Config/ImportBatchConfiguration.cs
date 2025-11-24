@@ -31,18 +31,18 @@ namespace Runnatics.Data.EF.Config
                 .IsRequired();
 
             builder.Property(e => e.TotalRecords)
-                .HasColumnName("TotalRecords")
+                .HasColumnName("TotalRows")
                 .IsRequired();
 
-            builder.Property(e => e.SuccessCount)
-                .HasColumnName("SuccessCount")
-                .HasDefaultValue(0)
-                .IsRequired();
+            // builder.Property(e => e.SuccessCount)
+            //     .HasColumnName("SuccessCount")
+            //     .HasDefaultValue(0)
+            //     .IsRequired();
 
-            builder.Property(e => e.ErrorCount)
-                .HasColumnName("ErrorCount")
-                .HasDefaultValue(0)
-                .IsRequired();
+            // builder.Property(e => e.ErrorCount)
+            //     .HasColumnName("ErrorCount")
+            //     .HasDefaultValue(0)
+            //     .IsRequired();
 
             builder.Property(e => e.Status)
                 .HasColumnName("Status")
@@ -50,13 +50,13 @@ namespace Runnatics.Data.EF.Config
                 .HasDefaultValue("Pending")
                 .IsRequired();
 
-            builder.Property(e => e.UploadedAt)
-                .HasColumnName("UploadedAt")
-                .HasDefaultValueSql("GETUTCDATE()")
-                .IsRequired();
+            // builder.Property(e => e.UploadedAt)
+            //     .HasColumnName("UploadedAt")
+            //     .HasDefaultValueSql("GETUTCDATE()")
+            //     .IsRequired();
 
             builder.Property(e => e.ProcessedAt)
-                .HasColumnName("ProcessedAt");
+                .HasColumnName("CompletedAt");
 
             builder.Property(e => e.ErrorLog)
                 .HasColumnName("ErrorLog")

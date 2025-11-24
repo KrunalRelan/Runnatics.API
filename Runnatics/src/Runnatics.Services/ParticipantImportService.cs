@@ -101,10 +101,10 @@ namespace Runnatics.Services
                     EventId = decryptedEventId,
                     FileName = request.File.FileName,
                     TotalRecords = stagingRecords.Count,
-                    SuccessCount = 0,
-                    ErrorCount = 0,
+                    // SuccessCount = 0,
+                    // ErrorCount = 0,
                     Status = "Pending",
-                    UploadedAt = DateTime.UtcNow,
+                    //UploadedAt = DateTime.UtcNow,
                     AuditProperties = new AuditProperties
                     {
                         CreatedBy = userId,
@@ -380,8 +380,8 @@ namespace Runnatics.Services
                 await _repository.SaveChangesAsync();
 
                 // Update import batch
-                importBatch.SuccessCount = successCount;
-                importBatch.ErrorCount = errorCount;
+                // importBatch.SuccessCount = successCount;
+                // importBatch.ErrorCount = errorCount;
                 importBatch.Status = errorCount == 0 ? "Completed" : "PartiallyCompleted";
                 importBatch.ProcessedAt = DateTime.UtcNow;
                 importBatch.AuditProperties.UpdatedBy = userId;

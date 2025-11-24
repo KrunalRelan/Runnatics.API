@@ -28,6 +28,9 @@ namespace Runnatics.Data.EF.Config
      .HasColumnName("RaceId")
          .IsRequired();
 
+            builder.Property(e => e.ImportBatchId)
+                .HasColumnName("ImportBatchId");
+
             builder.Property(e => e.BibNumber)
     .HasColumnName("BibNumber")
       .HasMaxLength(20);
@@ -133,6 +136,11 @@ builder.Property(e => e.Email)
               .WithMany(rc => rc.Participants)
          .HasForeignKey(e => e.RaceId)
         .OnDelete(DeleteBehavior.NoAction);
+
+            builder.HasOne(e => e.ImportBatch)
+                .WithMany(ib => ib.Participants)
+                .HasForeignKey(e => e.ImportBatchId)
+                .OnDelete(DeleteBehavior.SetNull);
 
    builder.HasOne(e => e.Result)
         .WithOne(r => r.Participant)

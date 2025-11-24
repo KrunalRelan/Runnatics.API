@@ -11,6 +11,7 @@ using Runnatics.Models.Data.Entities;
 using Runnatics.Models.Data.EventOrganizers;
 using Runnatics.API.Models.Requests;
 using Runnatics.Services.Mappings;
+using Runnatics.Models.Client.Responses.Participants;
 
 namespace Runnatics.Services
 {
@@ -234,6 +235,35 @@ namespace Runnatics.Services
                 .ForMember(d => d.DataHeaders, opt => opt.MapFrom(src => src.DataHeaders))
                 .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(d => d.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
+            #endregion
+
+            #region Participant mappings
+            CreateMap<Models.Data.Entities.Participant, Models.Client.Responses.Participants.Participant>()
+                .ForMember(d => d.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(d => d.Bib, opt => opt.MapFrom(src => src.BibNumber ?? ""))
+                .ForMember(d => d.FirstName, opt => opt.MapFrom(src => src.FirstName))
+                .ForMember(d => d.LastName, opt => opt.MapFrom(src => src.LastName))
+                .ForMember(d => d.Email, opt => opt.MapFrom(src => src.Email ?? ""))
+                .ForMember(d => d.Phone, opt => opt.MapFrom(src => src.Phone ?? ""))
+                .ForMember(d => d.Gender, opt => opt.MapFrom(src => src.Gender ?? ""))
+                .ForMember(d => d.DateOfBirth, opt => opt.MapFrom(src => src.DateOfBirth))
+                .ForMember(d => d.Age, opt => opt.MapFrom(src => src.Age))
+                .ForMember(d => d.City, opt => opt.MapFrom(src => src.City ?? ""))
+                .ForMember(d => d.State, opt => opt.MapFrom(src => src.State ?? ""))
+                .ForMember(d => d.RegistrationStatus, opt => opt.MapFrom(src => src.Status))
+                .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
+                .ForMember(d => d.RaceName, opt => opt.MapFrom(src => src.Race != null ? src.Race.Title : ""))
+                .ForMember(d => d.ImportBatchId, opt => opt.MapFrom(src => src.ImportBatchId));
+
+            CreateMap<ImportBatch, ParticipantImportResponse>()
+                .ForMember(d => d.ImportBatchId, opt => opt.MapFrom(src => src.Id))
+                .ForMember(d => d.FileName, opt => opt.MapFrom(src => src.FileName))
+                .ForMember(d => d.TotalRecords, opt => opt.MapFrom(src => src.TotalRecords))
+                .ForMember(d => d.ValidRecords, opt => opt.MapFrom(src => src.SuccessCount))
+                .ForMember(d => d.InvalidRecords, opt => opt.MapFrom(src => src.ErrorCount))
+                .ForMember(d => d.Status, opt => opt.MapFrom(src => src.Status))
+                .ForMember(d => d.UploadedAt, opt => opt.MapFrom(src => src.UploadedAt))
+                .ForMember(d => d.Errors, opt => opt.Ignore());
             #endregion
         }
     }

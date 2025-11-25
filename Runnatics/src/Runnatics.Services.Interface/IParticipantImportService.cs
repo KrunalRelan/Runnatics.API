@@ -13,10 +13,7 @@ namespace Runnatics.Services.Interface
         /// <summary>
         /// Process staging data and move to main Participants table
         /// </summary>
-        Task<ProcessImportResponse> ProcessStagingDataAsync(
-            string eventId,
-            string importBatchId,
-            ProcessImportRequest request);
+        Task<ProcessImportResponse> ProcessStagingDataAsync(ProcessImportRequest request);
     }
 
 }

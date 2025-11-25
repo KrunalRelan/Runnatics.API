@@ -32,7 +32,7 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("ImportBatchId");
 
             builder.Property(e => e.BibNumber)
-    .HasColumnName("BibNumber")
+    .HasColumnName("Bib")
       .HasMaxLength(20);
 
    builder.Property(e => e.FirstName)

@@ -35,7 +35,7 @@ namespace Runnatics.Services
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
 
             // Get race ID from request
-            int? raceId = request.RaceId;
+            int? raceId = request.RaceId != null ? Convert.ToInt32(_encryptionService.Decrypt(request.RaceId)) : (int?)null;
 
             var response = new ParticipantImportResponse
             {
@@ -156,7 +156,7 @@ namespace Runnatics.Services
 
                 await _repository.SaveChangesAsync();
 
-                response.ImportBatchId = importBatch.Id;
+                response.ImportBatchId = _encryptionService.Encrypt(Convert.ToString(importBatch.Id));
                 response.TotalRecords = stagingRecords.Count;
                 response.ValidRecords = validRecords;
                 response.InvalidRecords = invalidRecords;
@@ -175,21 +175,16 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<ProcessImportResponse> ProcessStagingDataAsync(
-            string eventId,
-            string importBatchId,
-            ProcessImportRequest request)
+        public async Task<ProcessImportResponse> ProcessStagingDataAsync(ProcessImportRequest request)
         {
             // Get user context
             var tenantId = _userContext.TenantId;
             var userId = _userContext.UserId;
 
             // Decrypt IDs
-            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-            var decryptedImportBatchId = Convert.ToInt32(_encryptionService.Decrypt(importBatchId));
-
-            // Get race ID from request
-            int? raceId = request.RaceId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(request.EventId));
+            var decryptedImportBatchId = Convert.ToInt32(_encryptionService.Decrypt(request.ImportBatchId));
+            var raceId = request.RaceId != null ? Convert.ToInt32(_encryptionService.Decrypt(request.RaceId)) : (int?)null;
 
             var response = new ProcessImportResponse
             {
@@ -526,16 +521,16 @@ namespace Runnatics.Services
                 });
             }
 
-            if (string.IsNullOrWhiteSpace(record.FirstName))
-            {
-                errors.Add(new ValidationError
-                {
-                    RowNumber = record.RowNumber,
-                    Field = "Name",
-                    Message = "Name is required",
-                    Value = record.FirstName ?? ""
-                });
-            }
+            // if (string.IsNullOrWhiteSpace(record.FirstName))
+            // {
+            //     errors.Add(new ValidationError
+            //     {
+            //         RowNumber = record.RowNumber,
+            //         Field = "Name",
+            //         Message = "Name is required",
+            //         Value = record.FirstName ?? ""
+            //     });
+            // }
 
             return errors;
         }

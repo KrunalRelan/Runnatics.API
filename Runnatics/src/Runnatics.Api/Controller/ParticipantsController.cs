@@ -80,12 +80,9 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> ProcessImport(
-            string eventId,
-            string importBatchId,
-            [FromBody] ProcessImportRequest request)
+        public async Task<IActionResult> ProcessImport([FromBody] ProcessImportRequest request)
         {
-            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(importBatchId) || request == null)
+            if (string.IsNullOrEmpty(request.EventId) || string.IsNullOrEmpty(request.ImportBatchId) || request == null)
             {
                 return BadRequest(new { error = "Invalid input provided. Event ID, Import Batch ID, and request body are required." });
             }
@@ -104,7 +101,7 @@ namespace Runnatics.Api.Controller
 
             var response = new ResponseBase<ProcessImportResponse>();
 
-            var result = await _importService.ProcessStagingDataAsync(eventId, importBatchId, request);
+            var result = await _importService.ProcessStagingDataAsync(request);
 
             if (_importService.HasError)
             {

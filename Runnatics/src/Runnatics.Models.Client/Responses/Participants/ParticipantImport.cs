@@ -2,7 +2,7 @@ namespace Runnatics.Models.Client.Responses.Participants
 {
     public class ParticipantImportResponse
     {
-        public int ImportBatchId { get; set; }
+        public string ImportBatchId { get; set; }
         public string FileName { get; set; }
         public int TotalRecords { get; set; }
         public int ValidRecords { get; set; }

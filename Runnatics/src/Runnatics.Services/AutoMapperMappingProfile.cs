@@ -227,6 +227,7 @@ namespace Runnatics.Services
                 .ForMember(d => d.ShowLeaderboard, opt => opt.MapFrom(src => src.ShowLeaderboard))
                 .ForMember(d => d.ShowResultTable, opt => opt.MapFrom(src => src.ShowResultTable))
                 .ForMember(d => d.IsTimed, opt => opt.MapFrom(src => src.IsTimed))
+                .ForMember(d => d.PublishDNF, opt => opt.MapFrom(src => src.PublishDNF))
                 .ForMember(d => d.DedUpSeconds, opt => opt.MapFrom(src => src.DedUpSeconds))
                 .ForMember(d => d.EarlyStartCutOff, opt => opt.MapFrom(src => src.EarlyStartCutOff))
                 .ForMember(d => d.LateStartCutOff, opt => opt.MapFrom(src => src.LateStartCutOff))

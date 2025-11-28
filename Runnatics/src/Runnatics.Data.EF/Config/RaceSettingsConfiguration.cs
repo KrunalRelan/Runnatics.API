@@ -51,6 +51,11 @@ namespace Runnatics.Data.EF.Config
                    .HasDefaultValue(false)
                    .IsRequired();
 
+            builder.Property(e => e.PublishDNF)
+                   .HasColumnName("PublishDNF")
+                   .HasDefaultValue(false)
+                   .IsRequired();
+
             builder.Property(e => e.DedUpSeconds)
                    .HasColumnName("DedUpSeconds");
 

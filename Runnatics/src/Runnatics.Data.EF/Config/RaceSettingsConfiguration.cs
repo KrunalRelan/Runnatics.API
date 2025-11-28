@@ -51,7 +51,7 @@ namespace Runnatics.Data.EF.Config
                    .HasDefaultValue(false)
                    .IsRequired();
 
-            builder.Property(e => e.PublishDNF)
+            builder.Property(e => e.PublishDnf)
                    .HasColumnName("PublishDNF")
                    .HasDefaultValue(false)
                    .IsRequired();

@@ -14,7 +14,7 @@
 
         public bool IsTimed { get; set; }
 
-        public bool PublishDNF { get; set; }
+        public bool PublishDnf { get; set; }
 
         public int? DedUpSeconds { get; set; }
 

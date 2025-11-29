@@ -490,6 +490,8 @@ namespace Runnatics.Services
             var leaderboardSettings = _mapper.Map<LeaderboardSettings>(request);
             leaderboardSettings.Id = 0; // Ensure EF Core generates a new ID
             leaderboardSettings.EventId = 0; // Will be set after Event is saved
+            leaderboardSettings.RaceId = null;  // NULL for event-level settings
+            leaderboardSettings.OverrideSettings = false;  // false for event-level settings
             leaderboardSettings.AuditProperties = CreateAuditProperties(userId);
             return leaderboardSettings;
         }

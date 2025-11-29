@@ -38,6 +38,6 @@
 
         public int? NumberOfResultsToShowCategory { get; set; }
 
-        public bool? OverrideSettings { get; set; }
+        public bool OverrideSettings { get; set; }
     }
 }

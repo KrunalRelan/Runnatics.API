@@ -44,7 +44,7 @@ namespace Runnatics.Services
                 // Build and execute search query
                 var searchResults = await ExecuteSearchQueryAsync(eventId, request);
 
-                // Project to DTOs (AutoMapper.ProjectTo) — Event collections are ignored in the mapping profile
+                // Project to DTOs — include race-level leaderboard settings or fallback to event-level in loader
                 var raceResponses = await LoadRaceResponsesAsync(searchResults);
 
                 // Create paging result
@@ -74,19 +74,16 @@ namespace Runnatics.Services
 
         public async Task<bool> Create(string eId, RaceRequest request)
         {
-            // Validate request
             if (!ValidateRaceRequest(request))
             {
                 return false;
             }
 
             var eventId = Convert.ToInt32(_encryptionService.Decrypt(eId));
-
             var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
             try
             {
-                // Quick existence and tenant-scope check for parent Event
                 var eventRepo = _repository.GetRepository<Event>();
                 var parentEvent = await eventRepo.GetQuery(e =>
                         e.Id == eventId &&
@@ -98,7 +95,7 @@ namespace Runnatics.Services
                 if (parentEvent == null)
                 {
                     ErrorMessage = "Event not found or inactive.";
-                    _logger.LogWarning("Race creation aborted - event not found or inactive. EventId: {EventId}, UserId: {UserId}", eventId, currentUserId);
+                    _logger.LogWarning("Race creation aborted - event not found. EventId: {EventId}", eventId);
                     return false;
                 }
 
@@ -106,13 +103,10 @@ namespace Runnatics.Services
 
                 try
                 {
-                    // Map DTO to domain entity and set service controlled fields
                     var race = _mapper.Map<Race>(request);
                     race.EventId = eventId;
-
                     race.AuditProperties = CreateAuditProperties(currentUserId);
 
-                    // If settings supplied, map and attach to the race so EF can persist in one SaveChanges
                     if (request.RaceSettings != null)
                     {
                         race.RaceSettings = CreateRaceSettings(request.RaceSettings, currentUserId);
@@ -120,52 +114,35 @@ namespace Runnatics.Services
 
                     var raceRepo = _repository.GetRepository<Race>();
                     await raceRepo.AddAsync(race);
-
-                    // Save race first to obtain race.Id for race-level leaderboard settings
                     await _repository.SaveChangesAsync();
 
-                    // If leaderboard settings provided at race-level, create a LeaderboardSettings record
-                    // with RaceId set to the newly created race Id and OverrideSettings set to true.
-                    if (request.LeaderboardSettings != null)
+                    // If leaderboard settings provided with override flag, create race-level settings
+                    if (request.LeaderboardSettings != null && request.LeaderboardSettings.OverrideSettings)
                     {
+                        var raceLevelLb = CreateRaceLevelLeaderboardSettings(
+                            request.LeaderboardSettings,
+                            currentUserId,
+                            eventId,
+                            race.Id);
+
                         var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
-                        var raceLevelLb = CreateRaceLevelLeaderboardSettings(request.LeaderboardSettings, currentUserId, eventId, race.Id);
                         await leaderboardRepo.AddAsync(raceLevelLb);
                         await _repository.SaveChangesAsync();
                     }
 
                     await _repository.CommitTransactionAsync();
 
-                    _logger.LogInformation("Race created successfully. RaceId: {RaceId}, EventId: {EventId}, CreatedBy: {UserId}", race.Id, race.EventId, currentUserId);
+                    _logger.LogInformation("Race created successfully. RaceId: {RaceId}, EventId: {EventId}, CreatedBy: {UserId}",
+                        race.Id, race.EventId, currentUserId);
                     return true;
                 }
                 catch (Exception exInner)
                 {
-                    try
-                    {
-                        await _repository.RollbackTransactionAsync();
-                    }
-                    catch (Exception rbEx)
-                    {
-                        _logger.LogWarning(rbEx, "Rollback failed after error while creating race for EventId: {EventId}", eventId);
-                    }
-
+                    await _repository.RollbackTransactionAsync();
                     _logger.LogError(exInner, "Error creating race for EventId: {EventId}", eventId);
                     ErrorMessage = "Error creating race.";
                     return false;
                 }
-            }
-            catch (DbUpdateException dbEx)
-            {
-                _logger.LogError(dbEx, "Database error while creating race for EventId: {EventId}", eventId);
-                ErrorMessage = "Database error occurred while creating the race.";
-                return false;
-            }
-            catch (UnauthorizedAccessException uaEx)
-            {
-                _logger.LogWarning(uaEx, "Unauthorized race creation attempt");
-                ErrorMessage = "Unauthorized: " + uaEx.Message;
-                return false;
             }
             catch (Exception ex)
             {
@@ -184,20 +161,15 @@ namespace Runnatics.Services
 
                 var raceRepo = _repository.GetRepository<Race>();
 
-                // Load the entity from the database first (EF returns numeric Ids)
-                // and then map to the DTO in-memory. This avoids AutoMapper.ProjectTo
-                // trying to build an expression that converts numeric IDs to strings
-                // (or invoking services) which cannot be translated to SQL.
                 var raceDb = await raceRepo.GetQuery(e =>
-                                                       e.Id == raceId &&
-                                                       e.EventId == eventId &&
-                                                       e.AuditProperties.IsActive &&
-                                                       !e.AuditProperties.IsDeleted)
-                                                       .Include(e => e.RaceSettings)
-                                                       .Include(e => e.Event)
-                                                       .Include(e => e.LeaderboardSettings)
-                                                       .AsNoTracking()
-                                                       .FirstOrDefaultAsync();
+                        e.Id == raceId &&
+                        e.EventId == eventId &&
+                        e.AuditProperties.IsActive &&
+                        !e.AuditProperties.IsDeleted)
+                    .Include(e => e.RaceSettings)
+                    .Include(e => e.Event)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
 
                 if (raceDb == null)
                 {
@@ -206,11 +178,14 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                // Map in-memory so any converters/resolvers (e.g. encryption to produce string IDs)
-                // run in CLR rather than being part of the EF expression tree.
-                var raceEntity = _mapper.Map<RaceResponse>(raceDb);
+                // Get effective leaderboard settings
+                var effectiveLeaderboardSettings = await GetEffectiveLeaderboardSettings(eventId, raceId);
 
-                return raceEntity;
+                // Map race to response
+                var raceResponse = _mapper.Map<RaceResponse>(raceDb);
+                raceResponse.LeaderboardSettings = effectiveLeaderboardSettings;
+
+                return raceResponse;
             }
             catch (Exception ex)
             {
@@ -218,6 +193,51 @@ namespace Runnatics.Services
                 this.ErrorMessage = "Error retrieving race.";
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Gets effective leaderboard settings for a race
+        /// If race has override settings (OverrideSettings = true), return race-level settings
+        /// Otherwise, return event-level settings (RaceId = NULL)
+        /// </summary>
+        private async Task<LeaderboardSettings?> GetEffectiveLeaderboardSettings(int eventId, int raceId)
+        {
+            var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+
+            // First, check if race has override settings
+            var raceLeaderboardSettings = await leaderboardRepo
+                .GetQuery(lb =>
+                    lb.EventId == eventId &&
+                    lb.RaceId == raceId &&
+                    lb.OverrideSettings == true &&
+                    lb.AuditProperties.IsActive &&
+                    !lb.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            if (raceLeaderboardSettings != null)
+            {
+                _logger.LogInformation("Using race-level leaderboard settings for RaceId: {RaceId}", raceId);
+                return raceLeaderboardSettings;
+            }
+
+            // Fall back to event-level settings
+            var eventLeaderboardSettings = await leaderboardRepo
+                .GetQuery(lb =>
+                    lb.EventId == eventId &&
+                    lb.RaceId == null &&
+                    lb.OverrideSettings == false &&
+                    lb.AuditProperties.IsActive &&
+                    !lb.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            if (eventLeaderboardSettings != null)
+            {
+                _logger.LogInformation("Using event-level leaderboard settings for RaceId: {RaceId}", raceId);
+            }
+
+            return eventLeaderboardSettings;
         }
 
         public async Task<bool> Update(string eventId, string id, RaceRequest request)
@@ -256,30 +276,62 @@ namespace Runnatics.Services
                 // Persist changes
                 await SaveRaceChangesAsync(raceEntity);
 
-                // If request contains race-level leaderboard settings, ensure RaceId and OverrideSettings are set
-                if (request.LeaderboardSettings != null)
+                // Handle leaderboard settings override
+                if (request.LeaderboardSettings != null && request.LeaderboardSettings.OverrideSettings)
                 {
                     var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
-                    if (raceEntity.LeaderboardSettings == null)
+
+                    // Check if race already has override settings
+                    var existingRaceSettings = await leaderboardRepo
+                        .GetQuery(lb =>
+                            lb.EventId == raceEntity.EventId &&
+                            lb.RaceId == raceEntity.Id &&
+                            lb.OverrideSettings == true)
+                        .FirstOrDefaultAsync();
+
+                    if (existingRaceSettings == null)
                     {
-                        var raceLevelLb = CreateRaceLevelLeaderboardSettings(request.LeaderboardSettings, currentUserId, raceEntity.EventId, raceEntity.Id);
+                        // Create new race-level override
+                        var raceLevelLb = CreateRaceLevelLeaderboardSettings(
+                            request.LeaderboardSettings,
+                            currentUserId,
+                            raceEntity.EventId,
+                            raceEntity.Id);
                         await leaderboardRepo.AddAsync(raceLevelLb);
                     }
                     else
                     {
-                        // Update existing race-level leaderboard settings and ensure OverrideSettings true
-                        _mapper.Map(request.LeaderboardSettings, raceEntity.LeaderboardSettings);
-                        raceEntity.LeaderboardSettings.OverrideSettings = true;
-                        raceEntity.LeaderboardSettings.RaceId = raceEntity.Id;
-                        UpdateAuditProperties(raceEntity.LeaderboardSettings.AuditProperties, currentUserId);
-                        await leaderboardRepo.UpdateAsync(raceEntity.LeaderboardSettings);
+                        // Update existing race-level override
+                        _mapper.Map(request.LeaderboardSettings, existingRaceSettings);
+                        existingRaceSettings.OverrideSettings = true;
+                        UpdateAuditProperties(existingRaceSettings.AuditProperties, currentUserId);
+                        await leaderboardRepo.UpdateAsync(existingRaceSettings);
                     }
+
                     await _repository.SaveChangesAsync();
                 }
+                else if (!(request.LeaderboardSettings?.OverrideSettings ?? false))
+                {
+                    // If override is turned off, remove race-level settings
+                    var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+                    var existingRaceSettings = await leaderboardRepo
+                        .GetQuery(lb =>
+                            lb.EventId == raceEntity.EventId &&
+                            lb.RaceId == raceEntity.Id &&
+                            lb.OverrideSettings == true)
+                        .FirstOrDefaultAsync();
 
-                _logger.LogInformation("Race updated successfully: {RaceId} - {Name} by User {UserId}",
-                                            id, raceEntity.Title, currentUserId);
+                    if (existingRaceSettings != null)
+                    {
+                        existingRaceSettings.AuditProperties.IsDeleted = true;
+                        existingRaceSettings.AuditProperties.IsActive = false;
+                        UpdateAuditProperties(existingRaceSettings.AuditProperties, currentUserId);
+                        await leaderboardRepo.UpdateAsync(existingRaceSettings);
+                        await _repository.SaveChangesAsync();
+                    }
+                }
 
+                _logger.LogInformation("Race updated successfully: {RaceId}", id);
                 return true;
             }
             catch (DbUpdateException dbEx)
@@ -290,8 +342,8 @@ namespace Runnatics.Services
             }
             catch (Exception ex)
             {
-                this.ErrorMessage = "An unexpected error occurred while updating the event.";
-                _logger.LogError(ex, "Error during event update for ID: {EventId}", id);
+                this.ErrorMessage = "An unexpected error occurred while updating the race.";
+                _logger.LogError(ex, "Error during race update for ID: {RaceId}", id);
                 return false;
             }
         }
@@ -572,6 +624,7 @@ namespace Runnatics.Services
         /// <summary>
         /// Loads races and projects them directly to RaceResponse DTOs using AutoMapper.ProjectTo.
         /// Event collection navigation properties are ignored in the mapping profile so returned Event has no nested Races.
+        /// Ensures each race has effective LeaderboardSettings populated: race-level if present, otherwise event-level.
         /// </summary>
         private async Task<List<RaceResponse>> LoadRaceResponsesAsync(Models.Data.Common.PagingList<Race> searchResults)
         {
@@ -583,19 +636,30 @@ namespace Runnatics.Services
             var raceRepo = _repository.GetRepository<Race>();
             var orderedIds = searchResults.Select(e => e.Id).ToList();
 
-            // Prepare base query for the relevant races
-            var baseQuery = raceRepo.GetQuery(e => orderedIds.Contains(e.Id)).AsNoTracking();
+            var baseQuery = raceRepo.GetQuery(e => orderedIds.Contains(e.Id))
+                .Include(e => e.RaceSettings)
+                .Include(e => e.Event)
+                .AsNoTracking();
 
-            // Fetch entities from DB (EF will return numeric Ids)
             var entities = await baseQuery.ToListAsync();
 
-            // Restore original order based on orderedIds (safely handle any missing items)
             var orderedEntities = orderedIds
                 .Select(id => entities.FirstOrDefault(e => e.Id == id))
                 .Where(e => e != null)
                 .ToList()!;
 
-            // Map entities to DTOs in-memory. Mapper will still produce the encrypted string Ids as configured.
+            // Get effective leaderboard settings for each race
+            var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+
+            foreach (var race in orderedEntities)
+            {
+                // Get effective leaderboard settings using the helper method
+                var effectiveSettings = await GetEffectiveLeaderboardSettings(race.EventId, race.Id);
+
+                // Attach to race for mapping
+                race.LeaderboardSettings = effectiveSettings;
+            }
+
             var responses = _mapper.Map<List<RaceResponse>>(orderedEntities);
             return responses;
         }

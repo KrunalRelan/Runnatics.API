@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using Runnatics.Models.Client.Requests.Events;
+using System.ComponentModel.DataAnnotations;
 
 namespace Runnatics.Models.Client.Requests.Races
 {
@@ -19,5 +20,8 @@ namespace Runnatics.Models.Client.Requests.Races
         public int? MaxParticipants { get; set; }
 
         public RaceSettingsRequest? RaceSettings { get; set; }
+
+        // Leaderboard Settings
+        public LeaderboardSettingsRequest? LeaderboardSettings { get; set; }
     }
 }

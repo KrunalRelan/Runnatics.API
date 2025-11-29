@@ -37,29 +37,6 @@ namespace Runnatics.Api.Controller
         ///       "sortFieldName": "EventDate",
         ///       "sortDirection": 0
         ///     }
-        ///     
-        /// **Authentication:**
-        /// - Requires valid JWT token in Authorization header
-        /// - Organization ID is automatically extracted from the token
-        /// - User can only search events from their own organization
-        /// 
-        /// **Optional Filters:**
-        /// - **id**: Specific event ID for exact match (optional)
-        /// - **name**: Partial match on event name (optional)
-        /// - **status**: Event status - Draft, Active, InProgress, Completed, Cancelled (optional)
-        /// - **eventDateFrom**: Start date range filter (optional)
-        /// - **eventDateTo**: End date range filter (optional)
-        /// - **pageNumber**: Page number for pagination (default: 1)
-        /// - **pageSize**: Number of items per page (default: 100, max: 1000)
-        /// - **sortFieldName**: Field name to sort by (e.g., "Name", "EventDate", "Status") (default: "EventDate")
-        /// - **sortDirection**: 0 for Ascending, 1 for Descending (default: Descending)
-        /// 
-        /// **Behavior:**
-        /// - Returns ALL active events for user's organization when no filters are provided
-        /// - Apply additional filters to narrow down results
-        /// - Only returns active (non-deleted) events
-        /// - Results are paginated and sorted as specified
-        /// - Multi-tenant isolation enforced through JWT token
         /// </remarks>
         /// <response code="200">Returns the paginated list of events with total count</response>
         /// <response code="400">If the request is invalid or contains invalid data</response>
@@ -158,55 +135,6 @@ namespace Runnatics.Api.Controller
         ///             "maxDisplayedRecords": 100
         ///         },
         ///     }
-        /// 
-        /// **Authentication:**
-        /// - Requires valid JWT token in Authorization header
-        /// - **TenantId**: Automatically extracted from JWT token (not in request body)
-        /// - **createdBy**: Automatically extracted from JWT token (not in request body)
-        /// - User can only create events for their own organization
-        /// - Multi-tenant isolation enforced
-        ///     
-        /// **Required Fields:**
-        /// - **name**: Event name (max 255 characters)
-        /// - **slug**: URL-friendly identifier (max 100 characters)
-        /// - **eventDate**: Date and time of the event (must be in the future)
-        /// 
-        /// **Optional Fields:**
-        /// - **description**: Detailed event description
-        /// - **timeZone**: Event timezone (default: "Asia/Kolkata")
-        /// - **venueName**: Name of the venue (max 255 characters)
-        /// - **venueAddress**: Full address of the venue
-        /// - **venueLatitude**: GPS latitude coordinate
-        /// - **venueLongitude**: GPS longitude coordinate
-        /// - **status**: Event status (default: "Draft") - Draft, Active, InProgress, Completed, Cancelled
-        /// - **maxParticipants**: Maximum number of participants allowed
-        /// - **registrationDeadline**: Last date for participant registration
-        /// - **eventSettings**: Event-specific configuration settings
-        /// - **leaderboardSettings**: Leaderboard display and behavior settings
-        /// 
-        /// **Event Settings:**
-        /// - All boolean flags with sensible defaults
-        /// - Controls event visibility, editing permissions, and display options
-        /// 
-        /// **Leaderboard Settings:**
-        /// - **autoRefreshIntervalSec**: Refresh interval (5-300 seconds, default: 30)
-        /// - **maxDisplayedRecords**: Records to display (10-1000, default: 100)
-        /// - Controls result display options and real-time updates
-        /// 
-        /// **Validation:**
-        /// - Prevents creating events with past dates
-        /// - Checks for duplicate events (same name, date, organization)
-        /// - Validates all required fields and data formats
-        /// - Ensures organization ID from token matches event organization
-        /// 
-        /// **Response:**
-        /// Returns the complete event object including:
-        /// - Generated event ID
-        /// - All event details
-        /// - Associated event settings (if provided)
-        /// - Associated leaderboard settings (if provided)
-        /// - Organization information
-        /// - Audit information (created date, created by)
         /// </remarks>
         /// <response code="204">Event created successfully with no content returned</response>
         /// <response code="400">If the request is invalid, contains invalid data, or validation fails</response>
@@ -395,56 +323,6 @@ namespace Runnatics.Api.Controller
         ///       }
         ///   }
         /// 
-        /// **Authentication:**
-        /// - Requires valid JWT token in Authorization header
-        /// - **TenantId**: Automatically extracted from JWT token (not in request body)
-        /// - **updatedBy**: Automatically extracted from JWT token (not in request body)
-        /// - User can only update events for their own organization
-        /// - Multi-tenant isolation enforced
-        ///   
-        /// **Required Fields:**
-        /// - **name**: Event name (max 255 characters)
-        /// - **slug**: URL-friendly identifier (max 100 characters)
-        /// - **eventDate**: Date and time of the event
-        /// 
-        /// **Optional Fields:**
-        /// - **description**: Detailed event description
-        /// - **timeZone**: Event timezone (default: "Asia/Kolkata")
-        /// - **venueName**: Name of the venue (max 255 characters)
-        /// - **venueAddress**: Full address of the venue
-        /// - **venueLatitude**: GPS latitude coordinate
-        /// - **venueLongitude**: GPS longitude coordinate
-        /// - **status**: Event status - Draft, Active, InProgress, Completed, Cancelled
-        /// - **maxParticipants**: Maximum number of participants allowed
-        /// - **registrationDeadline**: Last date for participant registration
-        /// - **eventSettings**: Event-specific configuration settings
-        /// - **leaderboardSettings**: Leaderboard display and behavior settings
-        /// 
-        /// **Event Settings:**
-        /// - All boolean flags with sensible defaults
-        /// - Controls event visibility, editing permissions, and display options
-        /// - If not provided, existing settings remain unchanged
-        /// 
-        /// **Leaderboard Settings:**
-        /// - **autoRefreshIntervalSec**: Refresh interval (5-300 seconds, default: 30)
-        /// - **maxDisplayedRecords**: Records to display (10-1000, default: 100)
-        /// - Controls result display options and real-time updates
-        /// - If not provided, existing settings remain unchanged
-        /// 
-        /// **Validation:**
-        /// - Verifies event exists and belongs to user's organization
-        /// - Validates all required fields and data formats
-        /// - Checks for duplicate events when name or date is changed
-        /// - Ensures organization ID from token matches event organization
-        /// 
-        /// **Response:**
-        /// Returns the complete updated event object including:
-        /// - Event ID
-        /// - All updated event details
-        /// - Associated event settings (updated or existing)
-        /// - Associated leaderboard settings (updated or existing)
-        /// - Organization information
-        /// - Audit information (updated date, updated by)
         /// </remarks>
         /// <response code="200">Event updated successfully with all details</response>
         /// <response code="400">If the request is invalid, contains invalid data, or validation fails</response>

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
+using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Data.Entities;
@@ -114,21 +115,24 @@ namespace Runnatics.Services
                     // If settings supplied, map and attach to the race so EF can persist in one SaveChanges
                     if (request.RaceSettings != null)
                     {
-                        //var settings = _mapper.Map<RaceSettings>(request.RaceSettings);
-                        //settings.AuditProperties = CreateAuditProperties(currentUserId);
-
-                        //// Attach via navigation so EF will set FK when saving
-                        //race.RaceSettings = settings;
-
                         race.RaceSettings = CreateRaceSettings(request.RaceSettings, currentUserId);
-
                     }
 
                     var raceRepo = _repository.GetRepository<Race>();
                     await raceRepo.AddAsync(race);
 
-                    // Single SaveChanges persists race and optional settings (EF will populate FK)
+                    // Save race first to obtain race.Id for race-level leaderboard settings
                     await _repository.SaveChangesAsync();
+
+                    // If leaderboard settings provided at race-level, create a LeaderboardSettings record
+                    // with RaceId set to the newly created race Id and OverrideSettings set to true.
+                    if (request.LeaderboardSettings != null)
+                    {
+                        var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+                        var raceLevelLb = CreateRaceLevelLeaderboardSettings(request.LeaderboardSettings, currentUserId, eventId, race.Id);
+                        await leaderboardRepo.AddAsync(raceLevelLb);
+                        await _repository.SaveChangesAsync();
+                    }
 
                     await _repository.CommitTransactionAsync();
 
@@ -191,6 +195,7 @@ namespace Runnatics.Services
                                                        !e.AuditProperties.IsDeleted)
                                                        .Include(e => e.RaceSettings)
                                                        .Include(e => e.Event)
+                                                       .Include(e => e.LeaderboardSettings)
                                                        .AsNoTracking()
                                                        .FirstOrDefaultAsync();
 
@@ -250,6 +255,27 @@ namespace Runnatics.Services
 
                 // Persist changes
                 await SaveRaceChangesAsync(raceEntity);
+
+                // If request contains race-level leaderboard settings, ensure RaceId and OverrideSettings are set
+                if (request.LeaderboardSettings != null)
+                {
+                    var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+                    if (raceEntity.LeaderboardSettings == null)
+                    {
+                        var raceLevelLb = CreateRaceLevelLeaderboardSettings(request.LeaderboardSettings, currentUserId, raceEntity.EventId, raceEntity.Id);
+                        await leaderboardRepo.AddAsync(raceLevelLb);
+                    }
+                    else
+                    {
+                        // Update existing race-level leaderboard settings and ensure OverrideSettings true
+                        _mapper.Map(request.LeaderboardSettings, raceEntity.LeaderboardSettings);
+                        raceEntity.LeaderboardSettings.OverrideSettings = true;
+                        raceEntity.LeaderboardSettings.RaceId = raceEntity.Id;
+                        UpdateAuditProperties(raceEntity.LeaderboardSettings.AuditProperties, currentUserId);
+                        await leaderboardRepo.UpdateAsync(raceEntity.LeaderboardSettings);
+                    }
+                    await _repository.SaveChangesAsync();
+                }
 
                 _logger.LogInformation("Race updated successfully: {RaceId} - {Name} by User {UserId}",
                                             id, raceEntity.Title, currentUserId);
@@ -335,6 +361,7 @@ namespace Runnatics.Services
                       e.AuditProperties.IsActive &&
                       !e.AuditProperties.IsDeleted)
                       .Include(e => e.RaceSettings)
+                      .Include(e => e.LeaderboardSettings)
                       .FirstOrDefaultAsync();
         }
 
@@ -373,6 +400,20 @@ namespace Runnatics.Services
             raceSettings.RaceId = 0; // Will be set after Race is saved
             raceSettings.AuditProperties = CreateAuditProperties(userId);
             return raceSettings;
+        }
+
+        /// <summary>
+        /// Creates race-level leaderboard settings entity (RaceId will be set to created race.Id)
+        /// </summary>
+        private LeaderboardSettings CreateRaceLevelLeaderboardSettings(LeaderboardSettingsRequest request, int userId, int eventId, int raceId)
+        {
+            var lb = _mapper.Map<LeaderboardSettings>(request);
+            lb.Id = 0;
+            lb.EventId = eventId;
+            lb.RaceId = raceId;
+            lb.OverrideSettings = true;
+            lb.AuditProperties = CreateAuditProperties(userId);
+            return lb;
         }
 
         /// <summary>

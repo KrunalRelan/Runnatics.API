@@ -1,11 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace Runnatics.Models.Client.Requests.Events
+﻿namespace Runnatics.Models.Client.Requests.Events
 {
     public class LeaderboardSettingsRequest
     {
@@ -44,5 +37,7 @@ namespace Runnatics.Models.Client.Requests.Events
         public int? NumberOfResultsToShowOverall { get; set; }
 
         public int? NumberOfResultsToShowCategory { get; set; }
+
+        public bool? OverrideSettings { get; set; }
     }
 }

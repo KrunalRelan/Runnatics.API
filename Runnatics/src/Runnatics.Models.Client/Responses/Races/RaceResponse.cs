@@ -8,7 +8,7 @@ namespace Runnatics.Models.Client.Responses.Races
         public string Id { get; set; } = string.Empty;
         public string EventId { get; set; } = string.Empty;
 
-        public string? Title { get; set; } 
+        public string? Title { get; set; }
 
         public string? Description { get; set; }
 
@@ -29,6 +29,8 @@ namespace Runnatics.Models.Client.Responses.Races
 
         // Navigation Properties
         public RaceSettingsResponse? RaceSettings { get; set; }
+
+        public LeaderboardSettings? LeaderboardSettings { get; set; }
 
         public EventResponse? Event { get; set; }
 

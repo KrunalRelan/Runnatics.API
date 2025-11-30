@@ -10,10 +10,9 @@ using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Models.Data.EventOrganizers;
 using Runnatics.API.Models.Requests;
-using Runnatics.Services.Mappings;
 using Runnatics.Models.Client.Responses.Participants;
 
-namespace Runnatics.Services
+namespace Runnatics.Services.Mappings
 {
     /// <summary>
     /// AutoMapper profile for mapping between data entities and client models
@@ -154,7 +153,7 @@ namespace Runnatics.Services
 
             CreateMap<LeaderboardSettings, LeaderboardSettingsResponse>()
                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
-                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
+                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.EventId))
                 .ForMember(dest => dest.ShowOverallResults, opt => opt.MapFrom(src => src.ShowOverallResults))
                 .ForMember(dest => dest.ShowCategoryResults, opt => opt.MapFrom(src => src.ShowCategoryResults))
                 .ForMember(dest => dest.ShowGenderResults, opt => opt.MapFrom(src => src.ShowGenderResults))
@@ -189,6 +188,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.EventOrganizerName));
             #endregion
+
             #region Races mappings
             CreateMap<RaceRequest, Race>()
                 .ForMember(d => d.Id, opt => opt.Ignore())
@@ -236,9 +236,24 @@ namespace Runnatics.Services
                 .ForMember(d => d.DataHeaders, opt => opt.MapFrom(src => src.DataHeaders))
                 .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(d => d.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
+
+            CreateMap<LeaderboardSettingsRequest, LeaderboardSettings>()
+                .ForMember(d => d.EventId, opt => opt.Ignore())
+                .ForMember(d => d.Id, opt => opt.Ignore())
+                .ForMember(d => d.ShowMedalIcon, opt => opt.MapFrom(src => src.ShowMedalIcon))
+                .ForMember(d => d.AuditProperties, opt => opt.Ignore())
+                .ForMember(d => d.AllowAnonymousView, opt => opt.MapFrom(src => src.AllowAnonymousView))
+                .ForMember(d => d.AutoRefreshIntervalSec, opt => opt.MapFrom(src => src.AutoRefreshIntervalSec ?? 0))
+                .ForMember(d => d.MaxDisplayedRecords, opt => opt.MapFrom(src => src.MaxDisplayedRecords ?? 0))
+                .ForMember(d => d.NumberOfResultsToShowCategory, opt => opt.MapFrom(src => src.NumberOfResultsToShowCategory ?? 0))
+                .ForMember(d => d.NumberOfResultsToShowOverall, opt => opt.MapFrom(src => src.NumberOfResultsToShowOverall ?? 0))
+                .ForMember(d => d.EnableLiveLeaderboard, opt => opt.MapFrom(src => false))
+                .ForMember(d => d.Event, opt => opt.Ignore());
+
             #endregion
 
             #region Participant mappings
+
             CreateMap<Models.Data.Entities.Participant, Models.Client.Responses.Participants.Participant>()
                 .ForMember(d => d.Id, opt => opt.MapFrom(src => src.Id))
                 .ForMember(d => d.Bib, opt => opt.MapFrom(src => src.BibNumber ?? ""))

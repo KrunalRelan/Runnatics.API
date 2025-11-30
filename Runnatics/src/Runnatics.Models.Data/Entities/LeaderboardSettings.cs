@@ -9,7 +9,7 @@ namespace Runnatics.Models.Data.Entities
         public int Id { get; set; }
 
         [Required]
-        public int EventId { get; set; }
+        public int? EventId { get; set; }
 
         public int? RaceId { get; set; }
 

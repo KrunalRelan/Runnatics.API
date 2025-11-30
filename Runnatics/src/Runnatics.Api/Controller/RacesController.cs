@@ -296,6 +296,5 @@ namespace Runnatics.Api.Controller
             response.Message = new { message = "Race deleted successfully", id };
             return Ok(response);
         }
-
     }
 }

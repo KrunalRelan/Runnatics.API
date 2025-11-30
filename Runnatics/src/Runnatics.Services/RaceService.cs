@@ -7,6 +7,7 @@ using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
+using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -29,7 +30,7 @@ namespace Runnatics.Services
         protected readonly IEncryptionService _encryptionService = encryptionService;
 
 
-        public async Task<PagingList<RaceResponse>> Search(string eId, RaceSearchRequest request)
+        public async Task<Models.Client.Common.PagingList<RaceResponse>> Search(string eId, RaceSearchRequest request)
         {
             try
             {
@@ -48,7 +49,7 @@ namespace Runnatics.Services
                 var raceResponses = await LoadRaceResponsesAsync(searchResults);
 
                 // Create paging result
-                var paging = new PagingList<RaceResponse>(raceResponses)
+                var paging = new Models.Client.Common.PagingList<RaceResponse>(raceResponses)
                 {
                     TotalCount = searchResults.TotalCount
                 };
@@ -71,6 +72,8 @@ namespace Runnatics.Services
                 return [];
             }
         }
+
+        // RaceService.cs - Complete Create Method
 
         public async Task<bool> Create(string eId, RaceRequest request)
         {
@@ -103,43 +106,53 @@ namespace Runnatics.Services
 
                 try
                 {
+                    // Map race basic properties
                     var race = _mapper.Map<Race>(request);
                     race.EventId = eventId;
                     race.AuditProperties = CreateAuditProperties(currentUserId);
 
+                    // Handle RaceSettings
                     if (request.RaceSettings != null)
                     {
                         race.RaceSettings = CreateRaceSettings(request.RaceSettings, currentUserId);
                     }
 
+                    // Handle LeaderboardSettings - Create ONLY if override is enabled
+                    if (request.LeaderboardSettings != null)
+                    {
+                        race.LeaderboardSettings = _mapper.Map<LeaderboardSettings>(request.LeaderboardSettings);
+                        race.LeaderboardSettings.EventId = eventId;
+                        race.LeaderboardSettings.AuditProperties = CreateAuditProperties(currentUserId);
+                    }
+                    // If request.LeaderboardSettings is null, race.LeaderboardSettings stays null
+                    // This means the race will use event-level settings (fallback)
+
+                    // Add race to repository
                     var raceRepo = _repository.GetRepository<Race>();
                     await raceRepo.AddAsync(race);
+
+                    // Save everything in one transaction
+                    // EF Core will:
+                    // 1. Insert Race record
+                    // 2. Automatically insert LeaderboardSettings (if not null) with correct RaceId
                     await _repository.SaveChangesAsync();
-
-                    // If leaderboard settings provided with override flag, create race-level settings
-                    if (request.LeaderboardSettings != null && request.LeaderboardSettings.OverrideSettings)
-                    {
-                        var raceLevelLb = CreateRaceLevelLeaderboardSettings(
-                            request.LeaderboardSettings,
-                            currentUserId,
-                            eventId,
-                            race.Id);
-
-                        var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
-                        await leaderboardRepo.AddAsync(raceLevelLb);
-                        await _repository.SaveChangesAsync();
-                    }
 
                     await _repository.CommitTransactionAsync();
 
-                    _logger.LogInformation("Race created successfully. RaceId: {RaceId}, EventId: {EventId}, CreatedBy: {UserId}",
-                        race.Id, race.EventId, currentUserId);
+                    _logger.LogInformation(
+                        "Race created successfully. RaceId: {RaceId}, EventId: {EventId}, HasCustomLeaderboard: {HasCustom}, CreatedBy: {UserId}",
+                        race.Id,
+                        race.EventId,
+                        race.LeaderboardSettings != null,
+                        currentUserId);
+
                     return true;
                 }
                 catch (Exception exInner)
                 {
                     await _repository.RollbackTransactionAsync();
-                    _logger.LogError(exInner, "Error creating race for EventId: {EventId}", eventId);
+                    _logger.LogError(exInner, "Error creating race for EventId: {EventId}. Error: {Error}",
+                        eventId, exInner.Message);
                     ErrorMessage = "Error creating race.";
                     return false;
                 }
@@ -576,7 +589,7 @@ namespace Runnatics.Services
                        expression,
                        request.PageSize,
                        request.PageNumber,
-                       request.SortDirection == SortDirection.Ascending
+                       request.SortDirection == Models.Client.Common.SortDirection.Ascending
                             ? Models.Data.Common.SortDirection.Ascending
                            : Models.Data.Common.SortDirection.Descending,
                        mappedSortField,

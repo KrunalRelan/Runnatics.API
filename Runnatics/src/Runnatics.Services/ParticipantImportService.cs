@@ -23,9 +23,7 @@ namespace Runnatics.Services
         private readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
 
-        public async Task<ParticipantImportResponse> UploadParticipantsCsvAsync(
-            string eventId,
-            ParticipantImportRequest request)
+        public async Task<ParticipantImportResponse> UploadParticipantsCsvAsync(string eventId, ParticipantImportRequest request)
         {
             // Get user context
             var tenantId = _userContext.TenantId;

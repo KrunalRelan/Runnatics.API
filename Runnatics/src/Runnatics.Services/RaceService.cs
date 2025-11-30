@@ -260,13 +260,11 @@ namespace Runnatics.Services
             {
                 var currentUserId = _userContext.UserId;
 
-                // Validate request
                 if (!ValidateRaceRequest(request))
                 {
                     return false;
                 }
 
-                // Fetch event with related entities in a single query
                 var raceEntity = await GetRaceForUpdateAsync(id, eventId);
                 if (raceEntity == null)
                 {
@@ -275,7 +273,6 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                // Check for duplicates only if name or date changed
                 if (HasRaceIdentityChanged(raceEntity, request) &&
                         await IsDuplicateRaceAsync(request))
                 {
@@ -284,14 +281,13 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                // Update event and related entities
                 UpdateRaceEntity(raceEntity, request, currentUserId);
-
-                // Persist changes
                 await SaveRaceChangesAsync(raceEntity);
 
+                // ============================================
                 // Handle leaderboard settings override
-                if (request.LeaderboardSettings != null && request.OverrideSettings.HasValue)
+                // ============================================
+                if (request.LeaderboardSettings != null && request.OverrideSettings.HasValue && request.OverrideSettings.Value)
                 {
                     var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
 
@@ -300,47 +296,58 @@ namespace Runnatics.Services
                         .GetQuery(lb =>
                             lb.EventId == raceEntity.EventId &&
                             lb.RaceId == raceEntity.Id &&
-                            lb.OverrideSettings == true)
+                            lb.AuditProperties.IsActive &&
+                            !lb.AuditProperties.IsDeleted)
                         .FirstOrDefaultAsync();
 
                     if (existingRaceSettings == null)
                     {
-                        // Create new race-level override
+                        // ✅ CREATE new race-level override
                         var raceLevelLb = CreateRaceLevelLeaderboardSettings(
                             request.LeaderboardSettings,
                             currentUserId,
                             raceEntity.EventId,
                             raceEntity.Id);
+
                         await leaderboardRepo.AddAsync(raceLevelLb);
                     }
                     else
                     {
-                        // Update existing race-level override
+                        // ✅ UPDATE existing race-level override
+                        // Entity is already tracked, just modify it
                         _mapper.Map(request.LeaderboardSettings, existingRaceSettings);
-                        existingRaceSettings.OverrideSettings = true;
                         UpdateAuditProperties(existingRaceSettings.AuditProperties, currentUserId);
-                        await leaderboardRepo.UpdateAsync(existingRaceSettings);
+
+                        // ❌ REMOVE THIS LINE - Entity is already tracked!
+                        // await leaderboardRepo.UpdateAsync(existingRaceSettings);
+
+                        // EF will automatically detect changes when you call SaveChanges
                     }
 
                     await _repository.SaveChangesAsync();
                 }
                 else if (!(request.OverrideSettings ?? false))
                 {
-                    // If override is turned off, remove race-level settings
+                    // ✅ If override is turned OFF, soft delete race-level settings
                     var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
                     var existingRaceSettings = await leaderboardRepo
                         .GetQuery(lb =>
                             lb.EventId == raceEntity.EventId &&
                             lb.RaceId == raceEntity.Id &&
-                            lb.OverrideSettings == true)
+                            lb.AuditProperties.IsActive &&
+                            !lb.AuditProperties.IsDeleted)
                         .FirstOrDefaultAsync();
 
                     if (existingRaceSettings != null)
                     {
+                        // Entity is already tracked, just modify it
                         existingRaceSettings.AuditProperties.IsDeleted = true;
                         existingRaceSettings.AuditProperties.IsActive = false;
                         UpdateAuditProperties(existingRaceSettings.AuditProperties, currentUserId);
-                        await leaderboardRepo.UpdateAsync(existingRaceSettings);
+
+                        // ❌ REMOVE THIS LINE - Entity is already tracked!
+                        // await leaderboardRepo.UpdateAsync(existingRaceSettings);
+
                         await _repository.SaveChangesAsync();
                     }
                 }
@@ -350,8 +357,8 @@ namespace Runnatics.Services
             }
             catch (DbUpdateException dbEx)
             {
-                this.ErrorMessage = "Database error occurred while updating the event.";
-                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}", id);
+                this.ErrorMessage = "Database error occurred while updating the race.";
+                _logger.LogError(dbEx, "Database error during race update for ID: {EventId}", id);
                 return false;
             }
             catch (Exception ex)

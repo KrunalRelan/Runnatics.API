@@ -37,7 +37,5 @@
         public int? NumberOfResultsToShowOverall { get; set; }
 
         public int? NumberOfResultsToShowCategory { get; set; }
-
-        public bool OverrideSettings { get; set; }
     }
 }

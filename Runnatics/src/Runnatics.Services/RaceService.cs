@@ -122,6 +122,7 @@ namespace Runnatics.Services
                     {
                         race.LeaderboardSettings = _mapper.Map<LeaderboardSettings>(request.LeaderboardSettings);
                         race.LeaderboardSettings.EventId = eventId;
+                        race.LeaderboardSettings.OverrideSettings = request.OverrideSettings ?? false;
                         race.LeaderboardSettings.AuditProperties = CreateAuditProperties(currentUserId);
                     }
                     // If request.LeaderboardSettings is null, race.LeaderboardSettings stays null
@@ -290,7 +291,7 @@ namespace Runnatics.Services
                 await SaveRaceChangesAsync(raceEntity);
 
                 // Handle leaderboard settings override
-                if (request.LeaderboardSettings != null && request.LeaderboardSettings.OverrideSettings)
+                if (request.LeaderboardSettings != null && request.OverrideSettings.HasValue)
                 {
                     var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
 
@@ -323,7 +324,7 @@ namespace Runnatics.Services
 
                     await _repository.SaveChangesAsync();
                 }
-                else if (!(request.LeaderboardSettings?.OverrideSettings ?? false))
+                else if (!(request.OverrideSettings ?? false))
                 {
                     // If override is turned off, remove race-level settings
                     var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();

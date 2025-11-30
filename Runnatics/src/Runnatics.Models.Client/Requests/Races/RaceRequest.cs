@@ -19,6 +19,8 @@ namespace Runnatics.Models.Client.Requests.Races
 
         public int? MaxParticipants { get; set; }
 
+        public bool? OverrideSettings { get; set; }
+
         public RaceSettingsRequest? RaceSettings { get; set; }
 
         // Leaderboard Settings

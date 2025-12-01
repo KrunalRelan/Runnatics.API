@@ -2,8 +2,11 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
+using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Responses.Participants;
+using Runnatics.Services;
 using Runnatics.Services.Interface;
+using System.ComponentModel.DataAnnotations;
 using System.Net;
 
 namespace Runnatics.Api.Controller
@@ -16,11 +19,11 @@ namespace Runnatics.Api.Controller
     [Produces("application/json")]
     public class ParticipantsController : ControllerBase
     {
-        private readonly IParticipantImportService _importService;
+        private readonly IParticipantImportService _service;
 
         public ParticipantsController(IParticipantImportService importService)
         {
-            _importService = importService;
+            _service = importService;
         }
 
         /// <summary>
@@ -54,13 +57,13 @@ namespace Runnatics.Api.Controller
 
             var response = new ResponseBase<ParticipantImportResponse>();
 
-            var result = await _importService.UploadParticipantsCsvAsync(eventId, request);
+            var result = await _service.UploadParticipantsCsvAsync(eventId, request);
 
-            if (_importService.HasError)
+            if (_service.HasError)
             {
                 response.Error = new ResponseBase<ParticipantImportResponse>.ErrorData
                 {
-                    Message = _importService.ErrorMessage
+                    Message = _service.ErrorMessage
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
@@ -101,16 +104,16 @@ namespace Runnatics.Api.Controller
 
             var response = new ResponseBase<ProcessImportResponse>();
 
-            var result = await _importService.ProcessStagingDataAsync(request);
+            var result = await _service.ProcessStagingDataAsync(request);
 
-            if (_importService.HasError)
+            if (_service.HasError)
             {
                 response.Error = new ResponseBase<ProcessImportResponse>.ErrorData
                 {
-                    Message = _importService.ErrorMessage
+                    Message = _service.ErrorMessage
                 };
 
-                if (_importService.ErrorMessage.Contains("not found"))
+                if (_service.ErrorMessage.Contains("not found"))
                 {
                     return NotFound(response);
                 }
@@ -120,6 +123,60 @@ namespace Runnatics.Api.Controller
 
             response.Message = result;
             return Ok(response);
+        }
+
+        [HttpPost("{eventId}/{raceId}/search")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<PagingList<EventResponse>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> Search([FromBody] ParticipantSearchRequest request, [FromRoute] string eventId, [FromRoute] string raceId)
+        {
+            if (request == null || string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Search request, eventId or raceId cannot be null." });
+            }
+
+            // Validate model state
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                          .SelectMany(v => v.Errors)
+                       .Select(e => e.ErrorMessage)
+                         .ToList()
+                });
+            }
+
+            var response = new ResponseBase<PagingList<ParticipantSearchReponse>>();
+            var result = await _service.Search(request, eventId, raceId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<PagingList<ParticipantSearchReponse>>.ErrorData()
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            response.TotalCount = result.TotalCount;
+
+            return Ok(response);
+        }
+
+        [HttpPost("{eventId}/{raceId}/add-participant")]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> AddParticipant([FromRoute] string eventId, [FromRoute] string raceid)
+        { 
         }
     }
 }

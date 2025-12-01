@@ -1,17 +1,16 @@
 namespace Runnatics.Repositories.EF
 {
+    using Microsoft.Data.SqlClient;
     using Microsoft.EntityFrameworkCore;
     using Runnatics.Models.Data.Common;
     using System;
     using System.Collections.Generic;
     using System.Data;
-    using System.Diagnostics.CodeAnalysis;
     using System.Linq;
     using System.Linq.Expressions;
     using System.Reflection;
     using System.Text;
     using System.Threading.Tasks;
-    using Microsoft.Data.SqlClient;
 
     public class GenericRepository<T>(DbContext context) : IGenericRepository<T> where T : class
     {
@@ -182,10 +181,12 @@ namespace Runnatics.Repositories.EF
             var inputParams = parameters.Where(x => x.Direction != ParameterDirection.Output).Select(x => x.ParameterName).ToList();
             var stringOfParameters = string.Empty;
             var sqlString = new StringBuilder();
+
             foreach (var parameter in inputParams)
             {
                 sqlString.Append($"{parameter} = {parameter},");
             }
+
             stringOfParameters = sqlString.ToString();
             if (!string.IsNullOrEmpty(output))
             {
@@ -195,18 +196,27 @@ namespace Runnatics.Repositories.EF
             {
                 stringOfParameters = string.IsNullOrEmpty(stringOfParameters) ? stringOfParameters : stringOfParameters.Remove(stringOfParameters.LastIndexOf(','));
             }
+
             if (forJob)
             {
                 context.Database.SetCommandTimeout(0);
             }
-            var query = await _dbSet.FromSqlRaw($"exec {procedureName} {stringOfParameters}", parameters.ToArray()).ToListAsync<T>();
+
+            // Use SqlQueryRaw for non-entity types
+            var query = await context.Database
+                .SqlQueryRaw<T>($"exec {procedureName} {stringOfParameters}", parameters.ToArray())
+                .ToListAsync();
+
             toReturn.AddRange(query);
+
             if (!string.IsNullOrEmpty(output))
             {
                 toReturn.TotalCount = (int)parameters[parameters.Length - 1].Value;
             }
+
             return toReturn;
         }
+
         public async Task<List<List<dynamic>>> ExecuteStoredProcedureDataSet<I>(string procedureName, I input)
         {
             List<List<dynamic>> results = new List<List<dynamic>>();

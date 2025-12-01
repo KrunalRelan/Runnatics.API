@@ -11,7 +11,7 @@ namespace Runnatics.Data.EF.Config
             builder.ToTable("LeaderboardSettings");
 
             builder.HasKey(e => e.Id);
-            
+
             builder.Property(e => e.Id)
                 .HasColumnName("Id")
                 .ValueGeneratedOnAdd()
@@ -96,7 +96,9 @@ namespace Runnatics.Data.EF.Config
                 .HasDefaultValue(100);
 
             builder.Property(e => e.OverrideSettings)
-               .HasColumnName("OverrideSettings");
+               .HasColumnName("OverrideSettings")
+               .IsRequired()
+               .HasDefaultValue(false);
 
             // Relationships
             builder.HasOne(e => e.Event)

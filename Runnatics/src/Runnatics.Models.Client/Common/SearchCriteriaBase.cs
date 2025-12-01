@@ -6,6 +6,8 @@ namespace Runnatics.Models.Client.Common
     {
         public const int DefaultPageSize = 100;
 
+        public string SearchString { get; set; } = string.Empty;
+
         [StringLength(50)]
         public string SortFieldName { get; set; } = string.Empty;
 

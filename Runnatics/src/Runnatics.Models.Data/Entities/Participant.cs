@@ -1,6 +1,5 @@
-using System.ComponentModel.DataAnnotations;
 using Runnatics.Models.Data.Common;
-using Runnatics.Models.Data.Entities;
+using System.ComponentModel.DataAnnotations;
 
 namespace Runnatics.Models.Data.Entities
 {

@@ -1,24 +1,27 @@
+using AutoMapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
+using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Responses.Participants;
-using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
-using System.Globalization;
+using System.Linq.Expressions;
 using System.Text;
 
 namespace Runnatics.Services
 {
     public class ParticipantImportService(
         IUnitOfWork<RaceSyncDbContext> repository,
+        IMapper mapper,
         ILogger<ParticipantImportService> logger,
         IUserContextService userContext,
         IEncryptionService encryptionService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
     {
+        protected readonly IMapper _mapper = mapper;
         private readonly ILogger<ParticipantImportService> _logger = logger;
         private readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
@@ -103,7 +106,7 @@ namespace Runnatics.Services
                     // ErrorCount = 0,
                     Status = "Pending",
                     //UploadedAt = DateTime.UtcNow,
-                    AuditProperties = new AuditProperties
+                    AuditProperties = new Models.Data.Common.AuditProperties
                     {
                         CreatedBy = userId,
                         CreatedDate = DateTime.UtcNow,
@@ -126,7 +129,7 @@ namespace Runnatics.Services
                 foreach (var record in stagingRecords)
                 {
                     record.ImportBatchId = importBatch.Id;
-                    record.AuditProperties = new AuditProperties
+                    record.AuditProperties = new Models.Data.Common.AuditProperties
                     {
                         CreatedBy = userId,
                         CreatedDate = DateTime.UtcNow,
@@ -250,128 +253,7 @@ namespace Runnatics.Services
                 var successCount = 0;
                 var errorCount = 0;
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-                /*
-                // Process each staging record
-                foreach (var staging in stagingRecords)
-                {
-                    try
-                    {
-                        // Parse name
-                        var (firstName, lastName) = ParseName(staging.FirstName);
 
-                        // Clean phone number
-                        var cleanedPhone = CleanPhoneNumber(staging.Mobile);
-
-                        // Check for duplicate BIB
-                        if (!string.IsNullOrWhiteSpace(staging.Bib))
-                        {
-                            var existingBib = await participantRepo.GetQuery(p =>
-                                p.EventId == decryptedEventId &&
-                                p.BibNumber == staging.Bib &&
-                                !p.AuditProperties.IsDeleted)
-                                .AsNoTracking()
-                                .AnyAsync();
-
-                            if (existingBib)
-                            {
-                                staging.ProcessingStatus = "Error";
-                                staging.ErrorMessage = $"BIB number {staging.Bib} already exists for this event";
-                                errorCount++;
-
-                                response.Errors.Add(new ProcessingError
-                                {
-                                    StagingId = staging.Id,
-                                    RowNumber = staging.RowNumber,
-                                    Bib = staging.Bib ?? "",
-                                    Name = staging.FirstName ?? "",
-                                    ErrorMessage = staging.ErrorMessage
-                                });
-
-                                continue;
-                            }
-                        }
-
-                        // Determine race - use provided raceId or try to get default race for event
-                        int finalRaceId = raceId ?? await GetDefaultRaceForEventAsync(decryptedEventId);
-
-                        if (finalRaceId == 0)
-                        {
-                            staging.ProcessingStatus = "Error";
-                            staging.ErrorMessage = "No race specified and no default race found for event";
-                            errorCount++;
-
-                            response.Errors.Add(new ProcessingError
-                            {
-                                StagingId = staging.Id,
-                                RowNumber = staging.RowNumber,
-                                Bib = staging.Bib ?? "",
-                                Name = staging.FirstName ?? "",
-                                ErrorMessage = staging.ErrorMessage
-                            });
-
-                            continue;
-                        }
-
-                        // Create participant
-                        var participant = new Models.Data.Entities.Participant
-                        {
-                            TenantId = tenantId,
-                            EventId = decryptedEventId,
-                            RaceId = finalRaceId,
-                            ImportBatchId = decryptedImportBatchId,
-                            BibNumber = staging.Bib,
-                            FirstName = firstName,
-                            LastName = lastName,
-                            Email = staging.Email,
-                            Phone = cleanedPhone,
-                            Gender = NormalizeGender(staging.Gender),
-                            AgeCategory = staging.AgeCategory,
-                            Status = "Registered",
-                            RegistrationDate = DateTime.UtcNow,
-                            AuditProperties = new AuditProperties
-                            {
-                                CreatedBy = userId,
-                                CreatedDate = DateTime.UtcNow,
-                                IsActive = true,
-                                IsDeleted = false
-                            }
-                        };
-
-                        await participantRepo.AddAsync(participant);
-                        await _repository.SaveChangesAsync();
-
-                        // Update staging record
-                        staging.ProcessingStatus = "Success";
-                        staging.ParticipantId = participant.Id;
-                        staging.AuditProperties.UpdatedBy = userId;
-                        staging.AuditProperties.UpdatedDate = DateTime.UtcNow;
-
-                        successCount++;
-                    }
-                    catch (Exception ex)
-                    {
-                        staging.ProcessingStatus = "Error";
-                        staging.ErrorMessage = ex.Message;
-                        staging.AuditProperties.UpdatedBy = userId;
-                        staging.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        errorCount++;
-
-                        response.Errors.Add(new ProcessingError
-                        {
-                            StagingId = staging.Id,
-                            RowNumber = staging.RowNumber,
-                            Bib = staging.Bib ?? "",
-                            Name = staging.FirstName ?? "",
-                            ErrorMessage = ex.Message
-                        });
-
-                        _logger.LogError(ex, "Error processing staging record {StagingId}", staging.Id);
-                    }
-                }
-
-                // Update staging records
-                await _repository.SaveChangesAsync();
-                */
                 var batchProcessor = await _repository.ExecuteStoredProcedure<ParticipantsStagingRequest, ProcessImportResponse>("sp_ProcessParticipantStaging_Test",
 
                    new ParticipantsStagingRequest
@@ -395,6 +277,46 @@ namespace Runnatics.Services
                 response.Status = "Failed";
                 return response;
             }
+        }
+
+        public async Task<PagingList<ParticipantSearchReponse>> Search(ParticipantSearchRequest request, string eventId, string raceId)
+        {
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+            var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+            var expression = BuildSearchExpression(request, decryptedEventId, decryptedRaceId);
+            var mappedSortField = GetMappedSortField(request.SortFieldName);
+
+            var response = await participantRepo.SearchAsync(
+                       expression,
+                       request.PageSize,
+                       request.PageNumber,
+                       request.SortDirection == SortDirection.Ascending
+                            ? Models.Data.Common.SortDirection.Ascending
+                           : Models.Data.Common.SortDirection.Descending,
+                       mappedSortField,
+                       false,
+                       false);
+
+            var toReturn = _mapper.Map<PagingList<ParticipantSearchReponse>>(response);
+
+            return toReturn;
+        }
+
+
+        /// <summary>
+        /// Builds the filter expression for event search
+        /// </summary>
+        private static Expression<Func<Models.Data.Entities.Participant, bool>> BuildSearchExpression(ParticipantSearchRequest request, int eventId, int raceId)
+        {
+            return e =>
+                e.EventId == eventId &&
+                e.RaceId == raceId &&
+                (!request.Status.HasValue || e.Status == request.Status.Value.ToString()) &&
+                (string.IsNullOrEmpty(request.Category) || e.AgeCategory == request.Category) &&
+                e.AuditProperties.IsActive &&
+                !e.AuditProperties.IsDeleted;
         }
 
         private async Task<List<ParticipantStaging>> ParseCsvFileAsync(IFormFile file)
@@ -517,81 +439,33 @@ namespace Runnatics.Services
                 });
             }
 
-            // if (string.IsNullOrWhiteSpace(record.FirstName))
-            // {
-            //     errors.Add(new ValidationError
-            //     {
-            //         RowNumber = record.RowNumber,
-            //         Field = "Name",
-            //         Message = "Name is required",
-            //         Value = record.FirstName ?? ""
-            //     });
-            // }
-
             return errors;
         }
 
-        private (string firstName, string lastName) ParseName(string? fullName)
+        /// <summary>
+        /// Maps sort field name from client format to database format
+        /// </summary>
+        private string? GetMappedSortField(string? sortFieldName)
         {
-            if (string.IsNullOrWhiteSpace(fullName))
-                return ("Unknown", "");
-
-            var parts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-            if (parts.Length == 0)
-                return ("Unknown", "");
-
-            if (parts.Length == 1)
-                return (parts[0], "");
-
-            var firstName = parts[0];
-            var lastName = string.Join(" ", parts.Skip(1));
-
-            return (firstName, lastName);
-        }
-
-        private string? CleanPhoneNumber(string? phone)
-        {
-            if (string.IsNullOrWhiteSpace(phone))
-                return null;
-
-            return new string(phone.Where(c => char.IsDigit(c) || c == '+').ToArray());
-        }
-
-        private string? NormalizeGender(string? gender)
-        {
-            if (string.IsNullOrWhiteSpace(gender))
-                return null;
-
-            var normalized = gender.Trim().ToLower();
-
-            if (normalized.StartsWith("m") || normalized == "male")
-                return "Male";
-
-            if (normalized.StartsWith("f") || normalized == "female")
-                return "Female";
-
-            return "Other";
-        }
-
-        private async Task<int> GetDefaultRaceForEventAsync(int eventId)
-        {
-            try
+            if (string.IsNullOrEmpty(sortFieldName))
             {
-                var raceRepo = _repository.GetRepository<Race>();
-                var race = await raceRepo.GetQuery(r =>
-                    r.EventId == eventId &&
-                    r.AuditProperties.IsActive &&
-                    !r.AuditProperties.IsDeleted)
-                    .OrderBy(r => r.AuditProperties.CreatedDate)
-                    .FirstOrDefaultAsync();
+                return null;
+            }
 
-                return race?.Id ?? 0;
-            }
-            catch
+            if (SortFieldMapping.TryGetValue(sortFieldName, out var dbFieldName))
             {
-                return 0;
+                return dbFieldName;
             }
+
+            _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", sortFieldName);
+            return "Id";
         }
+
+        // Map client-facing property names to database property names
+        private static readonly Dictionary<string, string> SortFieldMapping = new(StringComparer.OrdinalIgnoreCase)
+        {
+             { "CreatedAt", "AuditProperties.CreatedDate" },
+             { "UpdatedAt", "AuditProperties.UpdatedDate" }
+        };
     }
 }

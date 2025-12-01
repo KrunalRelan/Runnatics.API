@@ -316,7 +316,6 @@ namespace Runnatics.Repositories.EF
                 command.Connection.Open();
             }
             return command;
-
         }
     }
 }

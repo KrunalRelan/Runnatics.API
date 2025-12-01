@@ -372,15 +372,16 @@ namespace Runnatics.Services
                 // Update staging records
                 await _repository.SaveChangesAsync();
                 */
-                var batchProcessor = stagingRepo.ExecuteStoredProcedure<ParticipantsStagingRequest>("sp_ProcessParticipantImportBatch",
+                var batchProcessor = await _repository.ExecuteStoredProcedure<ParticipantsStagingRequest, ProcessImportResponse>("sp_ProcessParticipantStaging_Test",
 
                    new ParticipantsStagingRequest
                    {
                        ImportBatchId = decryptedImportBatchId,
+                       TenantId = tenantId,
                        EventId = decryptedEventId,
                        RaceId = raceId ?? 0,
                        UserId = userId
-                   }, "TotalProcessed");
+                   }, "");
 
 
                 _logger.LogInformation("Processing completed. Success: {Success}, Errors: {Errors}", successCount, errorCount);

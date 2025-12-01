@@ -20,7 +20,10 @@ namespace Runnatics.Data.EF.Config
             // Properties
             builder.Property(e => e.EventId)
                 .HasColumnName("EventId")
-                .IsRequired();
+                .IsRequired(false);
+
+            builder.Property(e => e.RaceId)
+                .HasColumnName("RaceId");
 
             builder.Property(e => e.ShowOverallResults)
                 .HasColumnName("ShowOverallResults")
@@ -92,10 +95,8 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("MaxDisplayedRecords")
                 .HasDefaultValue(100);
 
-            // Indexes
-            builder.HasIndex(e => e.EventId)
-                .IsUnique()
-                .HasDatabaseName("IX_LeaderboardSettings_EventId");
+            builder.Property(e => e.OverrideSettings)
+               .HasColumnName("OverrideSettings");
 
             // Relationships
             builder.HasOne(e => e.Event)

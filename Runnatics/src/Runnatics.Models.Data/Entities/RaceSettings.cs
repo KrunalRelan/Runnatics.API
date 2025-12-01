@@ -23,6 +23,8 @@ namespace Runnatics.Models.Data.Entities
 
         public bool IsTimed { get; set; }
 
+        public bool PublishDnf { get; set; }
+
         public int? DedUpSeconds { get; set; }
 
         public int? EarlyStartCutOff { get; set; }

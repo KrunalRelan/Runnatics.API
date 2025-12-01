@@ -151,6 +151,7 @@ builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddScoped<IEventsService, EventsService>();
 builder.Services.AddScoped<IEventOrganizerService, EventOrganizerService>();
 builder.Services.AddScoped<IRacesService, RaceService>();
+builder.Services.AddScoped<IParticipantImportService, ParticipantImportService>();
 
 // Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);

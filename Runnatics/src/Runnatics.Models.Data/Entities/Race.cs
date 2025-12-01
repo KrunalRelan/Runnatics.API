@@ -32,7 +32,9 @@ namespace Runnatics.Models.Data.Entities
         public virtual Event Event { get; set; } = null!;
 
         public virtual RaceSettings? RaceSettings { get; set; }
+
+        public virtual LeaderboardSettings? LeaderboardSettings { get; set; }
         public virtual ICollection<Participant> Participants { get; set; } = new List<Participant>();
-        public virtual ICollection<Results> Results { get; set; } = new List<Results>();
+        public virtual ICollection<Results> Results { get; set; } = [];
     }
 }

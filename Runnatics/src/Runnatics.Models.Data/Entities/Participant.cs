@@ -18,6 +18,8 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         public int RaceId { get; set; }
 
+        public int? ImportBatchId { get; set; }
+
         [MaxLength(20)]
         public string? BibNumber { get; set; }
 
@@ -80,6 +82,7 @@ namespace Runnatics.Models.Data.Entities
         public virtual Organization Organization { get; set; } = null!;
         public virtual Event Event { get; set; } = null!;
         public virtual Race Race { get; set; } = null!;
+        public virtual ImportBatch? ImportBatch { get; set; }
         public virtual ICollection<ChipAssignment> ChipAssignments { get; set; } = new List<ChipAssignment>();
         public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = new List<ReadNormalized>();
         public virtual ICollection<SplitTime> SplitTimes { get; set; } = new List<SplitTime>();

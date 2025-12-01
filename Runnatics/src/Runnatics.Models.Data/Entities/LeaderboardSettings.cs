@@ -1,10 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using Runnatics.Models.Data.Common;
+using System.ComponentModel.DataAnnotations;
 
 namespace Runnatics.Models.Data.Entities
 {
@@ -14,7 +9,9 @@ namespace Runnatics.Models.Data.Entities
         public int Id { get; set; }
 
         [Required]
-        public int EventId { get; set; }
+        public int? EventId { get; set; }
+
+        public int? RaceId { get; set; }
 
         public bool? ShowOverallResults { get; set; }
 
@@ -51,6 +48,8 @@ namespace Runnatics.Models.Data.Entities
         public int? NumberOfResultsToShowOverall { get; set; }
 
         public int? NumberOfResultsToShowCategory { get; set; }
+
+        public bool? OverrideSettings { get; set; }
 
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;

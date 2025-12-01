@@ -10,9 +10,9 @@ using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Models.Data.EventOrganizers;
 using Runnatics.API.Models.Requests;
-using Runnatics.Services.Mappings;
+using Runnatics.Models.Client.Responses.Participants;
 
-namespace Runnatics.Services
+namespace Runnatics.Services.Mappings
 {
     /// <summary>
     /// AutoMapper profile for mapping between data entities and client models
@@ -153,7 +153,7 @@ namespace Runnatics.Services
 
             CreateMap<LeaderboardSettings, LeaderboardSettingsResponse>()
                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
-                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
+                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.EventId))
                 .ForMember(dest => dest.ShowOverallResults, opt => opt.MapFrom(src => src.ShowOverallResults))
                 .ForMember(dest => dest.ShowCategoryResults, opt => opt.MapFrom(src => src.ShowCategoryResults))
                 .ForMember(dest => dest.ShowGenderResults, opt => opt.MapFrom(src => src.ShowGenderResults))
@@ -188,6 +188,7 @@ namespace Runnatics.Services
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.EventOrganizerName));
             #endregion
+
             #region Races mappings
             CreateMap<RaceRequest, Race>()
                 .ForMember(d => d.Id, opt => opt.Ignore())
@@ -226,6 +227,7 @@ namespace Runnatics.Services
                 .ForMember(d => d.ShowLeaderboard, opt => opt.MapFrom(src => src.ShowLeaderboard))
                 .ForMember(d => d.ShowResultTable, opt => opt.MapFrom(src => src.ShowResultTable))
                 .ForMember(d => d.IsTimed, opt => opt.MapFrom(src => src.IsTimed))
+                .ForMember(d => d.PublishDnf, opt => opt.MapFrom(src => src.PublishDnf))
                 .ForMember(d => d.DedUpSeconds, opt => opt.MapFrom(src => src.DedUpSeconds))
                 .ForMember(d => d.EarlyStartCutOff, opt => opt.MapFrom(src => src.EarlyStartCutOff))
                 .ForMember(d => d.LateStartCutOff, opt => opt.MapFrom(src => src.LateStartCutOff))
@@ -234,6 +236,50 @@ namespace Runnatics.Services
                 .ForMember(d => d.DataHeaders, opt => opt.MapFrom(src => src.DataHeaders))
                 .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(d => d.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
+
+            CreateMap<LeaderboardSettingsRequest, LeaderboardSettings>()
+                .ForMember(d => d.EventId, opt => opt.Ignore())
+                .ForMember(d => d.Id, opt => opt.Ignore())
+                .ForMember(d => d.ShowMedalIcon, opt => opt.MapFrom(src => src.ShowMedalIcon))
+                .ForMember(d => d.AuditProperties, opt => opt.Ignore())
+                .ForMember(d => d.AllowAnonymousView, opt => opt.MapFrom(src => src.AllowAnonymousView))
+                .ForMember(d => d.AutoRefreshIntervalSec, opt => opt.MapFrom(src => src.AutoRefreshIntervalSec ?? 0))
+                .ForMember(d => d.MaxDisplayedRecords, opt => opt.MapFrom(src => src.MaxDisplayedRecords ?? 0))
+                .ForMember(d => d.NumberOfResultsToShowCategory, opt => opt.MapFrom(src => src.NumberOfResultsToShowCategory ?? 0))
+                .ForMember(d => d.NumberOfResultsToShowOverall, opt => opt.MapFrom(src => src.NumberOfResultsToShowOverall ?? 0))
+                .ForMember(d => d.EnableLiveLeaderboard, opt => opt.MapFrom(src => false))
+                .ForMember(d => d.Event, opt => opt.Ignore());
+
+            #endregion
+
+            #region Participant mappings
+
+            CreateMap<Models.Data.Entities.Participant, Models.Client.Responses.Participants.Participant>()
+                .ForMember(d => d.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(d => d.Bib, opt => opt.MapFrom(src => src.BibNumber ?? ""))
+                .ForMember(d => d.FirstName, opt => opt.MapFrom(src => src.FirstName))
+                .ForMember(d => d.LastName, opt => opt.MapFrom(src => src.LastName))
+                .ForMember(d => d.Email, opt => opt.MapFrom(src => src.Email ?? ""))
+                .ForMember(d => d.Phone, opt => opt.MapFrom(src => src.Phone ?? ""))
+                .ForMember(d => d.Gender, opt => opt.MapFrom(src => src.Gender ?? ""))
+                .ForMember(d => d.DateOfBirth, opt => opt.MapFrom(src => src.DateOfBirth))
+                .ForMember(d => d.Age, opt => opt.MapFrom(src => src.Age))
+                .ForMember(d => d.City, opt => opt.MapFrom(src => src.City ?? ""))
+                .ForMember(d => d.State, opt => opt.MapFrom(src => src.State ?? ""))
+                .ForMember(d => d.RegistrationStatus, opt => opt.MapFrom(src => src.Status))
+                .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
+                .ForMember(d => d.RaceName, opt => opt.MapFrom(src => src.Race != null ? src.Race.Title : ""))
+                .ForMember(d => d.ImportBatchId, opt => opt.MapFrom(src => src.ImportBatchId));
+
+            CreateMap<ImportBatch, ParticipantImportResponse>()
+                .ForMember(d => d.ImportBatchId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(d => d.FileName, opt => opt.MapFrom(src => src.FileName))
+                .ForMember(d => d.TotalRecords, opt => opt.MapFrom(src => src.TotalRecords))
+                // .ForMember(d => d.ValidRecords, opt => opt.MapFrom(src => src.SuccessCount))
+                // .ForMember(d => d.InvalidRecords, opt => opt.MapFrom(src => src.ErrorCount))
+                .ForMember(d => d.Status, opt => opt.MapFrom(src => src.Status))
+                // .ForMember(d => d.UploadedAt, opt => opt.MapFrom(src => src.UploadedAt))
+                .ForMember(d => d.Errors, opt => opt.Ignore());
             #endregion
         }
     }

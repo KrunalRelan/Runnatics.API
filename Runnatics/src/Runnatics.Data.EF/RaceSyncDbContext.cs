@@ -29,7 +29,8 @@ namespace Runnatics.Data.EF
         public DbSet<Results> Results { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<EventOrganizer> EventOrganizers { get; set; }
-        // public DbSet<ImportBatch> ImportBatches { get; set; }
+        public DbSet<ImportBatch> ImportBatches { get; set; }
+        public DbSet<ParticipantStaging> ParticipantStagings { get; set; }
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
         #endregion
@@ -56,6 +57,8 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new ResultConfiguration());
             modelBuilder.ApplyConfiguration(new NotificationConfiguration());
             modelBuilder.ApplyConfiguration(new EventOrganizerConfiguration());
+            modelBuilder.ApplyConfiguration(new ImportBatchConfiguration());
+            modelBuilder.ApplyConfiguration(new ParticipantStagingConfiguration());
             //modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here

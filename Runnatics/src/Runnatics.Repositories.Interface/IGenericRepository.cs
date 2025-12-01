@@ -22,5 +22,9 @@ public interface IGenericRepository<T> where T : class
 
     IQueryable<T> GetQuery(Expression<Func<T, bool>>? filter = null,
                         bool ignoreQueryFilters = false,
-                        bool includeNavigationProperties = false); 
+                        bool includeNavigationProperties = false);
+
+    public Task<PagingList<T>> ExecuteStoredProcedure<I>(string procedureName, I input, string output, bool forJob = false);
+
+    public Task<List<List<dynamic>>> ExecuteStoredProcedureDataSet<I>(string procedureName, I input);
 }

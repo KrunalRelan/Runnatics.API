@@ -250,7 +250,7 @@ namespace Runnatics.Services
                 var successCount = 0;
                 var errorCount = 0;
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-
+                /*
                 // Process each staging record
                 foreach (var staging in stagingRecords)
                 {
@@ -371,20 +371,11 @@ namespace Runnatics.Services
 
                 // Update staging records
                 await _repository.SaveChangesAsync();
-
-                // Update import batch
-                // importBatch.SuccessCount = successCount;
-                // importBatch.ErrorCount = errorCount;
-                importBatch.Status = errorCount == 0 ? "Completed" : "PartiallyCompleted";
-                importBatch.ProcessedAt = DateTime.UtcNow;
-                importBatch.AuditProperties.UpdatedBy = userId;
-                importBatch.AuditProperties.UpdatedDate = DateTime.UtcNow;
-
-                await _repository.SaveChangesAsync();
-
-                response.SuccessCount = successCount;
-                response.ErrorCount = errorCount;
-                response.Status = importBatch.Status;
+                */
+               var batchProcessor = stagingRepo.ExecuteStoredProcedure<object>(
+                    "sp_ProcessParticipantImportBatch",
+                    new { ImportBatchId = decryptedImportBatchId, EventId = decryptedEventId }
+                );
 
                 _logger.LogInformation("Processing completed. Success: {Success}, Errors: {Errors}", successCount, errorCount);
 

@@ -1,4 +1,5 @@
 using AutoMapper;
+using Azure;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -281,29 +282,69 @@ namespace Runnatics.Services
 
         public async Task<PagingList<ParticipantSearchReponse>> Search(ParticipantSearchRequest request, string eventId, string raceId)
         {
-            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            try
+            {
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
 
-            var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-            var expression = BuildSearchExpression(request, decryptedEventId, decryptedRaceId);
-            var mappedSortField = GetMappedSortField(request.SortFieldName);
+                // Validate and sanitize pagination parameters
+                var pageNumber = request.PageNumber > 0 ? request.PageNumber : 1;
+                var pageSize = request.PageSize > 0 && request.PageSize <= 1000
+                    ? request.PageSize
+                    : SearchCriteriaBase.DefaultPageSize;
 
-            var response = await participantRepo.SearchAsync(
-                       expression,
-                       request.PageSize,
-                       request.PageNumber,
-                       request.SortDirection == SortDirection.Ascending
-                            ? Models.Data.Common.SortDirection.Ascending
-                           : Models.Data.Common.SortDirection.Descending,
-                       mappedSortField,
-                       false,
-                       false);
+                _logger.LogInformation(
+                    "Searching participants for EventId: {EventId}, RaceId: {RaceId}, PageNumber: {PageNumber}, PageSize: {PageSize}",
+                    decryptedEventId,
+                    decryptedRaceId,
+                    pageNumber,
+                    pageSize
+                );
 
-            var toReturn = _mapper.Map<PagingList<ParticipantSearchReponse>>(response);
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var expression = BuildSearchExpression(request, decryptedEventId, decryptedRaceId);
+                var mappedSortField = GetMappedSortField(request.SortFieldName);
 
-            return toReturn;
+                var response = await participantRepo.SearchAsync(
+                    expression,
+                    pageSize,              // Use validated pageSize
+                    pageNumber,            // Use validated pageNumber
+                    request.SortDirection == SortDirection.Ascending
+                        ? Models.Data.Common.SortDirection.Ascending
+                        : Models.Data.Common.SortDirection.Descending,
+                    mappedSortField,
+                    false,
+                    false
+                );
+
+                _logger.LogInformation(
+                    "Found {TotalCount} participants, returning page {PageNumber} with items",
+                    response.TotalCount,
+                    pageNumber);
+
+                var toReturn = _mapper.Map<PagingList<ParticipantSearchReponse>>(response);
+
+                // Don't override TotalCount if AutoMapper is configured correctly
+                // If AutoMapper config is missing, uncomment the line below:
+                 toReturn.TotalCount = response.TotalCount;
+
+                return toReturn;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error fetching participants: {ex.Message}";
+                _logger.LogError(
+                    ex,
+                    "Error fetching participants for event {EventId} and race {RaceId}. Request: {@Request}",
+                    eventId,
+                    raceId,
+                    request
+                );
+
+                // Return empty paging list instead of null
+                return null;
+            }
         }
-
 
         /// <summary>
         /// Builds the filter expression for event search

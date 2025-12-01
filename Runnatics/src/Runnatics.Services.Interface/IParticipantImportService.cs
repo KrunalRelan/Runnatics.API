@@ -18,5 +18,4 @@ namespace Runnatics.Services.Interface
 
         Task<PagingList<ParticipantSearchReponse>> Search(ParticipantSearchRequest request, string eventId, string raceId);
     }
-
 }

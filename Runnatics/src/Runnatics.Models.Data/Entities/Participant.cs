@@ -64,7 +64,7 @@ namespace Runnatics.Models.Data.Entities
         [MaxLength(10)]
         public string? TShirtSize { get; set; }
 
-        public DateTime RegistrationDate { get; set; } = DateTime.UtcNow;
+        public DateTime? RegistrationDate { get; set; } = DateTime.UtcNow;
 
         [MaxLength(20)]
         public string Status { get; set; } = "Registered"; // Registered, CheckedIn, Started, Finished, DNF, DQ

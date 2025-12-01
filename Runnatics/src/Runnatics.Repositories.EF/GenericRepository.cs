@@ -2,12 +2,16 @@ namespace Runnatics.Repositories.EF
 {
     using Microsoft.EntityFrameworkCore;
     using Runnatics.Models.Data.Common;
-    using Runnatics.Repositories.Interface;
     using System;
     using System.Collections.Generic;
+    using System.Data;
+    using System.Diagnostics.CodeAnalysis;
     using System.Linq;
     using System.Linq.Expressions;
+    using System.Reflection;
+    using System.Text;
     using System.Threading.Tasks;
+    using Microsoft.Data.SqlClient;
 
     public class GenericRepository<T>(DbContext context) : IGenericRepository<T> where T : class
     {
@@ -169,6 +173,149 @@ namespace Runnatics.Repositories.EF
             _dbSet.UpdateRange(entities);
 
             return await Task.FromResult(entities);
+        }
+
+        public async Task<PagingList<T>> ExecuteStoredProcedure<I>(string procedureName, I input, string output, bool forJob = false)
+        {
+            var toReturn = new PagingList<T>();
+            var parameters = Parameters.Transform(input, output);
+            var inputParams = parameters.Where(x => x.Direction != ParameterDirection.Output).Select(x => x.ParameterName).ToList();
+            var stringOfParameters = string.Empty;
+            var sqlString = new StringBuilder();
+            foreach (var parameter in inputParams)
+            {
+                sqlString.Append($"{parameter} = {parameter},");
+            }
+            stringOfParameters = sqlString.ToString();
+            if (!string.IsNullOrEmpty(output))
+            {
+                stringOfParameters += "@" + output + " = @" + output + " output";
+            }
+            else
+            {
+                stringOfParameters = string.IsNullOrEmpty(stringOfParameters) ? stringOfParameters : stringOfParameters.Remove(stringOfParameters.LastIndexOf(','));
+            }
+            if (forJob)
+            {
+                context.Database.SetCommandTimeout(0);
+            }
+            var query = await _dbSet.FromSqlRaw($"exec {procedureName} {stringOfParameters}", parameters.ToArray()).ToListAsync<T>();
+            toReturn.AddRange(query);
+            if (!string.IsNullOrEmpty(output))
+            {
+                toReturn.TotalCount = (int)parameters[parameters.Length - 1].Value;
+            }
+            return toReturn;
+        }
+        public async Task<List<List<dynamic>>> ExecuteStoredProcedureDataSet<I>(string procedureName, I input)
+        {
+            List<List<dynamic>> results = new List<List<dynamic>>();
+            var parameters = Parameters.Transform(input, "");
+            Type responseObject = typeof(T);
+            var prop = responseObject.GetProperties();
+            IDbCommand? command = GetConnection(procedureName, parameters);
+            Type[] typesInfo = GetClassProperties(prop, responseObject);
+            int counter = 0;
+            if (command != null)
+            {
+                using var reader = command.ExecuteReader();
+                do
+                {
+                    var innerResults = new List<dynamic>();
+
+                    while (reader.Read())
+                    {
+                        innerResults = SetValueProperties(reader, counter, typesInfo, innerResults);
+                    }
+
+                    results.Add(innerResults);
+                    counter++;
+                }
+
+                while (reader.NextResult());
+                reader.Close();
+            }
+            return results;
+        }
+
+        private List<dynamic> SetValueProperties(IDataReader reader, int counter, Type[] typesInfo, List<dynamic> innerResults)
+        {
+
+            if (counter <= typesInfo.Length - 1)
+            {
+
+                var item = Activator.CreateInstance(typesInfo[counter]);
+
+                for (int inc = 0; inc < reader.FieldCount; inc++)
+                {
+                    if (item != null)
+                    {
+
+                        IterateProperties(item, reader, inc);
+
+                    }
+                }
+                if (item != null)
+                {
+                    innerResults.Add(item);
+                }
+            }
+            return innerResults;
+        }
+        private void IterateProperties(object item, IDataReader reader, int inc)
+        {
+            Type type = item.GetType();
+            string name = reader.GetName(inc);
+            PropertyInfo? property = type.GetProperty(name);
+
+            if (property != null && name == property.Name)
+            {
+                var value = reader.GetValue(inc);
+                if (value != null && value != DBNull.Value && !string.IsNullOrEmpty(value.ToString()))
+                {
+                    property.SetValue(item, Convert.ChangeType(value, Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType), null);
+                }
+            }
+        }
+
+        private Type[] GetClassProperties(PropertyInfo[]? props, Type responseObject)
+        {
+            List<Type> types = new List<Type>();
+            if (props != null)
+            {
+                foreach (var p in props)
+                {
+                    if (p.PropertyType.IsClass)
+                    {
+                        PropertyInfo? propertyInfo = responseObject.GetProperty(p.Name) ?? null;
+                        if (propertyInfo != null)
+                        {
+                            var propType = propertyInfo.PropertyType.GetGenericArguments().Length >= 1 ?
+                                           propertyInfo.PropertyType.GetGenericArguments()[0]
+                                          : propertyInfo.PropertyType;
+                            types.Add(propType);
+                        }
+                    }
+                }
+            }
+            return types.ToArray<Type>();
+        }
+        private IDbCommand? GetConnection(string procedureName, SqlParameter[] parameters)
+        {
+            var connection = context.Database.GetDbConnection();
+            var command = connection.CreateCommand();
+            command.CommandText = procedureName;
+            command.CommandType = CommandType.StoredProcedure;
+
+            if (parameters != null && parameters.Any())
+            {
+                command.Parameters.AddRange(parameters);
+            }
+            if (command.Connection != null && command.Connection.State != ConnectionState.Open)
+            {
+                command.Connection.Open();
+            }
+            return command;
         }
     }
 }

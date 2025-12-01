@@ -1,9 +1,4 @@
 ﻿using Microsoft.Data.SqlClient;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Repositories.EF
 {
@@ -29,6 +24,7 @@ namespace Runnatics.Repositories.EF
                 };
                 parameters.Add(outputParam);
             }
+            return parameters.ToArray();
         }
     }
 }

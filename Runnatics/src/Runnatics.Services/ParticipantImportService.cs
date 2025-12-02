@@ -375,9 +375,10 @@ namespace Runnatics.Services
                     IsActive = true,
                     IsDeleted = false
                 };
+
                 await _repository.BeginTransactionAsync();
 
-                var entity = await participantRepo.AddAsync(existingParticipant);
+                var entity = await participantRepo.UpdateAsync(existingParticipant);
 
                 await _repository.SaveChangesAsync();
 

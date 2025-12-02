@@ -190,7 +190,7 @@ namespace Runnatics.Api.Controller
                 return Accepted();
         }
 
-        [HttpPut("{participantId}/endit-participant")]
+        [HttpPut("{participantId}/edit-participant")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]

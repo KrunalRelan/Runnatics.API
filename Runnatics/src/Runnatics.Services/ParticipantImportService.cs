@@ -347,6 +347,51 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task AddParticipant(string eventId, string raceId, ParticipantRequest addParticipant)
+        {
+            try
+            {
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+
+                var eventIdInt = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var raceIdInt = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+                var participant = _mapper.Map<Models.Data.Entities.Participant>(addParticipant);
+
+                participant.EventId = eventIdInt;
+                participant.RaceId = raceIdInt;
+                participant.TenantId = _userContext.TenantId;
+                participant.AuditProperties = new Models.Data.Common.AuditProperties
+                {
+                    CreatedBy = _userContext.UserId,
+                    CreatedDate = DateTime.UtcNow,
+                    IsActive = true,
+                    IsDeleted = false
+                };
+                await _repository.BeginTransactionAsync();
+
+                var entity = await participantRepo.AddAsync(participant);
+
+                await _repository.SaveChangesAsync();
+
+                await _repository.CommitTransactionAsync();
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error inserting participants: {ex.Message}";
+                _logger.LogError(ex, "Error while inserting the participant {bibnumber}", addParticipant.BibNumber);
+                try
+                {
+                    await _repository.RollbackTransactionAsync();
+                }
+                catch (Exception rollbackEx)
+                {
+                    _logger.LogWarning(rollbackEx, "Rollback failed or there was no active transaction to rollback.");
+                    this.ErrorMessage = "Rollback failed.";
+                }
+            }
+        }
+
         public async Task EditParticipant(string participantId, ParticipantRequest editParticipant)
         {
             try
@@ -399,30 +444,37 @@ namespace Runnatics.Services
                 }
             }
         }
-        public async Task AddParticipant(string eventId, string raceId, ParticipantRequest addParticipant)
+
+        public async Task DeleteParicipant(string participantId)
         {
             try
             {
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
 
-                var eventIdInt = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-                var raceIdInt = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var decryptParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
 
-                var participant = _mapper.Map<Models.Data.Entities.Participant>(addParticipant);
-
-                participant.EventId = eventIdInt;
-                participant.RaceId = raceIdInt;
-                participant.TenantId = _userContext.TenantId;
-                participant.AuditProperties = new Models.Data.Common.AuditProperties
+                var existingParticipant = await participantRepo.GetQuery(p => p.Id == decryptParticipantId
+                                                                              && p.AuditProperties.IsActive
+                                                                              && !p.AuditProperties.IsDeleted)
+                                                               .FirstOrDefaultAsync();
+                if (existingParticipant == null)
                 {
-                    CreatedBy = _userContext.UserId,
-                    CreatedDate = DateTime.UtcNow,
-                    IsActive = true,
-                    IsDeleted = false
+                    ErrorMessage = "Participant not found";
+                    _logger.LogWarning("Edit failed: Participant {ParticipantId} not found", participantId);
+                    return;
+                }
+
+                existingParticipant.AuditProperties = new Models.Data.Common.AuditProperties
+                {
+                    UpdatedBy = _userContext.UserId,
+                    UpdatedDate = DateTime.UtcNow,
+                    IsActive = false,
+                    IsDeleted = true
                 };
+
                 await _repository.BeginTransactionAsync();
 
-                var entity = await participantRepo.AddAsync(participant);
+                var entity = await participantRepo.UpdateAsync(existingParticipant);
 
                 await _repository.SaveChangesAsync();
 
@@ -430,8 +482,8 @@ namespace Runnatics.Services
             }
             catch (Exception ex)
             {
-                ErrorMessage = $"Error inserting participants: {ex.Message}";
-                _logger.LogError(ex, "Error while inserting the participant {bibnumber}", addParticipant.BibNumber);
+                ErrorMessage = $"Error delete participants: {ex.Message}";
+                _logger.LogError(ex, "Error while deleting the participant {participantId}", participantId);
                 try
                 {
                     await _repository.RollbackTransactionAsync();
@@ -443,7 +495,6 @@ namespace Runnatics.Services
                 }
             }
         }
-
         /// <summary>
         /// Builds the filter expression for event search
         /// </summary>
@@ -599,6 +650,8 @@ namespace Runnatics.Services
             _logger.LogWarning("Unknown sort field '{SortField}' requested, using default sorting", sortFieldName);
             return "Id";
         }
+
+        
 
         // Map client-facing property names to database property names
         private static readonly Dictionary<string, string> SortFieldMapping = new(StringComparer.OrdinalIgnoreCase)

@@ -1,3 +1,4 @@
+using Azure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
@@ -171,12 +172,70 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpPost("{eventId}/{raceId}/add-participant")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> AddParticipant([FromRoute] string eventId, [FromRoute] string raceid)
-        { 
+        public async Task<IActionResult> AddParticipant([FromRoute] string eventId, [FromRoute] string raceid, [FromBody] ParticipantRequest addParticipant)
+        {
+            if (string.IsNullOrEmpty(eventId) ||string.IsNullOrEmpty(raceid)|| addParticipant is null)
+            {
+                return BadRequest();
+            }
+
+            await _service.AddParticipant(eventId, raceid, addParticipant);
+
+            if (_service.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, _service.ErrorMessage);
+            }
+
+            else
+                return Ok(HttpStatusCode.Accepted);
+        }
+
+        [HttpPut("{participantId}/edit-participant")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> EditParticipant([FromRoute] string participantId, [FromBody] ParticipantRequest editParticipant)
+        {
+            if (string.IsNullOrEmpty(participantId) || editParticipant is null )
+            {
+                return BadRequest();
+            }
+
+            await _service.EditParticipant(participantId, editParticipant);
+
+            if (_service.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, _service.ErrorMessage);
+            }
+
+            else
+                return Ok(HttpStatusCode.OK);
+        }
+
+        [HttpPut("{participantId}/delete-participant")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> DeleteParticipant([FromRoute] string participantId)
+        {
+            await _service.DeleteParicipant(participantId);
+
+            if (_service.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, _service.ErrorMessage);
+            }
+
+            else
+                return Ok(HttpStatusCode.NoContent);
         }
     }
 }

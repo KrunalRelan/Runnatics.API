@@ -2,6 +2,7 @@ using AutoMapper;
 using Runnatics.API.Models.Requests;
 using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Requests.Events;
+using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses;
 using Runnatics.Models.Client.Responses.Events;
@@ -291,6 +292,19 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dst => dst.Gender, opt => opt.MapFrom(src => src.Gender))
                 .ForMember(dst => dst.Category, opt => opt.MapFrom(src => src.AgeCategory))
                 .ForMember(dst => dst.FullName, opt => opt.MapFrom(src => $"{src.FirstName} {src.LastName}".Trim()));
+
+            CreateMap<ParticipantRequest, Participant>()
+                .ForMember(dst => dst.Id, opt => opt.Ignore())
+                .ForMember(dst => dst.TenantId, opt => opt.Ignore()) // Set by service
+                .ForMember(dst => dst.EventId, opt => opt.Ignore()) // Set by service
+                .ForMember(dst => dst.RaceId, opt => opt.Ignore()) // Set by service
+                .ForMember(dst => dst.BibNumber, opt => opt.MapFrom(src => src.BibNumber))
+                .ForMember(dst => dst.FirstName, opt => opt.MapFrom(src => src.FirstName))
+                .ForMember(dst => dst.LastName, opt => opt.MapFrom(src => src.LastName))
+                .ForMember(dst => dst.Email, opt => opt.MapFrom(src => src.Email))
+                .ForMember(dst => dst.Phone, opt => opt.MapFrom(src => src.Phone))
+                .ForMember(dst => dst.Gender, opt => opt.MapFrom(src => src.Gender))
+                .ForMember(dst => dst.AgeCategory, opt => opt.MapFrom(src => src.Category));
 
             #endregion
         }

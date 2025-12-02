@@ -22,13 +22,11 @@ namespace Runnatics.Models.Data.Entities
         [MaxLength(20)]
         public string? BibNumber { get; set; }
 
-        [Required]
         [MaxLength(100)]
-        public string FirstName { get; set; } = string.Empty;
+        public string? FirstName { get; set; } = string.Empty;
 
-        [Required]
         [MaxLength(100)]
-        public string LastName { get; set; } = string.Empty;
+        public string? LastName { get; set; } = string.Empty;
 
         [MaxLength(255)]
         public string? Email { get; set; }

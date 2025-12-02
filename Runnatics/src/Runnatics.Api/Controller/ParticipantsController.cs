@@ -1,3 +1,4 @@
+using Azure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
@@ -171,12 +172,41 @@ namespace Runnatics.Api.Controller
         }
 
         [HttpPost("{eventId}/{raceId}/add-participant")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> AddParticipant([FromRoute] string eventId, [FromRoute] string raceid)
-        { 
+        public async Task<IActionResult> AddParticipant([FromRoute] string eventId, [FromRoute] string raceid, [FromBody] ParticipantRequest addParticipant)
+        {
+            await _service.AddParticipant(eventId, raceid, addParticipant);
+
+            if (_service.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, _service.ErrorMessage);
+            }
+
+            else
+                return Accepted();
+        }
+
+        [HttpPut("{participantId}/endit-participant")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> EditParticipant([FromRoute] string participantId, [FromBody] ParticipantRequest addParticipant)
+        {
+            await _service.EditParticipant(participantId, addParticipant);
+
+            if (_service.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, _service.ErrorMessage);
+            }
+
+            else
+                return Accepted();
         }
     }
 }

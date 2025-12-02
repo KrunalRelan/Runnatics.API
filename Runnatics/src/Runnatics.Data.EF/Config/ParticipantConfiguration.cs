@@ -39,13 +39,11 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.FirstName)
                 .HasColumnName("FirstName")
-                .HasMaxLength(200)
-                .IsRequired();
+                .HasMaxLength(200);
 
             builder.Property(e => e.LastName)
                 .HasColumnName("LastName")
-                .HasMaxLength(200)
-                .IsRequired();
+                .HasMaxLength(200);
 
             builder.Property(e => e.Email)
                 .HasColumnName("Email")

@@ -1,6 +1,4 @@
 using AutoMapper;
-using Azure;
-using Azure.Core;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -303,11 +301,18 @@ namespace Runnatics.Services
                 );
 
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-                var expression = BuildSearchExpression(request, decryptedEventId, decryptedRaceId);
+                var baseExpression = BuildSearchExpression(request, decryptedEventId, decryptedRaceId);
+
+                // If a free-text search string is provided, extend the expression to include ORed fields
+                if (!string.IsNullOrWhiteSpace(request.SearchString))
+                {
+                    baseExpression = CombineExpressionWithSearch(baseExpression, request.SearchString.Trim());
+                }
+
                 var mappedSortField = GetMappedSortField(request.SortFieldName);
 
                 var response = await participantRepo.SearchAsync(
-                    expression,
+                    baseExpression,
                     pageSize,              // Use validated pageSize
                     pageNumber,            // Use validated pageNumber
                     request.SortDirection == SortDirection.Ascending
@@ -325,8 +330,7 @@ namespace Runnatics.Services
 
                 var toReturn = _mapper.Map<PagingList<ParticipantSearchReponse>>(response);
 
-                // Don't override TotalCount if AutoMapper is configured correctly
-                // If AutoMapper config is missing, uncomment the line below:
+                // Ensure TotalCount is preserved
                 toReturn.TotalCount = response.TotalCount;
 
                 return toReturn;
@@ -342,8 +346,8 @@ namespace Runnatics.Services
                     request
                 );
 
-                // Return empty paging list instead of null
-                return null;
+                // Return an empty paging list on error
+                return new PagingList<ParticipantSearchReponse>();
             }
         }
 
@@ -399,9 +403,9 @@ namespace Runnatics.Services
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
 
                 var decryptParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
-                
-                var existingParticipant = await participantRepo.GetQuery(p => p.Id == decryptParticipantId 
-                                                                              && p.AuditProperties.IsActive 
+
+                var existingParticipant = await participantRepo.GetQuery(p => p.Id == decryptParticipantId
+                                                                              && p.AuditProperties.IsActive
                                                                               && !p.AuditProperties.IsDeleted)
                                                                .FirstOrDefaultAsync();
                 if (existingParticipant == null)
@@ -412,11 +416,11 @@ namespace Runnatics.Services
                 }
 
                 _mapper.Map(editParticipant, existingParticipant);
-                
+
                 existingParticipant.AuditProperties = new Models.Data.Common.AuditProperties
                 {
                     UpdatedBy = _userContext.UserId,
-                    UpdatedDate= DateTime.UtcNow,
+                    UpdatedDate = DateTime.UtcNow,
                     IsActive = true,
                     IsDeleted = false
                 };
@@ -504,9 +508,83 @@ namespace Runnatics.Services
                 e.EventId == eventId &&
                 e.RaceId == raceId &&
                 (!request.Status.HasValue || e.Status == request.Status.Value.ToString()) &&
+                (!request.Gender.HasValue || e.Gender == request.Gender.Value.ToString()) &&
                 (string.IsNullOrEmpty(request.Category) || e.AgeCategory == request.Category) &&
                 e.AuditProperties.IsActive &&
                 !e.AuditProperties.IsDeleted;
+        }
+
+        /// <summary>
+        /// Combines the base expression with a free-text search across multiple fields (BibNumber, FirstName, LastName, Email, Mobile).
+        /// The combined expression is translated to SQL by EF Core.
+        /// </summary>
+        private static Expression<Func<Models.Data.Entities.Participant, bool>> CombineExpressionWithSearch(Expression<Func<Models.Data.Entities.Participant, bool>> baseExpression, string search)
+        {
+            // Build per-field contains expressions: protect against nulls
+            var param = Expression.Parameter(typeof(Models.Data.Entities.Participant), "e");
+
+            // Replace parameter in base expression
+            var leftVisitor = new ReplaceParameterVisitor(baseExpression.Parameters[0], param);
+            var leftBody = leftVisitor.Visit(baseExpression.Body)!;
+
+            // Prepare method info for string.Contains
+            var containsMethod = typeof(string).GetMethod("Contains", [typeof(string)])!;
+
+            Expression? orExpression = null;
+
+            // Helper to build (property != null && property.Contains(search))
+            Expression BuildContains(string propertyName)
+            {
+                var prop = Expression.PropertyOrField(param, propertyName);
+                var notNull = Expression.NotEqual(prop, Expression.Constant(null, typeof(string)));
+                var call = Expression.Call(prop, containsMethod, Expression.Constant(search));
+                return Expression.AndAlso(notNull, call);
+            }
+
+            // Fields to search - adjust names if your Participant entity uses different property names
+            var fields = new[] { "BibNumber", "FirstName", "LastName", "Email", "Phone", "AgeCategory" };
+
+            foreach (var field in fields)
+            {
+                try
+                {
+                    var containsExpr = BuildContains(field);
+                    orExpression = orExpression == null ? containsExpr : Expression.OrElse(orExpression, containsExpr);
+                }
+                catch (ArgumentException)
+                {
+                    // If the property doesn't exist on the Participant entity, skip it gracefully
+                    continue;
+                }
+            }
+
+            // If no searchable fields exist, return the base expression unchanged
+            if (orExpression == null)
+            {
+                return baseExpression;
+            }
+
+            // Combine base (AND) with OR-of-fields
+            var combinedBody = Expression.AndAlso(leftBody, orExpression);
+
+            return Expression.Lambda<Func<Models.Data.Entities.Participant, bool>>(combinedBody, param);
+        }
+
+        private class ReplaceParameterVisitor : ExpressionVisitor
+        {
+            private readonly ParameterExpression _oldParam;
+            private readonly ParameterExpression _newParam;
+
+            public ReplaceParameterVisitor(ParameterExpression oldParam, ParameterExpression newParam)
+            {
+                _oldParam = oldParam;
+                _newParam = newParam;
+            }
+
+            protected override Expression VisitParameter(ParameterExpression node)
+            {
+                return node == _oldParam ? _newParam : base.VisitParameter(node);
+            }
         }
 
         private async Task<List<ParticipantStaging>> ParseCsvFileAsync(IFormFile file)
@@ -651,7 +729,7 @@ namespace Runnatics.Services
             return "Id";
         }
 
-        
+
 
         // Map client-facing property names to database property names
         private static readonly Dictionary<string, string> SortFieldMapping = new(StringComparer.OrdinalIgnoreCase)

@@ -16,45 +16,37 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.EventId)
                 .IsRequired();
 
-            builder.Property(e => e.Name)
-                .HasMaxLength(100)
+            builder.Property(e => e.RaceId)
                 .IsRequired();
 
-            builder.Property(e => e.Type)
+            builder.Property(e => e.Name)
                 .HasMaxLength(20)
                 .IsRequired();
 
-            builder.Property(e => e.DistanceKm)
+            builder.Property(e => e.DistanceFromStart)
                 .HasColumnType("decimal(6,3)")
                 .IsRequired();
 
-            builder.Property(e => e.Latitude)
-                .HasColumnType("decimal(10,8)");
+            builder.Property(e => e.DeviceId)
+                .IsRequired();
 
-            builder.Property(e => e.Longitude)
-                .HasColumnType("decimal(11,8)");
+            builder.Property(e => e.ParentDeviceId);
 
-            builder.Property(e => e.MinGapMs)
-                .HasDefaultValue(1000);
-
-            builder.Property(e => e.SortOrder)
-                .HasColumnName("SortOrder");
-
+            builder.Property(e => e.IsMandatory)
+                .HasDefaultValue(false);
+          
             // Indexes
             builder.HasIndex(e => e.EventId)
-                .HasDatabaseName("IX_Checkpoints_EventId");
+                .HasDatabaseName("IX_Checkpoints_EventId");           
 
-            builder.HasIndex(e => new { e.EventId, e.Type })
-                .HasDatabaseName("IX_Checkpoints_EventId_Type");
-
-            builder.HasIndex(e => new { e.EventId, e.DistanceKm })
+            builder.HasIndex(e => new { e.EventId, e.DistanceFromStart })
                 .HasDatabaseName("IX_Checkpoints_EventId_DistanceKm");
 
             // Relationships
-            builder.HasOne(e => e.Event)
-                .WithMany(ev => ev.Checkpoints)
-                .HasForeignKey(e => e.EventId)
-                .OnDelete(DeleteBehavior.Cascade);
+            //builder.HasOne(e => e.Event)
+            //    .WithMany(ev => ev.Checkpoints)
+            //    .HasForeignKey(e => e.EventId)
+            //    .OnDelete(DeleteBehavior.Cascade);
 
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
@@ -70,7 +62,7 @@ namespace Runnatics.Data.EF.Config
                 ap.Property(p => p.UpdatedBy);
                 ap.Property(p => p.UpdatedDate);
 
-                builder.Property(e => e.IsActive)
+                ap.Property(e => e.IsActive)
                .HasColumnName("IsActive")
                .HasDefaultValue(true)
                .IsRequired();

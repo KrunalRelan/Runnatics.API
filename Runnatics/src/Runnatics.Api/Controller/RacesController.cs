@@ -1,12 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
-using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Races;
 using Runnatics.Models.Client.Responses.Races;
-using Runnatics.Services;
 using Runnatics.Services.Interface;
-using StackExchange.Redis;
 using System.Net;
 
 namespace Runnatics.Api.Controller

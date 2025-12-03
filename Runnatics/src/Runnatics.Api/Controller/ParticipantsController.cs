@@ -1,13 +1,10 @@
-using Azure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Responses.Participants;
-using Runnatics.Services;
 using Runnatics.Services.Interface;
-using System.ComponentModel.DataAnnotations;
 using System.Net;
 
 namespace Runnatics.Api.Controller

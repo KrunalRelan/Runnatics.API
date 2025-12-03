@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Http;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Responses.Participants;

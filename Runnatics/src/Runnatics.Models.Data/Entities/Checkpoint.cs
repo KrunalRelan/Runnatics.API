@@ -22,7 +22,7 @@ namespace Runnatics.Models.Data.Entities
         public int DeviceId { get; set; }
         public int? ParentDeviceId { get; set; }
 
-        public bool IsMandatory { get; set; } = false;
+        public bool IsMandatory { get; set; }
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

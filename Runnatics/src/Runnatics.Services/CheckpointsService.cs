@@ -27,52 +27,27 @@ namespace Runnatics.Services
         {
             try
             {
-                // Decrypt IDs passed from controller
-                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
+                //var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId ?? "0");
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
-                // Validate parent Event exists
-                var eventRepo = _repository.GetRepository<Event>();
-                var parentEvent = await eventRepo.GetQuery(e =>
-                        e.Id == decryptedEventId &&
-                        e.AuditProperties.IsActive &&
-                        !e.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync();
-
-                if (parentEvent == null)
+                if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedRaceId))
                 {
-                    ErrorMessage = "Event not found or inactive.";
-                    _logger.LogWarning("Checkpoint creation aborted - event not found. EventId: {EventId}", decryptedEventId);
-                    return false;
-                }
-
-                // Validate Race exists and belongs to Event
-                var raceRepo = _repository.GetRepository<Race>();
-                var parentRace = await raceRepo.GetQuery(r =>
-                        r.Id == decryptedRaceId &&
-                        r.EventId == decryptedEventId &&
-                        r.AuditProperties.IsActive &&
-                        !r.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync();
-
-                if (parentRace == null)
-                {
-                    ErrorMessage = "Race not found or inactive.";
-                    _logger.LogWarning("Checkpoint creation aborted - race not found. EventId: {EventId}, RaceId: {RaceId}", decryptedEventId, decryptedRaceId);
-                    return false;
+                    return false; 
                 }
 
                 // Map request to entity; include decrypted EventId/RaceId and current user id in mapping context
-                var checkpoint = _mapper.Map<Checkpoint>(request, opts =>
-                {
-                    opts.Items["UserId"] = currentUserId;
-                    opts.Items["EventId"] = decryptedEventId;
-                    opts.Items["RaceId"] = decryptedRaceId;
-                });
+                var checkpoint = _mapper.Map<Checkpoint>(request);
+
+                checkpoint.Name = request.Name;
+                checkpoint.EventId = decryptedEventId;
+                checkpoint.RaceId = decryptedRaceId;
+                checkpoint.IsMandatory = request.IsMandatory;
+                checkpoint.DistanceFromStart = request.DistanceFromStart;
+                //checkpoint.ParentDeviceId = 1; //decryptedParentDeviceId;
+                checkpoint.DeviceId = 1; // decryptedDeviceId;
+                checkpoint.AuditProperties = CreateAuditProperties(currentUserId);
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 await checkpointRepo.AddAsync(checkpoint);
@@ -89,12 +64,7 @@ namespace Runnatics.Services
             }
         }
 
-        public Task<bool> Delete(string eventId, string raceId, string checkpointId)
-        {
-            return DeleteAsync(eventId, raceId, checkpointId);
-        }
-
-        private async Task<bool> DeleteAsync(string eventId, string raceId, string checkpointId)
+        public async Task<bool> Delete(string eventId, string raceId, string checkpointId)
         {
             try
             {
@@ -143,20 +113,8 @@ namespace Runnatics.Services
         {
             try
             {
-                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-                var decryptedCheckpointId = Convert.ToInt32(_encryptionService.Decrypt(checkpointId));
-
-                var checkpointRepo = _repository.GetRepository<Checkpoint>();
-
-                var checkpoint = await checkpointRepo.GetQuery(c =>
-                        c.Id == decryptedCheckpointId &&
-                        c.EventId == decryptedEventId &&
-                        c.RaceId == decryptedRaceId &&
-                        c.AuditProperties.IsActive &&
-                        !c.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync();
+                var (decryptedEventId, decryptedRaceId, decryptedCheckpointId) = DecryptAll(eventId, raceId, checkpointId);
+                var checkpoint = await FindCheckpointAsync(decryptedCheckpointId, decryptedEventId, decryptedRaceId);
 
                 if (checkpoint == null)
                 {
@@ -165,20 +123,7 @@ namespace Runnatics.Services
                     return null!;
                 }
 
-                // Map to response DTO
-                var response = new CheckpointResponse
-                {
-                    Id = checkpoint.Id,
-                    EventId = checkpoint.EventId,
-                    RaceId = checkpoint.RaceId,
-                    Name = checkpoint.Name,
-                    DistanceFromStart = checkpoint.DistanceFromStart,
-                    DeviceId = checkpoint.DeviceId,
-                    ParentDeviceId = checkpoint.ParentDeviceId,
-                    IsMandatory = checkpoint.IsMandatory
-                };
-
-                return response;
+                return _mapper.Map<CheckpointResponse>(checkpoint);
             }
             catch (Exception ex)
             {
@@ -192,47 +137,27 @@ namespace Runnatics.Services
         {
             try
             {
-                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-
+                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
 
-                var query = checkpointRepo.GetQuery(c =>
+                var list = await checkpointRepo.GetQuery(c =>
                         c.EventId == decryptedEventId &&
                         c.RaceId == decryptedRaceId &&
                         c.AuditProperties.IsActive &&
                         !c.AuditProperties.IsDeleted)
-                    .AsNoTracking();
-
-                var list = await query
+                    .AsNoTracking()
                     .OrderBy(c => c.Id)
-                    //.ThenBy(c => c.DistanceFromStart)
+                    .ThenBy(c => c.DistanceFromStart)
                     .ToListAsync();
 
-                var responses = list.Select(c => new CheckpointResponse
-                {
-                    Id = c.Id,
-                    EventId = c.EventId,
-                    RaceId = c.RaceId,
-                    Name = c.Name,
-                    DistanceFromStart = c.DistanceFromStart,
-                    DeviceId = c.DeviceId,
-                    ParentDeviceId = c.ParentDeviceId,
-                    IsMandatory = c.IsMandatory
-                }).ToList();
-
-                var paging = new PagingList<CheckpointResponse>(responses)
-                {
-                    TotalCount = responses.Count
-                };
-
-                return paging;
+                var responses = _mapper.Map<List<CheckpointResponse>>(list);
+                return new PagingList<CheckpointResponse>(responses) { TotalCount = responses.Count };
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error searching checkpoints for EventId: {EventId}, RaceId: {RaceId}", eventId, raceId);
                 ErrorMessage = "Error retrieving checkpoints.";
-                return [];
+                return new PagingList<CheckpointResponse>();
             }
         }
 
@@ -240,24 +165,10 @@ namespace Runnatics.Services
         {
             try
             {
-                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-                var decryptedCheckpointId = Convert.ToInt32(_encryptionService.Decrypt(checkpointId));
-                var decryptedDeviceId = Convert.ToInt32(_encryptionService.Decrypt(request.DeviceId));
-                var decryptedParentDeviceId = request.ParentDeviceId != null
-                    ? Convert.ToInt32(_encryptionService.Decrypt(request.ParentDeviceId))
-                    : (int?)null;
+                var (decryptedEventId, decryptedRaceId, decryptedCheckpointId) = DecryptAll(eventId, raceId, checkpointId);
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
-
-                var existing = await checkpointRepo.GetQuery(c =>
-                        c.Id == decryptedCheckpointId &&
-                        c.EventId == decryptedEventId &&
-                        c.RaceId == decryptedRaceId &&
-                        c.AuditProperties.IsActive &&
-                        !c.AuditProperties.IsDeleted)
-                    .FirstOrDefaultAsync();
-
+                var existing = await FindCheckpointAsync(decryptedCheckpointId, decryptedEventId, decryptedRaceId);
                 if (existing == null)
                 {
                     ErrorMessage = "Checkpoint not found.";
@@ -265,15 +176,12 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                // Map allowed fields from request to entity (do not overwrite audit/ids)
-                existing.Name = request.Name;
-                existing.DistanceFromStart = request.DistanceFromStart;
-                existing.DeviceId = decryptedDeviceId;
-                existing.ParentDeviceId = decryptedParentDeviceId;
-
-                // Update audit
-                existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                existing.AuditProperties.UpdatedBy = _userContext.UserId;
+                // Map allowed fields (uses AutoMapper mapping with SetUpdated)
+                _mapper.Map(request, existing, opts =>
+                {
+                    opts.Items["SetUpdated"] = true;
+                    opts.Items["UserId"] = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
+                });
 
                 await checkpointRepo.UpdateAsync(existing);
                 await _repository.SaveChangesAsync();
@@ -288,6 +196,70 @@ namespace Runnatics.Services
                 return false;
             }
         }
+
+        #region Helpers
+
+        private (int eventId, int raceId) DecryptEventAndRace(string eventId, string raceId)
+        {
+            return (Convert.ToInt32(_encryptionService.Decrypt(eventId)), Convert.ToInt32(_encryptionService.Decrypt(raceId)));
+        }
+
+        private (int deviceId, int parentDeviceId) DecryptDeviceAndParentDevice(string deviceId, string parentDeviceId)
+        {
+            return (Convert.ToInt32(_encryptionService.Decrypt(deviceId)), Convert.ToInt32(_encryptionService.Decrypt(parentDeviceId)));
+        }
+
+        private (int eventId, int raceId, int checkpointId) DecryptAll(string eventId, string raceId, string checkpointId)
+        {
+            return (Convert.ToInt32(_encryptionService.Decrypt(eventId)), Convert.ToInt32(_encryptionService.Decrypt(raceId)), Convert.ToInt32(_encryptionService.Decrypt(checkpointId)));
+        }
+
+        private async Task<bool> ParentEventAndRaceExistAsync(int eventId, int raceId)
+        {
+            var eventRepo = _repository.GetRepository<Event>();
+            var parentEvent = await eventRepo.GetQuery(e => e.Id == eventId && e.AuditProperties.IsActive && !e.AuditProperties.IsDeleted)
+                .AsNoTracking().FirstOrDefaultAsync();
+            if (parentEvent == null)
+            {
+                ErrorMessage = "Event not found or inactive.";
+                _logger.LogWarning("Parent event not found: {EventId}", eventId);
+                return false;
+            }
+
+            var raceRepo = _repository.GetRepository<Race>();
+            var parentRace = await raceRepo.GetQuery(r => r.Id == raceId && r.EventId == eventId && r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted)
+                .AsNoTracking().FirstOrDefaultAsync();
+            if (parentRace == null)
+            {
+                ErrorMessage = "Race not found or inactive.";
+                _logger.LogWarning("Parent race not found: EventId={EventId}, RaceId={RaceId}", eventId, raceId);
+                return false;
+            }
+
+            return true;
+        }
+
+        private Task<Checkpoint?> FindCheckpointAsync(int checkpointId, int eventId, int raceId)
+        {
+            var repo = _repository.GetRepository<Checkpoint>();
+            return repo.GetQuery(c => c.Id == checkpointId && c.EventId == eventId && c.RaceId == raceId && c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
+                .FirstOrDefaultAsync();
+        }
+
+        /// <summary>
+        /// Creates audit properties for an entity
+        /// </summary>
+        private static Models.Data.Common.AuditProperties CreateAuditProperties(int userId)
+        {
+            return new Models.Data.Common.AuditProperties
+            {
+                IsActive = true,
+                IsDeleted = false,
+                CreatedDate = DateTime.UtcNow,
+                CreatedBy = userId
+            };
+        }
+        #endregion
 
     }
 }

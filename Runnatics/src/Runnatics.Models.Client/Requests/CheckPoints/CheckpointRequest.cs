@@ -3,13 +3,7 @@
 namespace Runnatics.Models.Client.Requests.CheckPoints
 {
     public class CheckpointRequest
-    {
-        [Required]
-        public string EventId { get; set; }
-
-        [Required]
-        public string RaceId { get; set; }
-
+    {        
         [Required]
         [MaxLength(100)]
         public string Name { get; set; } = string.Empty;
@@ -18,5 +12,7 @@ namespace Runnatics.Models.Client.Requests.CheckPoints
         public decimal DistanceFromStart { get; set; }
         public string DeviceId { get; set; }
         public string? ParentDeviceId { get; set; }
+
+        public bool IsMandatory { get; set; }
     }
 }

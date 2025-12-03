@@ -20,7 +20,7 @@ namespace Runnatics.Data.EF.Config
                 .IsRequired();
 
             builder.Property(e => e.Name)
-                .HasMaxLength(20)
+                .HasMaxLength(100)
                 .IsRequired();
 
             builder.Property(e => e.DistanceFromStart)
@@ -33,8 +33,8 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.ParentDeviceId);
 
             builder.Property(e => e.IsMandatory)
-                .HasDefaultValue(false);
-          
+                .IsRequired();
+
             // Indexes
             builder.HasIndex(e => e.EventId)
                 .HasDatabaseName("IX_Checkpoints_EventId");           
@@ -51,21 +51,29 @@ namespace Runnatics.Data.EF.Config
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
-                    .IsRequired();
                 ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-                ap.Property(p => p.UpdatedBy);
-                ap.Property(p => p.UpdatedDate);
+                   .HasColumnName("CreatedAt")
+                   .HasDefaultValueSql("GETUTCDATE()")
+                   .IsRequired();
 
-                ap.Property(e => e.IsActive)
-               .HasColumnName("IsActive")
-               .HasDefaultValue(true)
-               .IsRequired();
+                ap.Property(p => p.UpdatedDate)
+                  .HasColumnName("UpdatedAt");
+
+                ap.Property(p => p.CreatedBy)
+                  .HasColumnName("CreatedBy");
+
+                ap.Property(p => p.UpdatedBy)
+                  .HasColumnName("UpdatedBy");
+
+                ap.Property(p => p.IsActive)
+                  .HasColumnName("IsActive")
+                  .HasDefaultValue(true)
+                  .IsRequired();
+
+                ap.Property(p => p.IsDeleted)
+                  .HasColumnName("IsDeleted")
+                  .HasDefaultValue(false)
+                  .IsRequired();
             });
         }
     }

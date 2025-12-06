@@ -9,7 +9,11 @@ namespace Runnatics.Models.Client.Requests.Participant
 {
     public class ParticipantRequest
     {
-        public string BibNumber { get; set; }
+        [Required]
+        public string BibNumber { get; set; } = string.Empty;
+
+        [Required]
+        public string RaceId { get; set; } = string.Empty;
 
         public string? FirstName { get; set; }
 

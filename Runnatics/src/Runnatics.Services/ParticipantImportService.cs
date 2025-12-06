@@ -283,6 +283,7 @@ namespace Runnatics.Services
         {
             try
             {
+                
                 var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
                 var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
 
@@ -365,6 +366,7 @@ namespace Runnatics.Services
                 participant.EventId = eventIdInt;
                 participant.RaceId = raceIdInt;
                 participant.TenantId = _userContext.TenantId;
+
                 participant.AuditProperties = new Models.Data.Common.AuditProperties
                 {
                     CreatedBy = _userContext.UserId,
@@ -404,6 +406,8 @@ namespace Runnatics.Services
 
                 var decryptParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
 
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(editParticipant.RaceId));
+
                 var existingParticipant = await participantRepo.GetQuery(p => p.Id == decryptParticipantId
                                                                               && p.AuditProperties.IsActive
                                                                               && !p.AuditProperties.IsDeleted)
@@ -417,13 +421,47 @@ namespace Runnatics.Services
 
                 _mapper.Map(editParticipant, existingParticipant);
 
-                existingParticipant.AuditProperties = new Models.Data.Common.AuditProperties
+                ///If existing race id is different than the new race id, then user is moving participant to another race.
+                ///so, we need to deleted that record from existing and add a new record in the new race.
+                if (existingParticipant.RaceId != decryptedRaceId)
                 {
-                    UpdatedBy = _userContext.UserId,
-                    UpdatedDate = DateTime.UtcNow,
-                    IsActive = true,
-                    IsDeleted = false
-                };
+                    //insert the record in participant table with new race id
+                    var newParticipant = _mapper.Map<Models.Data.Entities.Participant>(editParticipant);
+                    newParticipant.EventId = existingParticipant.EventId;
+                    newParticipant.TenantId = _userContext.TenantId;
+                    newParticipant.AuditProperties = new Models.Data.Common.AuditProperties
+                    {
+                        CreatedBy = _userContext.UserId,
+                        CreatedDate = DateTime.UtcNow,
+                        IsActive = true,
+                        IsDeleted = false
+                    };
+                    await _repository.BeginTransactionAsync();
+
+                    await participantRepo.AddAsync(newParticipant);
+                    //delete the existing record
+                    existingParticipant.AuditProperties = new Models.Data.Common.AuditProperties
+                    {
+                        UpdatedBy = _userContext.UserId,
+                        UpdatedDate = DateTime.UtcNow,
+                        IsActive = false,
+                        IsDeleted = true
+                    };
+                    await participantRepo.UpdateAsync(existingParticipant);
+                    await _repository.SaveChangesAsync();
+                    await _repository.CommitTransactionAsync();
+                    return;
+                }
+                else
+                {
+                    existingParticipant.AuditProperties = new Models.Data.Common.AuditProperties
+                    {
+                        UpdatedBy = _userContext.UserId,
+                        UpdatedDate = DateTime.UtcNow,
+                        IsActive = true,
+                        IsDeleted = false
+                    };
+                }
 
                 await _repository.BeginTransactionAsync();
 

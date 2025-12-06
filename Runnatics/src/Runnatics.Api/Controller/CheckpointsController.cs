@@ -21,7 +21,7 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Create a checkpoint for an event and race
         /// </summary>
-        [HttpPost("{eventId}/{raceId}/create")]
+        [HttpPost("{eventId}/{raceId}")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]

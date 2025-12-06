@@ -429,6 +429,7 @@ namespace Runnatics.Services
                     var newParticipant = _mapper.Map<Models.Data.Entities.Participant>(editParticipant);
                     newParticipant.EventId = existingParticipant.EventId;
                     newParticipant.TenantId = _userContext.TenantId;
+                    newParticipant.RaceId = decryptedRaceId;
                     newParticipant.AuditProperties = new Models.Data.Common.AuditProperties
                     {
                         CreatedBy = _userContext.UserId,

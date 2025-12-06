@@ -441,13 +441,11 @@ namespace Runnatics.Services
 
                     await participantRepo.AddAsync(newParticipant);
                     //delete the existing record
-                    existingParticipant.AuditProperties = new Models.Data.Common.AuditProperties
-                    {
-                        UpdatedBy = _userContext.UserId,
-                        UpdatedDate = DateTime.UtcNow,
-                        IsActive = false,
-                        IsDeleted = true
-                    };
+                    existingParticipant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    existingParticipant.AuditProperties.IsActive = false;
+                    existingParticipant.AuditProperties.IsDeleted = true;
+                    existingParticipant.AuditProperties.UpdatedBy = _userContext.UserId;
+                    
                     await participantRepo.UpdateAsync(existingParticipant);
                     await _repository.SaveChangesAsync();
                     await _repository.CommitTransactionAsync();
@@ -455,13 +453,9 @@ namespace Runnatics.Services
                 }
                 else
                 {
-                    existingParticipant.AuditProperties = new Models.Data.Common.AuditProperties
-                    {
-                        UpdatedBy = _userContext.UserId,
-                        UpdatedDate = DateTime.UtcNow,
-                        IsActive = true,
-                        IsDeleted = false
-                    };
+                    existingParticipant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    existingParticipant.AuditProperties.IsActive = true;
+                    existingParticipant.AuditProperties.IsDeleted = false;
                 }
 
                 await _repository.BeginTransactionAsync();

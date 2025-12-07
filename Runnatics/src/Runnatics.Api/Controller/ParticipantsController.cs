@@ -1,13 +1,10 @@
-using Azure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Responses.Participants;
-using Runnatics.Services;
 using Runnatics.Services.Interface;
-using System.ComponentModel.DataAnnotations;
 using System.Net;
 
 namespace Runnatics.Api.Controller
@@ -236,6 +233,25 @@ namespace Runnatics.Api.Controller
 
             else
                 return Ok(HttpStatusCode.NoContent);
+        }
+
+        [HttpGet("{eventId}/{raceId}/categories")]
+        public async Task<IActionResult> Categories([FromRoute] string eventId, [FromRoute] string raceId)
+        {
+            var response = new ResponseBase<List<Category>>();
+            var result = await _service.GetCategories(eventId, raceId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<List<Category>>.ErrorData()
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
         }
     }
 }

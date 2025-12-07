@@ -1,5 +1,6 @@
-using System.Linq.Expressions;
+using Microsoft.EntityFrameworkCore;
 using Runnatics.Models.Data.Common;
+using System.Linq.Expressions;
 
 public interface IGenericRepository<T> where T : class
 {
@@ -10,7 +11,7 @@ public interface IGenericRepository<T> where T : class
         string? sortFieldName = null,
         bool ignoreQueryFilters = false,
         bool includeNavigationProperties = false);
-        
+
     Task<T> GetByIdAsync(int id);
     Task<IEnumerable<T>> GetAllAsync();
     Task<T> AddAsync(T entity);
@@ -27,4 +28,6 @@ public interface IGenericRepository<T> where T : class
     public Task<PagingList<T>> ExecuteStoredProcedure<I>(string procedureName, I input, string output, bool forJob = false);
 
     public Task<List<List<dynamic>>> ExecuteStoredProcedureDataSet<I>(string procedureName, I input);
+
+    public Task<int> CountAsync(Expression<Func<T, bool>>? filter = null, bool ignoreQueryFilters = false);
 }

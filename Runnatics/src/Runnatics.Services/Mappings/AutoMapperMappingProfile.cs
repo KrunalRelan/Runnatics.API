@@ -308,6 +308,9 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dst => dst.Phone, opt => opt.MapFrom(src => src.Phone))
                 .ForMember(dst => dst.Gender, opt => opt.MapFrom(src => src.Gender))
                 .ForMember(dst => dst.AgeCategory, opt => opt.MapFrom(src => src.Category));
+
+            CreateMap<Participant, Category>()
+                .ForMember(dst => dst.CategoryName, opt => opt.MapFrom(src => src.AgeCategory));
             #endregion
 
             #region

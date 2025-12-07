@@ -6,6 +6,7 @@ using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Responses.Participants;
+using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -283,7 +284,7 @@ namespace Runnatics.Services
         {
             try
             {
-                
+
                 var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
                 var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
 
@@ -445,7 +446,7 @@ namespace Runnatics.Services
                     existingParticipant.AuditProperties.IsActive = false;
                     existingParticipant.AuditProperties.IsDeleted = true;
                     existingParticipant.AuditProperties.UpdatedBy = _userContext.UserId;
-                    
+
                     await participantRepo.UpdateAsync(existingParticipant);
                     await _repository.SaveChangesAsync();
                     await _repository.CommitTransactionAsync();
@@ -532,6 +533,38 @@ namespace Runnatics.Services
                 }
             }
         }
+
+        public async Task<List<Category>> GetCategories(string eventId, string raceId)
+        {
+            try
+            {
+                var decryptedEventId = _encryptionService.Decrypt(eventId);
+                var decryptedRaceId = _encryptionService.Decrypt(raceId);
+
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+
+                var categories = participantRepo.GetQuery(p => p.EventId.ToString() == decryptedEventId
+                                                              && p.RaceId.ToString() == decryptedRaceId
+                                                              && p.AuditProperties.IsActive
+                                                              && !p.AuditProperties.IsDeleted);
+
+                var toReturn = categories.Select(s =>
+                                                    new Category
+                                                    {
+                                                        CategoryName = s.AgeCategory ?? string.Empty,
+                                                    }).Distinct()
+                                                      .ToList();
+
+                return await Task.FromResult(toReturn);
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error fetching categories: {ex.Message}";
+                _logger.LogError(ex, "Error while fetching categories for event {eventId} and race {raceId}", eventId, raceId);
+                return [];
+            }
+        }
+
         /// <summary>
         /// Builds the filter expression for event search
         /// </summary>
@@ -762,14 +795,11 @@ namespace Runnatics.Services
             return "Id";
         }
 
-
-
         // Map client-facing property names to database property names
         private static readonly Dictionary<string, string> SortFieldMapping = new(StringComparer.OrdinalIgnoreCase)
         {
              { "CreatedAt", "AuditProperties.CreatedDate" },
              { "UpdatedAt", "AuditProperties.UpdatedDate" }
         };
-
     }
 }

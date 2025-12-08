@@ -15,5 +15,7 @@ namespace Runnatics.Services.Interface
         Task<bool> Delete(string eventId, string raceId, string checkpointId);
 
         Task<CheckpointResponse> GetCheckpoint(string eventId, string raceId, string checkpointId);
+        
+        Task<bool> Clone(string eventId, string sourceRaceId, string destinationRaceId);
     }
 }

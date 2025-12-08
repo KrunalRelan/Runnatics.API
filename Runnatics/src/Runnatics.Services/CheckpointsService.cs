@@ -64,6 +64,70 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<bool> Clone(string eventId, string sourceRaceId, string destinationRaceId)
+        {
+            try
+            {
+                var (decryptedEventId, decryptedSourceRaceId) = DecryptEventAndRace(eventId, sourceRaceId);
+                var decryptedDestinationRaceId = Convert.ToInt32(_encryptionService.Decrypt(destinationRaceId));
+
+                // verify event and both races exist
+                if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedSourceRaceId))
+                {
+                    return false;
+                }
+
+                if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedDestinationRaceId))
+                {
+                    return false;
+                }
+
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+
+                var sourceCheckpoints = await checkpointRepo.GetQuery(c => c.EventId == decryptedEventId && c.RaceId == decryptedSourceRaceId && c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .OrderBy(c => c.Id)
+                    .ToListAsync();
+
+                if (sourceCheckpoints == null || sourceCheckpoints.Count == 0)
+                {
+                    ErrorMessage = "No checkpoints to clone from source race.";
+                    return false;
+                }
+
+                var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
+
+                var clones = new List<Checkpoint>();
+                foreach (var src in sourceCheckpoints)
+                {
+                    var copy = new Checkpoint
+                    {
+                        EventId = src.EventId,
+                        RaceId = decryptedDestinationRaceId,
+                        Name = src.Name,
+                        DistanceFromStart = src.DistanceFromStart,
+                        DeviceId = src.DeviceId,
+                        ParentDeviceId = src.ParentDeviceId,
+                        IsMandatory = src.IsMandatory,
+                        AuditProperties = CreateAuditProperties(currentUserId)
+                    };
+                    clones.Add(copy);
+                }
+
+                await checkpointRepo.AddRangeAsync(clones);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Cloned {Count} checkpoints from Race {SrcRace} to Race {DstRace} for Event {EventId}", clones.Count, decryptedSourceRaceId, decryptedDestinationRaceId, decryptedEventId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cloning checkpoints. Event: {EventId}, SourceRace: {Src}, DestinationRace: {Dst}", eventId, sourceRaceId, destinationRaceId);
+                ErrorMessage = "Error cloning checkpoints.";
+                return false;
+            }
+        }
+
         public async Task<bool> Delete(string eventId, string raceId, string checkpointId)
         {
             try

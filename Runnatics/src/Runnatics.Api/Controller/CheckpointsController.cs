@@ -227,5 +227,32 @@ namespace Runnatics.Api.Controller
             response.Message = new { message = "Checkpoint deleted successfully", id };
             return Ok(response);
         }
+
+        /// <summary>
+        /// Clone checkpoints from source race to destination race within same event
+        /// </summary>
+        [HttpPost("{eventId}/{sourceRaceId}/{destinationRaceId}/clone")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        public async Task<IActionResult> Clone([FromRoute] string eventId, [FromRoute] string sourceRaceId, [FromRoute] string destinationRaceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(sourceRaceId) || string.IsNullOrEmpty(destinationRaceId))
+            {
+                return BadRequest(new { error = "Invalid request provided." });
+            }
+
+            var result = await _checkpointsService.Clone(eventId, sourceRaceId, destinationRaceId);
+
+            if (_checkpointsService.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _checkpointsService.ErrorMessage });
+            }
+
+            if (!result)
+            {
+                return BadRequest(new { error = _checkpointsService.ErrorMessage ?? "Clone operation failed." });
+            }
+
+            return Ok(new { message = "Checkpoints cloned successfully." });
+        }
     }
 }

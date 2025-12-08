@@ -273,6 +273,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(d => d.RaceName, opt => opt.MapFrom(src => src.Race != null ? src.Race.Title : ""))
                 .ForMember(d => d.ImportBatchId, opt => opt.MapFrom(src => src.ImportBatchId));
+                
 
             CreateMap<ImportBatch, ParticipantImportResponse>()
                 .ForMember(d => d.ImportBatchId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
@@ -308,6 +309,8 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dst => dst.Gender, opt => opt.MapFrom(src => src.Gender))
                 .ForMember(dst => dst.AgeCategory, opt => opt.MapFrom(src => src.Category));
 
+            CreateMap<Participant, Category>()
+                .ForMember(dst => dst.CategoryName, opt => opt.MapFrom(src => src.AgeCategory));
             #endregion
 
             #region

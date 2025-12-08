@@ -1,11 +1,7 @@
-using System.Net;
-using System.Security.Claims;
-using Azure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.API.Models.Requests;
 using Runnatics.Models.Client.Common;
-using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Responses;
 using Runnatics.Services.Interface;
 
@@ -35,7 +31,7 @@ namespace Runnatics.Api.Controller
                 }
 
                 toReturn.Message = result;
-                
+
                 return Ok(toReturn);
             }
             catch

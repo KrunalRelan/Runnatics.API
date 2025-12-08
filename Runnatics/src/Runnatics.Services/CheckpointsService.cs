@@ -28,7 +28,7 @@ namespace Runnatics.Services
             try
             {
                 var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
-                //var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId ?? "0");
+                var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId ?? "0");
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
@@ -40,13 +40,13 @@ namespace Runnatics.Services
                 // Map request to entity; include decrypted EventId/RaceId and current user id in mapping context
                 var checkpoint = _mapper.Map<Checkpoint>(request);
 
-                checkpoint.Name = request.Name;
                 checkpoint.EventId = decryptedEventId;
                 checkpoint.RaceId = decryptedRaceId;
+                checkpoint.DeviceId = decryptedDeviceId;
+                checkpoint.ParentDeviceId = decryptedParentDeviceId;
+                checkpoint.Name = request.Name;
                 checkpoint.IsMandatory = request.IsMandatory;
                 checkpoint.DistanceFromStart = request.DistanceFromStart;
-                //checkpoint.ParentDeviceId = 1; //decryptedParentDeviceId;
-                checkpoint.DeviceId = 1; // decryptedDeviceId;
                 checkpoint.AuditProperties = CreateAuditProperties(currentUserId);
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();

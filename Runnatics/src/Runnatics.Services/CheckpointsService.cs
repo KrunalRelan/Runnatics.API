@@ -207,8 +207,7 @@ namespace Runnatics.Services
                         c.AuditProperties.IsActive &&
                         !c.AuditProperties.IsDeleted)
                     .AsNoTracking()
-                    .OrderBy(c => c.Id)
-                    .ThenBy(c => c.DistanceFromStart)
+                    .OrderBy(c => c.DistanceFromStart)
                     .ToListAsync();
 
                 var responses = _mapper.Map<List<CheckpointResponse>>(list);

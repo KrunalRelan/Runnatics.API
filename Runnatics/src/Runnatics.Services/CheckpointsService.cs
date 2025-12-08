@@ -97,10 +97,8 @@ namespace Runnatics.Services
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
-                var clones = new List<Checkpoint>();
-                foreach (var src in sourceCheckpoints)
-                {
-                    var copy = new Checkpoint
+                var clones = sourceCheckpoints
+                    .Select(src => new Checkpoint
                     {
                         EventId = src.EventId,
                         RaceId = decryptedDestinationRaceId,
@@ -110,9 +108,8 @@ namespace Runnatics.Services
                         ParentDeviceId = src.ParentDeviceId,
                         IsMandatory = src.IsMandatory,
                         AuditProperties = CreateAuditProperties(currentUserId)
-                    };
-                    clones.Add(copy);
-                }
+                    })
+                    .ToList();
 
                 await checkpointRepo.AddRangeAsync(clones);
                 await _repository.SaveChangesAsync();

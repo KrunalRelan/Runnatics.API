@@ -33,12 +33,12 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.RankOnNet)
                  .HasColumnName("RankOnNet")
-                 .HasDefaultValue(true)
+                 .HasDefaultValue(false)
                  .IsRequired();
 
             builder.Property(e => e.ShowResultSummaryForRaces)
                  .HasColumnName("ShowResultSummaryForRaces")
-                 .HasDefaultValue(true)
+                 .HasDefaultValue(false)
                  .IsRequired();
 
             builder.Property(e => e.UseOldData)
@@ -53,12 +53,12 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.AllowNameCheck)
                  .HasColumnName("AllowNameCheck")
-                 .HasDefaultValue(true)
+                 .HasDefaultValue(false)
                  .IsRequired();
 
             builder.Property(e => e.AllowParticipantEdit)
                  .HasColumnName("AllowParticipantEdit")
-                 .HasDefaultValue(true)
+                 .HasDefaultValue(false)
                  .IsRequired();
 
             // Indexes

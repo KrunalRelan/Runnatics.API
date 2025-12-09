@@ -27,8 +27,8 @@ namespace Runnatics.Services
         {
             try
             {
-                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
-                var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId ?? "0");
+                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId); 
+                var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId);
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
@@ -264,9 +264,9 @@ namespace Runnatics.Services
             return (Convert.ToInt32(_encryptionService.Decrypt(eventId)), Convert.ToInt32(_encryptionService.Decrypt(raceId)));
         }
 
-        private (int deviceId, int parentDeviceId) DecryptDeviceAndParentDevice(string deviceId, string parentDeviceId)
+        private (int deviceId, int? parentDeviceId) DecryptDeviceAndParentDevice(string deviceId, string parentDeviceId)
         {
-            return (Convert.ToInt32(_encryptionService.Decrypt(deviceId)), Convert.ToInt32(_encryptionService.Decrypt(parentDeviceId)));
+            return (Convert.ToInt32(_encryptionService.Decrypt(deviceId)), !string.IsNullOrEmpty(parentDeviceId) ? Convert.ToInt32(_encryptionService.Decrypt(parentDeviceId)) : null);
         }
 
         private (int eventId, int raceId, int checkpointId) DecryptAll(string eventId, string raceId, string checkpointId)

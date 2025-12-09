@@ -77,7 +77,7 @@ namespace Runnatics.Services
         public async Task<bool> Create(EventRequest request)
         {
             try
-            {
+            {       
                 // Get user ID and tenant ID from JWT token
                 var currentUserId = _userContext.UserId;
                 var tenantId = _userContext.TenantId;
@@ -396,13 +396,6 @@ namespace Runnatics.Services
                 return false;
             }
 
-            if (request.EventDate < DateTime.UtcNow.Date)
-            {
-                this.ErrorMessage = "Event date cannot be in the past.";
-                _logger.LogWarning("Past event date provided: {Date}", request.EventDate);
-                return false;
-            }
-
             return true;
         }
 
@@ -543,6 +536,8 @@ namespace Runnatics.Services
                         ShowResultSummaryForRaces = eventSettingsData.ShowResultSummaryForRaces,
                         UseOldData = eventSettingsData.UseOldData,
                         ConfirmedEvent = eventSettingsData.ConfirmedEvent,
+                        AllowNameCheck = eventSettingsData.AllowNameCheck,
+                        AllowParticipantEdit = eventSettingsData.AllowParticipantEdit,
                         AuditProperties = eventSettingsData.AuditProperties
                     };
 

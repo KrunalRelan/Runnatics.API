@@ -10,6 +10,8 @@ namespace Runnatics.Services.Interface
 
         Task<bool> Create(string eventId, string raceId, CheckpointRequest request);
 
+        Task<bool> BulkCreate(string eventId, string raceId, List<CheckpointRequest> request);
+
         Task<bool> Update(string eventId, string raceId, string checkpointId, CheckpointRequest request);
 
         Task<bool> Delete(string eventId, string raceId, string checkpointId);

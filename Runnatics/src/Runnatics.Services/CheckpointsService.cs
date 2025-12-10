@@ -64,6 +64,60 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<bool> BulkCreate(string eventId, string raceId, List<CheckpointRequest> requests)
+        {
+            try
+            {
+                if (requests == null || requests.Count == 0)
+                {
+                    ErrorMessage = "No checkpoints provided.";
+                    return false;
+                }
+
+                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
+
+                if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedRaceId))
+                {
+                    return false;
+                }
+
+                var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+
+                var entities = new List<Checkpoint>(requests.Count);
+
+                foreach (var req in requests)
+                {
+                    var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(req.DeviceId, req.ParentDeviceId);
+
+                    var checkpoint = _mapper.Map<Checkpoint>(req);
+
+                    checkpoint.EventId = decryptedEventId;
+                    checkpoint.RaceId = decryptedRaceId;
+                    checkpoint.DeviceId = decryptedDeviceId;
+                    checkpoint.ParentDeviceId = decryptedParentDeviceId;
+                    checkpoint.Name = req.Name;
+                    checkpoint.IsMandatory = req.IsMandatory;
+                    checkpoint.DistanceFromStart = req.DistanceFromStart;
+                    checkpoint.AuditProperties = CreateAuditProperties(currentUserId);
+
+                    entities.Add(checkpoint);
+                }
+
+                await checkpointRepo.AddRangeAsync(entities);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Bulk created {Count} checkpoints for EventId: {EventId}, RaceId: {RaceId} by UserId: {UserId}", entities.Count, decryptedEventId, decryptedRaceId, currentUserId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error bulk creating checkpoints for EventId: {EventId}, RaceId: {RaceId}", eventId, raceId);
+                ErrorMessage = "Error creating checkpoints.";
+                return false;
+            }
+        }
+
         public async Task<bool> Clone(string eventId, string sourceRaceId, string destinationRaceId)
         {
             try
@@ -131,7 +185,7 @@ namespace Runnatics.Services
             {
                 var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
                 var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-                var decryptedCheckpointId = Convert.ToInt32(_encryptionService.Decrypt(checkpointId));
+                var decryptedCheckpointId = TryParseOrDecrypt(checkpointId, nameof(checkpointId));
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
 
@@ -207,6 +261,8 @@ namespace Runnatics.Services
                         c.AuditProperties.IsActive &&
                         !c.AuditProperties.IsDeleted)
                     .AsNoTracking()
+                    .Include(c => c.Device)
+                    .Include(c => c.ParentDevice)
                     .OrderBy(c => c.DistanceFromStart)
                     .ToListAsync();
 
@@ -261,17 +317,46 @@ namespace Runnatics.Services
 
         private (int eventId, int raceId) DecryptEventAndRace(string eventId, string raceId)
         {
-            return (Convert.ToInt32(_encryptionService.Decrypt(eventId)), Convert.ToInt32(_encryptionService.Decrypt(raceId)));
+            return (TryParseOrDecrypt(eventId, nameof(eventId)), TryParseOrDecrypt(raceId, nameof(raceId)));
         }
 
         private (int deviceId, int? parentDeviceId) DecryptDeviceAndParentDevice(string deviceId, string parentDeviceId)
         {
-            return (Convert.ToInt32(_encryptionService.Decrypt(deviceId)), !string.IsNullOrEmpty(parentDeviceId) ? Convert.ToInt32(_encryptionService.Decrypt(parentDeviceId)) : null);
+            return (TryParseOrDecrypt(deviceId, nameof(deviceId)), !string.IsNullOrEmpty(parentDeviceId) ? TryParseOrDecrypt(parentDeviceId, nameof(parentDeviceId)) : null);
         }
 
         private (int eventId, int raceId, int checkpointId) DecryptAll(string eventId, string raceId, string checkpointId)
         {
-            return (Convert.ToInt32(_encryptionService.Decrypt(eventId)), Convert.ToInt32(_encryptionService.Decrypt(raceId)), Convert.ToInt32(_encryptionService.Decrypt(checkpointId)));
+            return (TryParseOrDecrypt(eventId, nameof(eventId)), TryParseOrDecrypt(raceId, nameof(raceId)), TryParseOrDecrypt(checkpointId, nameof(checkpointId)));
+        }
+
+        /// <summary>
+        /// Attempts to parse the input as an integer. If parsing fails, attempts to decrypt and parse the result.
+        /// Throws ArgumentException when neither parsing nor decryption produce a valid integer.
+        /// </summary>
+        private int TryParseOrDecrypt(string input, string inputName)
+        {
+            if (string.IsNullOrEmpty(input))
+                throw new ArgumentException("Id input cannot be null or empty", inputName);
+
+            if (int.TryParse(input, out var id))
+                return id;
+
+            try
+            {
+                var decrypted = _encryptionService.Decrypt(input);
+                if (int.TryParse(decrypted, out id))
+                    return id;
+
+                _logger.LogDebug("Decrypted value for {InputName} did not parse as int", inputName);
+                throw new ArgumentException($"Invalid {inputName} format");
+            }
+            catch (Exception ex)
+            {
+                // log debug for diagnostics but avoid logging sensitive material
+                _logger.LogDebug(ex, "Failed to parse or decrypt input for {InputName}", inputName);
+                throw new ArgumentException($"Invalid {inputName} format", inputName, ex);
+            }
         }
 
         private async Task<bool> ParentEventAndRaceExistAsync(int eventId, int raceId)

@@ -10,5 +10,7 @@
         public string DeviceId { get; set; }
         public string? ParentDeviceId { get; set; }
         public bool IsMandatory { get; set; }
+        public string? DeviceName { get; set; }
+        public string? ParentDeviceName { get; set; }
     }
 }

@@ -63,6 +63,44 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Bulk create checkpoints for an event and race
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/bulk")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> BulkCreate(string eventId, string raceId, [FromBody] List<CheckpointRequest> requests)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || requests == null || requests.Count == 0)
+            {
+                return BadRequest(new { error = "Invalid input provided. Request body cannot be null or empty." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                    .SelectMany(v => v.Errors)
+                    .Select(e => e.ErrorMessage)
+                    .ToList()
+                });
+            }
+
+            await _checkpointsService.BulkCreate(eventId, raceId, requests);
+
+            if (_checkpointsService.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, _checkpointsService.ErrorMessage);
+            }
+
+            return Ok(HttpStatusCode.Created);
+        }
+
+        /// <summary>
         /// Update a checkpoint
         /// </summary>
         [HttpPut("{eventId}/{raceId}/{id}")]

@@ -19,59 +19,36 @@ namespace Runnatics.Api.Controller
         private readonly IEventsService _eventService = eventService;
 
         /// <summary>
-        /// Searches for events based on specified criteria with pagination and sorting
+        /// Search for past events (events that have already occurred)
         /// </summary>
-        /// <param name="request">Search criteria including filters, pagination, and sorting options</param>
-        /// <returns>A paginated list of events matching the search criteria</returns>
-        /// <remarks>
-        /// Sample request:
-        /// 
-        /// POST /api/events/search
-        ///     {
-        ///       "name": "Marathon",
-        ///       "status": "Active",
-        ///       "eventDateFrom": "2024-01-01T00:00:00Z",
-        ///       "eventDateTo": "2024-12-31T23:59:59Z",
-        ///       "pageNumber": 1,
-        ///       "pageSize": 10,
-        ///       "sortFieldName": "EventDate",
-        ///       "sortDirection": 0
-        ///     }
-        /// </remarks>
-        /// <response code="200">Returns the paginated list of events with total count</response>
-        /// <response code="400">If the request is invalid or contains invalid data</response>
-        /// <response code="401">If the user is not authenticated</response>
-        /// <response code="403">If the user is not authorized (Admin role required)</response>
-        /// <response code="500">If an internal server error occurs during search</response>
-        [HttpPost("search")]
+        [HttpPost("search/past")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<PagingList<EventResponse>>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Search([FromBody] EventSearchRequest request)
+        public async Task<IActionResult> SearchPastEvents([FromBody] EventSearchRequest request)
         {
             if (request == null)
             {
                 return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
             }
 
-            // Validate model state
             if (!ModelState.IsValid)
             {
                 return BadRequest(new
                 {
                     error = "Validation failed",
                     details = ModelState.Values
-                          .SelectMany(v => v.Errors)
-                       .Select(e => e.ErrorMessage)
-                         .ToList()
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
                 });
             }
 
             var response = new ResponseBase<PagingList<EventResponse>>();
-            var result = await _eventService.Search(request);
+            var result = await _eventService.SearchPastEvents(request);
 
             if (_eventService.HasError)
             {
@@ -84,7 +61,52 @@ namespace Runnatics.Api.Controller
 
             response.Message = result;
             response.TotalCount = result.TotalCount;
+            return Ok(response);
+        }
 
+        /// <summary>
+        /// Search for future/upcoming events
+        /// </summary>
+        [HttpPost("search/future")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<PagingList<EventResponse>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> SearchFutureEvents([FromBody] EventSearchRequest request)
+        {
+            if (request == null)
+            {
+                return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
+            }
+
+            var response = new ResponseBase<PagingList<EventResponse>>();
+            var result = await _eventService.SearchFutureEvents(request);
+
+            if (_eventService.HasError)
+            {
+                response.Error = new ResponseBase<PagingList<EventResponse>>.ErrorData()
+                {
+                    Message = _eventService.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            response.TotalCount = result.TotalCount;
             return Ok(response);
         }
 

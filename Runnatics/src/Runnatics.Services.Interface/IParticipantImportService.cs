@@ -24,5 +24,7 @@ namespace Runnatics.Services.Interface
         Task DeleteParicipant(string participantId);
 
         Task<List<Category>> GetCategories(string eventId, string raceId);
+
+        Task<AddParticipantRangeResponse> AddParticipantRangeAsync(string eventId, string raceId, AddParticipantRangeRequest request);
     }
 }

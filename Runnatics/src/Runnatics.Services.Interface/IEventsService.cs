@@ -12,5 +12,9 @@ namespace Runnatics.Services.Interface
         Task<bool> Delete(string id);
 
         Task<EventResponse?> GetEventById(string id);
+
+        Task<PagingList<EventResponse>> SearchFutureEvents(EventSearchRequest request);
+
+        Task<PagingList<EventResponse>> SearchPastEvents(EventSearchRequest request);
     }
 }

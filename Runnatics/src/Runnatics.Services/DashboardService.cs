@@ -30,7 +30,8 @@ namespace Runnatics.Services
                 var tenantId = _userContext.TenantId;
 
                 var eventrepo = _repository.GetRepository<Event>();
-                var totalEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId);
+                var totalEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId && e.AuditProperties.IsActive 
+                                                                                         && !e.AuditProperties.IsDeleted);
                 var totalActiveEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId && e.AuditProperties.IsActive && e.EventDate > DateTime.UtcNow);
                 var totalcompletedEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId && 
                                                                            e.AuditProperties.IsActive && 

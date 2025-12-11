@@ -327,5 +327,22 @@ namespace Runnatics.Repositories.EF
             }
             return command;
         }
+
+        public async Task<int> CountAsync(Expression<Func<T, bool>>? filter = null, bool ignoreQueryFilters = false)
+        {
+            IQueryable<T> query = _dbSet;
+
+            if (ignoreQueryFilters)
+            {
+                query = query.IgnoreQueryFilters();
+            }
+
+            if (filter != null)
+            {
+                query = query.Where(filter);
+            }
+
+            return await query.CountAsync();
+        }
     }
 }

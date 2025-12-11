@@ -9,6 +9,7 @@ using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
+using System.Diagnostics;
 using System.Linq.Expressions;
 
 namespace Runnatics.Services
@@ -70,6 +71,78 @@ namespace Runnatics.Services
             {
                 this.ErrorMessage = ex.Message;
                 _logger.LogError(ex, "Error during event search");
+                return [];
+            }
+        }
+
+        public async Task<PagingList<EventResponse>> SearchPastEvents(EventSearchRequest request)
+        {
+            try
+            {
+                var tenantId = _userContext.TenantId;
+
+                if (!ValidateDateRange(request))
+                {
+                    return [];
+                }
+
+                var searchResults = await ExecuteSearchQueryAsync(request, tenantId, EventTimeFilter.Past);
+
+                var eventsWithDetails = await LoadEventsWithNavigationPropertiesAsync(searchResults);
+
+                var response = MapToEventResponseList(eventsWithDetails, searchResults.TotalCount);
+
+                _logger.LogInformation("Past event search completed for Tenant {TenantId} by User {UserId}. Found {Count} events.",
+                    tenantId, _userContext.UserId, response.TotalCount);
+
+                return response;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                this.ErrorMessage = "Unauthorized: " + ex.Message;
+                _logger.LogWarning(ex, "Unauthorized past event search attempt");
+                return [];
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = ex.Message;
+                _logger.LogError(ex, "Error during past event search");
+                return [];
+            }
+        }
+
+        public async Task<PagingList<EventResponse>> SearchFutureEvents(EventSearchRequest request)
+        {
+            try
+            {
+                var tenantId = _userContext.TenantId;
+
+                if (!ValidateDateRange(request))
+                {
+                    return [];
+                }
+
+                var searchResults = await ExecuteSearchQueryAsync(request, tenantId, EventTimeFilter.Future);
+
+                var eventsWithDetails = await LoadEventsWithNavigationPropertiesAsync(searchResults);
+
+                var response = MapToEventResponseList(eventsWithDetails, searchResults.TotalCount);
+
+                _logger.LogInformation("Future event search completed for Tenant {TenantId} by User {UserId}. Found {Count} events.",
+                    tenantId, _userContext.UserId, response.TotalCount);
+
+                return response;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                this.ErrorMessage = "Unauthorized: " + ex.Message;
+                _logger.LogWarning(ex, "Unauthorized future event search attempt");
+                return [];
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = ex.Message;
+                _logger.LogError(ex, "Error during future event search");
                 return [];
             }
         }
@@ -292,10 +365,17 @@ namespace Runnatics.Services
         /// <summary>
         /// Builds the filter expression for event search
         /// </summary>
-        private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int tenantId)
+        private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int tenantId, EventTimeFilter timeFilter = EventTimeFilter.All)
         {
+            var today = DateTime.UtcNow.Date;
+
             return e =>
                 e.TenantId == tenantId &&
+                // Time filter conditions
+                (timeFilter == EventTimeFilter.All ||
+                 (timeFilter == EventTimeFilter.Past && e.EventDate < today) ||
+                 (timeFilter == EventTimeFilter.Future && e.EventDate >= today)) &&
+                // Existing conditions
                 (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
                 (!request.Status.HasValue || (int)e.Status == (int)request.Status.Value) &&
                 (!request.EventDateFrom.HasValue || e.EventDate >= request.EventDateFrom.Value) &&
@@ -326,22 +406,22 @@ namespace Runnatics.Services
         /// <summary>
         /// Executes the search query and returns paginated results
         /// </summary>
-        private async Task<Models.Data.Common.PagingList<Event>> ExecuteSearchQueryAsync(EventSearchRequest request, int tenantId)
+        private async Task<Models.Data.Common.PagingList<Event>> ExecuteSearchQueryAsync(EventSearchRequest request, int tenantId, EventTimeFilter timeFilter = EventTimeFilter.All)
         {
             var eventRepo = _repository.GetRepository<Event>();
-            var expression = BuildSearchExpression(request, tenantId);
+            var expression = BuildSearchExpression(request, tenantId, timeFilter);
             var mappedSortField = GetMappedSortField(request.SortFieldName);
 
             return await eventRepo.SearchAsync(
-                       expression,
-                       request.PageSize,
-                       request.PageNumber,
-                       request.SortDirection == SortDirection.Ascending
-                            ? Models.Data.Common.SortDirection.Ascending
-                           : Models.Data.Common.SortDirection.Descending,
-                       mappedSortField,
-                       false,
-                       false);
+                expression,
+                request.PageSize,
+                request.PageNumber,
+                request.SortDirection == SortDirection.Ascending
+                    ? Models.Data.Common.SortDirection.Ascending
+                    : Models.Data.Common.SortDirection.Descending,
+                mappedSortField,
+                false,
+                false);
         }
 
         /// <summary>
@@ -438,7 +518,7 @@ namespace Runnatics.Services
             if (request.EventSettings != null)
             {
                 eventEntity.EventSettings = CreateEventSettings(request.EventSettings, currentUserId);
-            } 
+            }
 
             // Add leaderboard settings if provided
             if (request.LeaderboardSettings != null)
@@ -763,6 +843,28 @@ namespace Runnatics.Services
             await _repository.SaveChangesAsync();
         }
 
+        private bool ValidateFutureEventDateRange(EventSearchRequest request)
+        {
+            var today = DateTime.UtcNow.Date;
+
+            if (request.EventDateFrom.HasValue && request.EventDateTo.HasValue)
+            {
+                if (request.EventDateFrom.Value > request.EventDateTo.Value)
+                {
+                    this.ErrorMessage = "EventDateFrom cannot be greater than EventDateTo.";
+                    return false;
+                }
+            }
+
+            // EventDateTo should be in the future (if provided)
+            if (request.EventDateTo.HasValue && request.EventDateTo.Value < today)
+            {
+                this.ErrorMessage = "EventDateTo must be today or later for future events.";
+                return false;
+            }
+
+            return true;
+        }
         #endregion
 
     }

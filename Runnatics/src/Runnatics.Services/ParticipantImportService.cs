@@ -586,6 +586,177 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<AddParticipantRangeResponse> AddParticipantRangeAsync(string eventId, string raceId, AddParticipantRangeRequest request)
+        {
+            var response = new AddParticipantRangeResponse
+            {
+                Status = "Processing"
+            };
+
+            try
+            {
+                var tenantId = _userContext.TenantId;
+                var userId = _userContext.UserId;
+
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+                _logger.LogInformation(
+                    "Adding participant range for EventId: {EventId}, RaceId: {RaceId}, From: {From}, To: {To}, Prefix: {Prefix}, Suffix: {Suffix}",
+                    decryptedEventId, decryptedRaceId, request.FromBibNumber, request.ToBibNumber,
+                    request.Prefix ?? "none", request.Suffix ?? "none");
+
+                // Validate event exists and belongs to tenant
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventExists = await eventRepo.GetQuery(e =>
+                    e.Id == decryptedEventId &&
+                    e.TenantId == tenantId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .AnyAsync();
+
+                if (!eventExists)
+                {
+                    ErrorMessage = "Event not found or you don't have access";
+                    _logger.LogWarning("Add range failed: Event {EventId} not found for Tenant {TenantId}",
+                        decryptedEventId, tenantId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Validate race exists
+                var raceRepo = _repository.GetRepository<Race>();
+                var raceExists = await raceRepo.GetQuery(r =>
+                    r.Id == decryptedRaceId &&
+                    r.EventId == decryptedEventId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .AnyAsync();
+
+                if (!raceExists)
+                {
+                    ErrorMessage = "Race not found";
+                    _logger.LogWarning("Add range failed: Race {RaceId} not found for Event {EventId}",
+                        decryptedRaceId, decryptedEventId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+
+                // Get existing bib numbers for this event/race to avoid duplicates
+                var existingBibs = await participantRepo.GetQuery(p =>
+                    p.EventId == decryptedEventId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .Select(p => p.BibNumber)
+                    .ToListAsync();
+
+                var existingBibSet = new HashSet<string>(existingBibs, StringComparer.OrdinalIgnoreCase);
+
+                var participantsToAdd = new List<Models.Data.Entities.Participant>();
+                var skippedBibs = new List<string>();
+
+                // Generate bib numbers in the range
+                for (int i = request.FromBibNumber; i <= request.ToBibNumber; i++)
+                {
+                    // Build bib number with optional prefix and suffix
+                    var bibNumber = BuildBibNumber(request.Prefix, i, request.Suffix);
+
+                    // Check for duplicates
+                    if (existingBibSet.Contains(bibNumber))
+                    {
+                        skippedBibs.Add(bibNumber);
+                        continue;
+                    }
+
+                    var participant = new Models.Data.Entities.Participant
+                    {
+                        TenantId = tenantId,
+                        EventId = decryptedEventId,
+                        RaceId = decryptedRaceId,
+                        BibNumber = bibNumber,
+                        AuditProperties = new Models.Data.Common.AuditProperties
+                        {
+                            CreatedBy = userId,
+                            CreatedDate = DateTime.UtcNow,
+                            IsActive = true,
+                            IsDeleted = false
+                        }
+                    };
+
+                    participantsToAdd.Add(participant);
+                    existingBibSet.Add(bibNumber); // Add to set to catch duplicates within the range
+                }
+
+                if (participantsToAdd.Count > 0)
+                {
+                    await _repository.BeginTransactionAsync();
+
+                    try
+                    {
+                        // Bulk insert participants
+                        foreach (var participant in participantsToAdd)
+                        {
+                            await participantRepo.AddAsync(participant);
+                        }
+
+                        await _repository.SaveChangesAsync();
+                        await _repository.CommitTransactionAsync();
+
+                        _logger.LogInformation(
+                            "Successfully added {Count} participants for EventId: {EventId}, RaceId: {RaceId}",
+                            participantsToAdd.Count, decryptedEventId, decryptedRaceId);
+                    }
+                    catch (Exception ex)
+                    {
+                        await _repository.RollbackTransactionAsync();
+                        throw;
+                    }
+                }
+
+                response.TotalCreated = participantsToAdd.Count;
+                response.TotalSkipped = skippedBibs.Count;
+                response.SkippedBibNumbers = skippedBibs;
+                response.Status = skippedBibs.Count > 0 ? "CompletedWithSkips" : "Completed";
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error adding participant range: {ex.Message}";
+                _logger.LogError(ex, "Error adding participant range for event {EventId} and race {RaceId}",
+                    eventId, raceId);
+                response.Status = "Failed";
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Builds a bib number with optional prefix and suffix
+        /// </summary>
+        private static string BuildBibNumber(string? prefix, int number, string? suffix)
+        {
+            var sb = new StringBuilder();
+
+            if (!string.IsNullOrWhiteSpace(prefix))
+            {
+                sb.Append(prefix.Trim());
+            }
+
+            sb.Append(number);
+
+            if (!string.IsNullOrWhiteSpace(suffix))
+            {
+                sb.Append(suffix.Trim());
+            }
+
+            return sb.ToString();
+        }
+
         /// <summary>
         /// Builds the filter expression for event search
         /// </summary>

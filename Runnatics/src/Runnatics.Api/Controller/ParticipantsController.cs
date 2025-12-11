@@ -176,7 +176,7 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> AddParticipant([FromRoute] string eventId, [FromRoute] string raceid, [FromBody] ParticipantRequest addParticipant)
         {
-            if (string.IsNullOrEmpty(eventId) ||string.IsNullOrEmpty(raceid)|| addParticipant is null)
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceid) || addParticipant is null)
             {
                 return BadRequest();
             }
@@ -200,7 +200,7 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> EditParticipant([FromRoute] string participantId, [FromBody] ParticipantRequest editParticipant)
         {
-            if (string.IsNullOrEmpty(participantId) || editParticipant is null )
+            if (string.IsNullOrEmpty(participantId) || editParticipant is null)
             {
                 return BadRequest();
             }
@@ -244,6 +244,66 @@ namespace Runnatics.Api.Controller
             if (_service.HasError)
             {
                 response.Error = new ResponseBase<List<Category>>.ErrorData()
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Add participants with bib numbers in a specified range
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/add-participant-range")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<AddParticipantRangeResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> AddParticipantRange(
+            [FromRoute] string eventId,
+            [FromRoute] string raceId,
+            [FromBody] AddParticipantRangeRequest request)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || request is null)
+            {
+                return BadRequest(new { error = "Event ID, Race ID, and request body are required." });
+            }
+
+            if (request.FromBibNumber > request.ToBibNumber)
+            {
+                return BadRequest(new { error = "From Bib Number must be less than or equal to To Bib Number." });
+            }
+
+            // Limit the range to prevent excessive record creation
+            const int maxRangeSize = 10000;
+            if (request.ToBibNumber - request.FromBibNumber + 1 > maxRangeSize)
+            {
+                return BadRequest(new { error = $"Range cannot exceed {maxRangeSize} bib numbers." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
+            }
+
+            var response = new ResponseBase<AddParticipantRangeResponse>();
+            var result = await _service.AddParticipantRangeAsync(eventId, raceId, request);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<AddParticipantRangeResponse>.ErrorData
                 {
                     Message = _service.ErrorMessage
                 };

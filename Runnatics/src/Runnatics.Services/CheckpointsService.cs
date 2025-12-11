@@ -27,23 +27,38 @@ namespace Runnatics.Services
         {
             try
             {
-                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId); 
+                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
+                // FIX: Changed to use nullable return type for devices
                 var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId);
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
                 if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedRaceId))
                 {
-                    return false; 
+                    return false;
                 }
 
-                // Map request to entity; include decrypted EventId/RaceId and current user id in mapping context
+                // FIX: Validate device exists if provided
+                if (decryptedDeviceId.HasValue && !await DeviceExistsAsync(decryptedDeviceId.Value))
+                {
+                    ErrorMessage = "Device not found.";
+                    return false;
+                }
+
+                // FIX: Validate parent device exists if provided
+                if (decryptedParentDeviceId.HasValue && !await DeviceExistsAsync(decryptedParentDeviceId.Value))
+                {
+                    ErrorMessage = "Parent device not found.";
+                    return false;
+                }
+
+                // Map request to entity
                 var checkpoint = _mapper.Map<Checkpoint>(request);
 
                 checkpoint.EventId = decryptedEventId;
                 checkpoint.RaceId = decryptedRaceId;
-                checkpoint.DeviceId = decryptedDeviceId;
-                checkpoint.ParentDeviceId = decryptedParentDeviceId;
+                checkpoint.DeviceId = decryptedDeviceId ?? 0;
+                checkpoint.ParentDeviceId = decryptedParentDeviceId ?? 0;
                 checkpoint.Name = request.Name;
                 checkpoint.IsMandatory = request.IsMandatory;
                 checkpoint.DistanceFromStart = request.DistanceFromStart;
@@ -88,13 +103,14 @@ namespace Runnatics.Services
 
                 foreach (var req in requests)
                 {
+                    // FIX: Changed to use nullable return type for devices
                     var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(req.DeviceId, req.ParentDeviceId);
 
                     var checkpoint = _mapper.Map<Checkpoint>(req);
 
                     checkpoint.EventId = decryptedEventId;
                     checkpoint.RaceId = decryptedRaceId;
-                    checkpoint.DeviceId = decryptedDeviceId;
+                    checkpoint.DeviceId = decryptedDeviceId ?? 0;
                     checkpoint.ParentDeviceId = decryptedParentDeviceId;
                     checkpoint.Name = req.Name;
                     checkpoint.IsMandatory = req.IsMandatory;
@@ -123,7 +139,8 @@ namespace Runnatics.Services
             try
             {
                 var (decryptedEventId, decryptedSourceRaceId) = DecryptEventAndRace(eventId, sourceRaceId);
-                var decryptedDestinationRaceId = Convert.ToInt32(_encryptionService.Decrypt(destinationRaceId));
+                // FIX: Using TryParseOrDecrypt instead of Convert.ToInt32 for consistency
+                var decryptedDestinationRaceId = TryParseOrDecrypt(destinationRaceId, nameof(destinationRaceId));
 
                 // verify event and both races exist
                 if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedSourceRaceId))
@@ -140,7 +157,7 @@ namespace Runnatics.Services
 
                 var sourceCheckpoints = await checkpointRepo.GetQuery(c => c.EventId == decryptedEventId && c.RaceId == decryptedSourceRaceId && c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
                     .AsNoTracking()
-                    .OrderBy(c => c.Id)
+                    .OrderBy(c => c.DistanceFromStart)
                     .ToListAsync();
 
                 if (sourceCheckpoints == null || sourceCheckpoints.Count == 0)
@@ -183,8 +200,9 @@ namespace Runnatics.Services
         {
             try
             {
-                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                // FIX: Using TryParseOrDecrypt for consistency
+                var decryptedEventId = TryParseOrDecrypt(eventId, nameof(eventId));
+                var decryptedRaceId = TryParseOrDecrypt(raceId, nameof(raceId));
                 var decryptedCheckpointId = TryParseOrDecrypt(checkpointId, nameof(checkpointId));
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
@@ -229,7 +247,8 @@ namespace Runnatics.Services
             try
             {
                 var (decryptedEventId, decryptedRaceId, decryptedCheckpointId) = DecryptAll(eventId, raceId, checkpointId);
-                var checkpoint = await FindCheckpointAsync(decryptedCheckpointId, decryptedEventId, decryptedRaceId);
+                // FIX: Include Device navigation properties when fetching single checkpoint
+                var checkpoint = await FindCheckpointWithDevicesAsync(decryptedCheckpointId, decryptedEventId, decryptedRaceId);
 
                 if (checkpoint == null)
                 {
@@ -282,9 +301,12 @@ namespace Runnatics.Services
             try
             {
                 var (decryptedEventId, decryptedRaceId, decryptedCheckpointId) = DecryptAll(eventId, raceId, checkpointId);
+                // FIX: Changed to use nullable return type for devices
+                var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId);
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 var existing = await FindCheckpointAsync(decryptedCheckpointId, decryptedEventId, decryptedRaceId);
+
                 if (existing == null)
                 {
                     ErrorMessage = "Checkpoint not found.";
@@ -292,12 +314,31 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                // Map allowed fields (uses AutoMapper mapping with SetUpdated)
-                _mapper.Map(request, existing, opts =>
+                // FIX: Validate device exists if provided
+                if (decryptedDeviceId.HasValue && !await DeviceExistsAsync(decryptedDeviceId.Value))
                 {
-                    opts.Items["SetUpdated"] = true;
-                    opts.Items["UserId"] = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
-                });
+                    ErrorMessage = "Device not found.";
+                    return false;
+                }
+
+                // FIX: Validate parent device exists if provided
+                if (decryptedParentDeviceId.HasValue && !await DeviceExistsAsync(decryptedParentDeviceId.Value))
+                {
+                    ErrorMessage = "Parent device not found.";
+                    return false;
+                }
+
+                var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
+
+                // FIX: Manually update all fields instead of using AutoMapper
+                // AutoMapper was configured to ignore DeviceId and ParentDeviceId, causing updates to fail
+                existing.Name = request.Name;
+                existing.DistanceFromStart = request.DistanceFromStart;
+                existing.IsMandatory = request.IsMandatory;
+                existing.DeviceId = decryptedDeviceId  ?? 0;
+                existing.ParentDeviceId = decryptedParentDeviceId ?? 0;
+                existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                existing.AuditProperties.UpdatedBy = currentUserId;
 
                 await checkpointRepo.UpdateAsync(existing);
                 await _repository.SaveChangesAsync();
@@ -320,9 +361,26 @@ namespace Runnatics.Services
             return (TryParseOrDecrypt(eventId, nameof(eventId)), TryParseOrDecrypt(raceId, nameof(raceId)));
         }
 
-        private (int deviceId, int? parentDeviceId) DecryptDeviceAndParentDevice(string deviceId, string parentDeviceId)
+        /// <summary>
+        /// Decrypts device and parent device IDs. Returns nullable ints since devices are optional.
+        /// FIX: Changed return type from (int, int?) to (int?, int?) since both devices are optional
+        /// </summary>
+        private (int? deviceId, int? parentDeviceId) DecryptDeviceAndParentDevice(string? deviceId, string? parentDeviceId)
         {
-            return (TryParseOrDecrypt(deviceId, nameof(deviceId)), !string.IsNullOrEmpty(parentDeviceId) ? TryParseOrDecrypt(parentDeviceId, nameof(parentDeviceId)) : null);
+            int? decryptedDeviceId = null;
+            int? decryptedParentDeviceId = null;
+
+            if (!string.IsNullOrEmpty(deviceId))
+            {
+                decryptedDeviceId = TryParseOrDecrypt(deviceId, nameof(deviceId));
+            }
+
+            if (!string.IsNullOrEmpty(parentDeviceId))
+            {
+                decryptedParentDeviceId = TryParseOrDecrypt(parentDeviceId, nameof(parentDeviceId));
+            }
+
+            return (decryptedDeviceId, decryptedParentDeviceId);
         }
 
         private (int eventId, int raceId, int checkpointId) DecryptAll(string eventId, string raceId, string checkpointId)
@@ -351,7 +409,7 @@ namespace Runnatics.Services
                 _logger.LogDebug("Decrypted value for {InputName} did not parse as int", inputName);
                 throw new ArgumentException($"Invalid {inputName} format");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not ArgumentException)
             {
                 // log debug for diagnostics but avoid logging sensitive material
                 _logger.LogDebug(ex, "Failed to parse or decrypt input for {InputName}", inputName);
@@ -384,10 +442,33 @@ namespace Runnatics.Services
             return true;
         }
 
+        /// <summary>
+        /// FIX: Added helper method to check if a device exists
+        /// </summary>
+        private async Task<bool> DeviceExistsAsync(int deviceId)
+        {
+            var deviceRepo = _repository.GetRepository<Device>();
+            return await deviceRepo.GetQuery(d => d.Id == deviceId && d.AuditProperties.IsActive && !d.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .AnyAsync();
+        }
+
         private Task<Checkpoint?> FindCheckpointAsync(int checkpointId, int eventId, int raceId)
         {
             var repo = _repository.GetRepository<Checkpoint>();
             return repo.GetQuery(c => c.Id == checkpointId && c.EventId == eventId && c.RaceId == raceId && c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
+                .FirstOrDefaultAsync();
+        }
+
+        /// <summary>
+        /// FIX: Added helper method to fetch checkpoint with device navigation properties
+        /// </summary>
+        private Task<Checkpoint?> FindCheckpointWithDevicesAsync(int checkpointId, int eventId, int raceId)
+        {
+            var repo = _repository.GetRepository<Checkpoint>();
+            return repo.GetQuery(c => c.Id == checkpointId && c.EventId == eventId && c.RaceId == raceId && c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
+                .Include(c => c.Device)
+                .Include(c => c.ParentDevice)
                 .FirstOrDefaultAsync();
         }
 

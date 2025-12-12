@@ -368,6 +368,27 @@ namespace Runnatics.Services
                 participant.RaceId = raceIdInt;
                 participant.TenantId = _userContext.TenantId;
 
+                // Duplicate bib check: ensure no active participant exists with same bib in same tenant/event/race
+                if (!string.IsNullOrWhiteSpace(participant.BibNumber))
+                {
+                    var exists = await participantRepo.GetQuery(p =>
+                        p.TenantId == participant.TenantId &&
+                        p.EventId == participant.EventId &&
+                        p.RaceId == participant.RaceId &&
+                        p.BibNumber == participant.BibNumber &&
+                        p.AuditProperties.IsActive &&
+                        !p.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .AnyAsync();
+
+                    if (exists)
+                    {
+                        ErrorMessage = "Participant with the same BIB number already exists for this race.";
+                        _logger.LogWarning("AddParticipant aborted - duplicate bib {Bib} for Event {EventId} Race {RaceId} Tenant {TenantId}", participant.BibNumber, eventIdInt, raceIdInt, participant.TenantId);
+                        return;
+                    }
+                }
+
                 participant.AuditProperties = new Models.Data.Common.AuditProperties
                 {
                     CreatedBy = _userContext.UserId,

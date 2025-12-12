@@ -153,6 +153,7 @@ builder.Services.AddScoped<IEventOrganizerService, EventOrganizerService>();
 builder.Services.AddScoped<IRacesService, RaceService>();
 builder.Services.AddScoped<IParticipantImportService, ParticipantImportService>();
 builder.Services.AddScoped<ICheckpointsService, CheckpointService>();
+builder.Services.AddScoped<IDevicesService, DevicesService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // Add Encryption Service

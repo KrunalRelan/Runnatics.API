@@ -43,10 +43,16 @@ namespace Runnatics.Data.EF.Config
                 .HasDatabaseName("IX_Checkpoints_EventId_DistanceKm");
 
             // Relationships
-            //builder.HasOne(e => e.Event)
-            //    .WithMany(ev => ev.Checkpoints)
-            //    .HasForeignKey(e => e.EventId)
-            //    .OnDelete(DeleteBehavior.Cascade);
+            // Map relationships to the explicit navigation properties to avoid creating shadow foreign keys
+            builder.HasOne(e => e.Device)
+                .WithMany()
+                .HasForeignKey(e => e.DeviceId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            builder.HasOne(e => e.ParentDevice)
+                .WithMany()
+                .HasForeignKey(e => e.ParentDeviceId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>

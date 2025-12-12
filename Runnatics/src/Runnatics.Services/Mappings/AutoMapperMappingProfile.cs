@@ -273,7 +273,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(d => d.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(d => d.RaceName, opt => opt.MapFrom(src => src.Race != null ? src.Race.Title : ""))
                 .ForMember(d => d.ImportBatchId, opt => opt.MapFrom(src => src.ImportBatchId));
-                
+
 
             CreateMap<ImportBatch, ParticipantImportResponse>()
                 .ForMember(d => d.ImportBatchId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
@@ -314,8 +314,50 @@ namespace Runnatics.Services.Mappings
             #endregion
 
             #region
+            CreateMap<Device, DevicesResponse>()
+                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name));
+
+            #endregion
+
+            #region Checkpoint
 
             // Checkpoint mapping
+            CreateMap<CheckpointRequest, Checkpoint>()
+               .ForMember(dest => dest.Id, opt => opt.Ignore())
+               .ForMember(dest => dest.EventId, opt => opt.Ignore())
+               .ForMember(dest => dest.RaceId, opt => opt.Ignore())
+               .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+               .ForMember(dest => dest.ParentDeviceId, opt => opt.Ignore())
+               .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
+               .ForMember(dest => dest.DistanceFromStart, opt => opt.MapFrom(src => src.DistanceFromStart))
+               .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory))
+               .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+               .ForMember(dest => dest.Device, opt => opt.Ignore())
+               .ForMember(dest => dest.ParentDevice, opt => opt.Ignore());
+
+
+            // FIX: Single consolidated mapping for Checkpoint -> CheckpointResponse
+            // Previously there were two CreateMap<Checkpoint, CheckpointResponse>() configurations
+            // which was causing the second one to override parts of the first one
+            CreateMap<Checkpoint, CheckpointResponse>()
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
+                .ForMember(dest => dest.RaceId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.RaceId))
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
+                .ForMember(dest => dest.DistanceFromStart, opt => opt.MapFrom(src => src.DistanceFromStart))
+                // FIX: Using NullableIdEncryptor for DeviceId since it's now nullable
+                .ForMember(dest => dest.DeviceId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.DeviceId))
+                .ForMember(dest => dest.ParentDeviceId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.ParentDeviceId))
+                .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory))
+                // Device names from navigation properties (consolidated from duplicate mapping)
+                .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty))
+                .ForMember(dest => dest.ParentDeviceName, opt => opt.MapFrom(src => src.ParentDevice != null ? src.ParentDevice.Name : string.Empty));
+
+            // Device mapping
+            CreateMap<Device, DevicesResponse>()
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name));
 
             CreateMap<CheckpointRequest, Checkpoint>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
@@ -324,38 +366,6 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
                 .ForMember(dest => dest.ParentDeviceId, opt => opt.Ignore())
                 .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory));
-
-
-            //CreateMap<CheckpointRequest, Checkpoint>()
-            //    .ForMember(dest => dest.Id, opt => opt.Ignore())
-            //    // Prefer values provided via mapping context (opts.Items) when available
-            //    .ForMember(dest => dest.EventId, opt => opt.MapFrom((src, dest, destMember, ctx) =>
-            //        ctx.Items.ContainsKey("EventId") ? (int)ctx.Items["EventId"] : 0))
-            //    .ForMember(dest => dest.RaceId, opt => opt.MapFrom((src, dest, destMember, ctx) =>
-            //        ctx.Items.ContainsKey("RaceId") ? (int)ctx.Items["RaceId"] : 0))
-            //    // DeviceId comes from request
-            //    .ForMember(dest => dest.DeviceId, opt => opt.MapFrom(src => src.DeviceId))
-            //    .ForMember(dest => dest.ParentDeviceId, opt => opt.MapFrom(src => src.ParentDeviceId))
-            //    .ForMember(dest => dest.AuditProperties, opt => opt.MapFrom((src, dest, destMember, ctx) =>
-            //        new AuditProperties
-            //        {
-            //            IsActive = true,
-            //            IsDeleted = false,
-            //            CreatedDate = DateTime.UtcNow,
-            //            CreatedBy = ctx.Items.ContainsKey("UserId") ? (int)ctx.Items["UserId"] : 0
-            //        }));
-
-            // Map Checkpoint entity to response DTO
-            CreateMap<Checkpoint, CheckpointResponse>()
-                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
-                .ForMember(dest => dest.EventId, opt => opt.MapFrom(src => src.EventId))
-                .ForMember(dest => dest.RaceId, opt => opt.MapFrom(src => src.RaceId))
-                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
-                .ForMember(dest => dest.DistanceFromStart, opt => opt.MapFrom(src => src.DistanceFromStart))
-                .ForMember(dest => dest.DeviceId, opt => opt.MapFrom(src => src.DeviceId))
-                .ForMember(dest => dest.ParentDeviceId, opt => opt.MapFrom(src => src.ParentDeviceId))
-                .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory));
-
 
             //CreateMap<Checkpoint, CheckpointResponse>()
             //    .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
@@ -366,10 +376,15 @@ namespace Runnatics.Services.Mappings
             //    .ForMember(dest => dest.DeviceId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.DeviceId))
             //    .ForMember(dest => dest.ParentDeviceId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.ParentDeviceId))
             //    .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory))
-            //    .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
-            //    .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive));
+            //    .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty))
+            //    .ForMember(dest => dest.ParentDeviceName, opt => opt.MapFrom(src => src.ParentDevice != null ? src.ParentDevice.Name : string.Empty));
 
-            #endregion
+            // Map device names from navigation properties
+            CreateMap<Checkpoint, CheckpointResponse>()
+                .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty))
+                .ForMember(dest => dest.ParentDeviceName, opt => opt.MapFrom(src => src.ParentDevice != null ? src.ParentDevice.Name : string.Empty));
+
+            #endregion Checkpoint
         }
     }
 }

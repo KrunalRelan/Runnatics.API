@@ -30,7 +30,8 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> Create(string eventId, string raceId, [FromBody] CheckpointRequest request)
         {
-            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(eventId) || request == null)
+            // FIX: Was checking eventId twice instead of checking raceId
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || request == null)
             {
                 return BadRequest(new { error = "Invalid input provided. Request body cannot be null." });
             }
@@ -48,18 +49,68 @@ namespace Runnatics.Api.Controller
                 });
             }
 
-            await _checkpointsService.Create(eventId, raceId, request);
+            var result = await _checkpointsService.Create(eventId, raceId, request);
 
             if (_checkpointsService.HasError)
             {
                 // Return 400 Bad Request for validation errors
-                // TODO
+                if (_checkpointsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
+                    _checkpointsService.ErrorMessage?.Contains("inactive", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return BadRequest(new { error = _checkpointsService.ErrorMessage });
+                }
 
                 // Return 500 for database errors or unexpected errors
-                return StatusCode((int)HttpStatusCode.InternalServerError, _checkpointsService.ErrorMessage);
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _checkpointsService.ErrorMessage });
             }
 
-            return Ok(HttpStatusCode.Created);
+            // FIX: Return proper 201 Created response instead of Ok(HttpStatusCode.Created)
+            return StatusCode((int)HttpStatusCode.Created, new { message = "Checkpoint created successfully." });
+        }
+
+        /// <summary>
+        /// Bulk create checkpoints for an event and race
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/bulk")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> BulkCreate(string eventId, string raceId, [FromBody] List<CheckpointRequest> requests)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || requests == null || requests.Count == 0)
+            {
+                return BadRequest(new { error = "Invalid input provided. Request body cannot be null or empty." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                    .SelectMany(v => v.Errors)
+                    .Select(e => e.ErrorMessage)
+                    .ToList()
+                });
+            }
+
+            await _checkpointsService.BulkCreate(eventId, raceId, requests);
+
+            if (_checkpointsService.HasError)
+            {
+                if (_checkpointsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
+                    _checkpointsService.ErrorMessage?.Contains("inactive", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return BadRequest(new { error = _checkpointsService.ErrorMessage });
+                }
+
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _checkpointsService.ErrorMessage });
+            }
+
+            // FIX: Return proper 201 Created response
+            return StatusCode((int)HttpStatusCode.Created, new { message = $"{requests.Count} checkpoints created successfully." });
         }
 
         /// <summary>
@@ -100,7 +151,7 @@ namespace Runnatics.Api.Controller
                     return NotFound(new { error = _checkpointsService.ErrorMessage });
                 }
 
-                return StatusCode((int)HttpStatusCode.InternalServerError, _checkpointsService.ErrorMessage);
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _checkpointsService.ErrorMessage });
             }
 
             return NoContent();
@@ -204,9 +255,9 @@ namespace Runnatics.Api.Controller
                 };
 
                 // Return 404 Not Found if checkpoint doesn't exist or unauthorized
-                if (_checkpointsService.ErrorMessage.Contains("not found") ||
-                       _checkpointsService.ErrorMessage.Contains("does not exist") ||
-                  _checkpointsService.ErrorMessage.Contains("don't have permission"))
+                if (_checkpointsService.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                       _checkpointsService.ErrorMessage.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+                  _checkpointsService.ErrorMessage.Contains("don't have permission", StringComparison.OrdinalIgnoreCase))
                 {
                     return NotFound(response);
                 }
@@ -226,6 +277,48 @@ namespace Runnatics.Api.Controller
 
             response.Message = new { message = "Checkpoint deleted successfully", id };
             return Ok(response);
+        }
+
+        /// <summary>
+        /// Clone checkpoints from source race to destination race within same event
+        /// </summary>
+        [HttpPost("{eventId}/{sourceRaceId}/{destinationRaceId}/clone")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> Clone([FromRoute] string eventId, [FromRoute] string sourceRaceId, [FromRoute] string destinationRaceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(sourceRaceId) || string.IsNullOrEmpty(destinationRaceId))
+            {
+                return BadRequest(new { error = "Invalid request provided." });
+            }
+
+            // FIX: Added validation to prevent cloning to the same race
+            if (sourceRaceId == destinationRaceId)
+            {
+                return BadRequest(new { error = "Source and destination races cannot be the same." });
+            }
+
+            var result = await _checkpointsService.Clone(eventId, sourceRaceId, destinationRaceId);
+
+            if (_checkpointsService.HasError)
+            {
+                if (_checkpointsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
+                    _checkpointsService.ErrorMessage?.Contains("No checkpoints", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return BadRequest(new { error = _checkpointsService.ErrorMessage });
+                }
+
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _checkpointsService.ErrorMessage });
+            }
+
+            if (!result)
+            {
+                return BadRequest(new { error = _checkpointsService.ErrorMessage ?? "Clone operation failed." });
+            }
+
+            return Ok(new { message = "Checkpoints cloned successfully." });
         }
     }
 }

@@ -46,39 +46,39 @@ namespace Runnatics.Data.EF.Config
                 .IsRequired()
                 .HasDefaultValue(1240);
 
-            builder.Property(ct => ct.IsActive)
-                .HasColumnName("IsActive")
-                .IsRequired()
-                .HasDefaultValue(true);
+            //builder.Property(ct => ct.IsActive)
+            //    .HasColumnName("IsActive")
+            //    .IsRequired()
+            //    .HasDefaultValue(true);
 
-            // Configure AuditProperties
-            builder.OwnsOne(ct => ct.AuditProperties, ap =>
+            // Configure AuditProperties as owned entity
+            builder.OwnsOne(e => e.AuditProperties, ap =>
             {
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
+                    .IsRequired();
+
                 ap.Property(p => p.CreatedDate)
                     .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedDate)
-                    .HasColumnName("UpdatedAt");
-
-                ap.Property(p => p.CreatedBy)
-                    .HasColumnName("CreatedBy");
-
                 ap.Property(p => p.UpdatedBy)
                     .HasColumnName("UpdatedBy");
 
-                ap.Property(p => p.IsActive)
-                    .HasColumnName("IsActive")
-                    .HasDefaultValue(true)
-                    .IsRequired();
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsDeleted)
                     .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
-            });
 
+                ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
+                    .HasDefaultValue(true)
+                    .IsRequired();
+            });
             // Indexes
             builder.HasIndex(ct => ct.EventId);
             builder.HasIndex(ct => new { ct.EventId, ct.RaceId });
@@ -97,7 +97,7 @@ namespace Runnatics.Data.EF.Config
             // Navigation to Fields
             builder.HasMany(ct => ct.Fields)
                 .WithOne(cf => cf.CertificateTemplate)
-                .HasForeignKey(cf => cf.CertificateTemplateId)
+                .HasForeignKey(cf => cf.TemplateId)
                 .OnDelete(DeleteBehavior.Cascade);
         }
     }

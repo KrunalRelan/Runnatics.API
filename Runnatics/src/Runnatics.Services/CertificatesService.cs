@@ -61,7 +61,7 @@ namespace Runnatics.Services
                     Description = request.Description,
                     Width = request.Width,
                     Height = request.Height,
-                    IsActive = request.IsActive,
+                    //IsActive = request.IsActive,
                     AuditProperties = CreateAuditProperties(currentUserId)
                 };
 
@@ -78,7 +78,7 @@ namespace Runnatics.Services
                     var fieldRepo = _repository.GetRepository<CertificateField>();
                     var fields = request.Fields.Select(f => new CertificateField
                     {
-                        CertificateTemplateId = template.Id,
+                        TemplateId = template.Id,
                         FieldType = f.FieldType,
                         Content = f.Content,
                         XCoordinate = f.XCoordinate,
@@ -90,7 +90,8 @@ namespace Runnatics.Services
                         Height = f.Height,
                         Alignment = f.Alignment ?? "left",
                         FontWeight = f.FontWeight ?? "normal",
-                        FontStyle = f.FontStyle ?? "normal"
+                        FontStyle = f.FontStyle ?? "normal",
+                        AuditProperties = CreateAuditProperties(currentUserId)
                     }).ToList();
 
                     await fieldRepo.AddRangeAsync(fields);
@@ -157,7 +158,7 @@ namespace Runnatics.Services
                 existing.Description = request.Description;
                 existing.Width = request.Width;
                 existing.Height = request.Height;
-                existing.IsActive = request.IsActive;
+                //existing.IsActive = request.IsActive;
                 existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 existing.AuditProperties.UpdatedBy = currentUserId;
 
@@ -175,7 +176,7 @@ namespace Runnatics.Services
 
                 var newFields = request.Fields.Select(f => new CertificateField
                 {
-                    CertificateTemplateId = existing.Id,
+                    TemplateId = existing.Id,
                     FieldType = f.FieldType,
                     Content = f.Content,
                     XCoordinate = f.XCoordinate,
@@ -187,7 +188,8 @@ namespace Runnatics.Services
                     Height = f.Height,
                     Alignment = f.Alignment ?? "left",
                     FontWeight = f.FontWeight ?? "normal",
-                    FontStyle = f.FontStyle ?? "normal"
+                    FontStyle = f.FontStyle ?? "normal",
+                    AuditProperties = CreateAuditProperties(currentUserId)
                 }).ToList();
 
                 await fieldRepo.AddRangeAsync(newFields);
@@ -410,7 +412,7 @@ namespace Runnatics.Services
                 BackgroundImageUrl = template.BackgroundImageUrl,
                 Width = template.Width,
                 Height = template.Height,
-                IsActive = template.IsActive,
+                //IsActive = template.IsActive,
                 CreatedAt = template.AuditProperties.CreatedDate,
                 UpdatedAt = template.AuditProperties.UpdatedDate,
                 Fields = template.Fields.Select(f => new CertificateFieldResponse

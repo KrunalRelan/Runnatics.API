@@ -29,7 +29,7 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         public int Height { get; set; } = 1240;
 
-        public bool IsActive { get; set; } = true;
+        //public bool IsActive { get; set; } = true;
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

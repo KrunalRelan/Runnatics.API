@@ -28,7 +28,6 @@ namespace Runnatics.Services
             try
             {
                 var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
-                // FIX: Changed to use nullable return type for devices
                 var (decryptedDeviceId, decryptedParentDeviceId) = DecryptDeviceAndParentDevice(request.DeviceId, request.ParentDeviceId);
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
@@ -38,14 +37,12 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                // FIX: Validate device exists if provided
                 if (decryptedDeviceId.HasValue && !await DeviceExistsAsync(decryptedDeviceId.Value))
                 {
                     ErrorMessage = "Device not found.";
                     return false;
                 }
 
-                // FIX: Validate parent device exists if provided
                 if (decryptedParentDeviceId.HasValue && !await DeviceExistsAsync(decryptedParentDeviceId.Value))
                 {
                     ErrorMessage = "Parent device not found.";

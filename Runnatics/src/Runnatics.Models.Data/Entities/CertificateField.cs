@@ -1,3 +1,4 @@
+using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Enumerations;
 using System.ComponentModel.DataAnnotations;
 
@@ -9,7 +10,7 @@ namespace Runnatics.Models.Data.Entities
         public int Id { get; set; }
 
         [Required]
-        public int CertificateTemplateId { get; set; }
+        public int TemplateId { get; set; }
 
         [Required]
         public CertificateFieldType FieldType { get; set; }
@@ -46,6 +47,9 @@ namespace Runnatics.Models.Data.Entities
 
         [MaxLength(20)]
         public string FontStyle { get; set; } = "normal";
+
+        public AuditProperties AuditProperties { get; set; } = new AuditProperties();
+
 
         // Navigation Properties
         public virtual CertificateTemplate CertificateTemplate { get; set; } = null!;

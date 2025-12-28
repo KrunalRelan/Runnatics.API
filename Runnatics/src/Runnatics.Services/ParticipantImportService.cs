@@ -735,6 +735,324 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<UpdateParticipantsByBibResponse> UpdateParticipantsByBibAsync(
+            string eventId,
+            string raceId,
+            UpdateParticipantsByBibRequest request)
+        {
+            var response = new UpdateParticipantsByBibResponse
+            {
+                Status = "Processing",
+                FileName = request.File?.FileName ?? string.Empty,
+                ProcessedAt = DateTime.UtcNow
+            };
+
+            try
+            {
+                var tenantId = _userContext.TenantId;
+                var userId = _userContext.UserId;
+
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+                _logger.LogInformation(
+                    "Starting UpdateParticipantsByBib for EventId: {EventId}, RaceId: {RaceId}, File: {FileName}",
+                    decryptedEventId, decryptedRaceId, request.File?.FileName);
+
+                // Validate file
+                if (request.File == null || request.File.Length == 0)
+                {
+                    ErrorMessage = "File is empty or not provided";
+                    _logger.LogWarning("Update failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                if (!request.File.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+                {
+                    ErrorMessage = "Only CSV files are supported";
+                    _logger.LogWarning("Update failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Validate event exists and belongs to tenant
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventExists = await eventRepo.GetQuery(e =>
+                    e.Id == decryptedEventId &&
+                    e.TenantId == tenantId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .AnyAsync();
+
+                if (!eventExists)
+                {
+                    ErrorMessage = "Event not found or you don't have access";
+                    _logger.LogWarning("Update failed: Event {EventId} not found for Tenant {TenantId}",
+                        decryptedEventId, tenantId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Validate race exists
+                var raceRepo = _repository.GetRepository<Race>();
+                var raceExists = await raceRepo.GetQuery(r =>
+                    r.Id == decryptedRaceId &&
+                    r.EventId == decryptedEventId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .AnyAsync();
+
+                if (!raceExists)
+                {
+                    ErrorMessage = "Race not found";
+                    _logger.LogWarning("Update failed: Race {RaceId} not found for Event {EventId}",
+                        decryptedRaceId, decryptedEventId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Parse CSV file
+                var csvRecords = await ParseCsvForUpdateAsync(request.File);
+
+                if (csvRecords.Count == 0)
+                {
+                    ErrorMessage = "No valid records found in CSV file";
+                    _logger.LogWarning("Update failed: No valid records in CSV");
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Get existing participants for this event/race
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var existingParticipants = await participantRepo.GetQuery(p =>
+                    p.EventId == decryptedEventId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.TenantId == tenantId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                // Create a dictionary for fast lookup by bib number
+                var participantsByBib = existingParticipants
+                    .Where(p => !string.IsNullOrWhiteSpace(p.BibNumber))
+                    .ToDictionary(p => p.BibNumber!, p => p, StringComparer.OrdinalIgnoreCase);
+
+                var updatedCount = 0;
+                var notFoundBibs = new List<string>();
+                var skippedCount = 0;
+
+                await _repository.BeginTransactionAsync();
+
+                try
+                {
+                    foreach (var record in csvRecords)
+                    {
+                        // Skip records without bib number
+                        if (string.IsNullOrWhiteSpace(record.BibNumber))
+                        {
+                            skippedCount++;
+                            response.Errors.Add(new ValidationError
+                            {
+                                RowNumber = record.RowNumber,
+                                Field = "BibNumber",
+                                Message = "BIB number is missing",
+                                Value = string.Empty
+                            });
+                            continue;
+                        }
+
+                        // Find existing participant by bib number
+                        if (!participantsByBib.TryGetValue(record.BibNumber, out var participant))
+                        {
+                            notFoundBibs.Add(record.BibNumber);
+                            continue;
+                        }
+
+                        // Apply updates using helper method
+                        if (ApplyUpdateToParticipant(participant, record))
+                        {
+                            participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            participant.AuditProperties.UpdatedBy = userId;
+
+                            await participantRepo.UpdateAsync(participant);
+                            updatedCount++;
+                        }
+                    }
+
+                    await _repository.SaveChangesAsync();
+                    await _repository.CommitTransactionAsync();
+
+                    _logger.LogInformation(
+                        "UpdateParticipantsByBib completed. Updated: {Updated}, NotFound: {NotFound}, Skipped: {Skipped}",
+                        updatedCount, notFoundBibs.Count, skippedCount);
+                }
+                catch (Exception ex)
+                {
+                    await _repository.RollbackTransactionAsync();
+                    throw;
+                }
+
+                response.TotalUpdated = updatedCount;
+                response.TotalNotFound = notFoundBibs.Count;
+                response.TotalSkipped = skippedCount;
+                response.NotFoundBibNumbers = notFoundBibs;
+                response.Status = (notFoundBibs.Count > 0 || skippedCount > 0) ? "CompletedWithWarnings" : "Completed";
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error updating participants by bib: {ex.Message}";
+                _logger.LogError(ex, "Error updating participants by bib for event {EventId} and race {RaceId}",
+                    eventId, raceId);
+                response.Status = "Failed";
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Parses CSV file for update operation, extracting participant details
+        /// </summary>
+        private async Task<List<ParticipantUpdateRecord>> ParseCsvForUpdateAsync(Microsoft.AspNetCore.Http.IFormFile file)
+        {
+            var records = new List<ParticipantUpdateRecord>();
+            var rowNumber = 0;
+
+            using var reader = new StreamReader(file.OpenReadStream(), Encoding.UTF8);
+
+            // Read header
+            var headerLine = await reader.ReadLineAsync();
+            if (string.IsNullOrWhiteSpace(headerLine))
+            {
+                return records;
+            }
+
+            var headers = headerLine.Split(',').Select(h => h.Trim().ToLower()).ToArray();
+
+            // Find column indices (flexible mapping)
+            var bibIndex = FindColumnIndex(headers, "bib", "bib number", "bibnumber", "number");
+            var firstNameIndex = FindColumnIndex(headers, "first name", "firstname", "first", "name");
+            var lastNameIndex = FindColumnIndex(headers, "last name", "lastname", "last", "surname");
+            var emailIndex = FindColumnIndex(headers, "email", "e-mail", "mail");
+            var phoneIndex = FindColumnIndex(headers, "phone", "mobile", "contact", "mobile number", "phone number");
+            var genderIndex = FindColumnIndex(headers, "gender", "sex");
+            var ageCategoryIndex = FindColumnIndex(headers, "age category", "category", "age group", "agecategory");
+            var countryIndex = FindColumnIndex(headers, "country", "nation", "nationality");
+            var cityIndex = FindColumnIndex(headers, "city", "town");
+            var tshirtIndex = FindColumnIndex(headers, "tshirt", "t-shirt", "shirt size", "tshirt size", "t-shirt size");
+            var dobIndex = FindColumnIndex(headers, "dob", "date of birth", "dateofbirth", "birthdate", "birth date");
+
+            // Read data rows
+            while (!reader.EndOfStream)
+            {
+                rowNumber++;
+                var line = await reader.ReadLineAsync();
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                var values = ParseCsvLine(line);
+
+                var record = new ParticipantUpdateRecord
+                {
+                    RowNumber = rowNumber,
+                    BibNumber = GetValueAtIndex(values, bibIndex),
+                    FirstName = GetValueAtIndex(values, firstNameIndex),
+                    LastName = GetValueAtIndex(values, lastNameIndex),
+                    Email = GetValueAtIndex(values, emailIndex),
+                    Phone = GetValueAtIndex(values, phoneIndex),
+                    Gender = GetValueAtIndex(values, genderIndex),
+                    AgeCategory = GetValueAtIndex(values, ageCategoryIndex),
+                    Country = GetValueAtIndex(values, countryIndex),
+                    City = GetValueAtIndex(values, cityIndex),
+                    TShirtSize = GetValueAtIndex(values, tshirtIndex)
+                };
+
+                // Parse date of birth if present
+                var dobValue = GetValueAtIndex(values, dobIndex);
+                if (!string.IsNullOrWhiteSpace(dobValue) && DateTime.TryParse(dobValue, out var dob))
+                {
+                    record.DateOfBirth = dob;
+                }
+
+                records.Add(record);
+            }
+
+            return records;
+        }
+
+        /// <summary>
+        /// Applies update record data to participant entity
+        /// </summary>
+        private static bool ApplyUpdateToParticipant(Models.Data.Entities.Participant participant, ParticipantUpdateRecord record)
+        {
+            var hasChanges = false;
+
+            if (!string.IsNullOrWhiteSpace(record.FirstName))
+            {
+                participant.FirstName = record.FirstName;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.LastName))
+            {
+                participant.LastName = record.LastName;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.Email))
+            {
+                participant.Email = record.Email;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.Phone))
+            {
+                participant.Phone = record.Phone;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.Gender))
+            {
+                participant.Gender = record.Gender;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.AgeCategory))
+            {
+                participant.AgeCategory = record.AgeCategory;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.Country))
+            {
+                participant.Country = record.Country;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.City))
+            {
+                participant.City = record.City;
+                hasChanges = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.TShirtSize))
+            {
+                participant.TShirtSize = record.TShirtSize;
+                hasChanges = true;
+            }
+
+            if (record.DateOfBirth.HasValue)
+            {
+                participant.DateOfBirth = record.DateOfBirth;
+                hasChanges = true;
+            }
+
+            return hasChanges;
+        }
+
         /// <summary>
         /// Builds a bib number with optional prefix and suffix
         /// </summary>

@@ -36,6 +36,9 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("BackgroundImageUrl")
                 .HasMaxLength(500);
 
+            builder.Property(ct => ct.BackgroundImageData)
+                .HasColumnName("BackgroundImageData");
+
             builder.Property(ct => ct.Width)
                 .HasColumnName("Width")
                 .IsRequired()

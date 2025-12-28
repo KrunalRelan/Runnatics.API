@@ -61,14 +61,10 @@ namespace Runnatics.Services
                     Description = request.Description,
                     Width = request.Width,
                     Height = request.Height,
+                    BackgroundImageData = request.BackgroundImageData,
                     //IsActive = request.IsActive,
                     AuditProperties = CreateAuditProperties(currentUserId)
                 };
-
-                if (!string.IsNullOrEmpty(request.BackgroundImageData))
-                {
-                    template.BackgroundImageUrl = await SaveBackgroundImageAsync(request.BackgroundImageData);
-                }
 
                 await templateRepo.AddAsync(template);
                 await _repository.SaveChangesAsync();
@@ -158,14 +154,10 @@ namespace Runnatics.Services
                 existing.Description = request.Description;
                 existing.Width = request.Width;
                 existing.Height = request.Height;
+                existing.BackgroundImageData = request.BackgroundImageData;
                 //existing.IsActive = request.IsActive;
                 existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 existing.AuditProperties.UpdatedBy = currentUserId;
-
-                if (!string.IsNullOrEmpty(request.BackgroundImageData))
-                {
-                    existing.BackgroundImageUrl = await SaveBackgroundImageAsync(request.BackgroundImageData);
-                }
 
                 var fieldRepo = _repository.GetRepository<CertificateField>();
                 var fieldIdsToDelete = existing.Fields.Select(f => f.Id).ToList();
@@ -391,14 +383,6 @@ namespace Runnatics.Services
                 .AnyAsync();
         }
 
-        private async Task<string> SaveBackgroundImageAsync(string base64Data)
-        {
-            // TODO: Implement actual file storage (Azure Blob Storage, S3, etc.)
-            // For now, just return a placeholder
-            await Task.CompletedTask;
-            return $"/certificates/backgrounds/{Guid.NewGuid()}.png";
-        }
-
         private CertificateTemplateResponse MapToResponse(CertificateTemplate template)
         {
             return new CertificateTemplateResponse
@@ -409,6 +393,7 @@ namespace Runnatics.Services
                 Name = template.Name,
                 Description = template.Description,
                 BackgroundImageUrl = template.BackgroundImageUrl,
+                BackgroundImageData = template.BackgroundImageData,
                 Width = template.Width,
                 Height = template.Height,
                 //IsActive = template.IsActive,

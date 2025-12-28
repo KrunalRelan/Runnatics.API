@@ -20,8 +20,16 @@ namespace Runnatics.Models.Data.Entities
         [MaxLength(1000)]
         public string? Description { get; set; }
 
+        /// <summary>
+        /// URL path for background image (for future Azure Blob Storage integration)
+        /// </summary>
         [MaxLength(500)]
         public string? BackgroundImageUrl { get; set; }
+
+        /// <summary>
+        /// Base64 encoded background image data stored in database
+        /// </summary>
+        public string? BackgroundImageData { get; set; }
 
         [Required]
         public int Width { get; set; } = 1754;

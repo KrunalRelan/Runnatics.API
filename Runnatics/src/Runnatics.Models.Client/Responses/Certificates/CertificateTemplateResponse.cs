@@ -8,6 +8,10 @@ namespace Runnatics.Models.Client.Responses.Certificates
         public string Name { get; set; } = string.Empty;
         public string? Description { get; set; }
         public string? BackgroundImageUrl { get; set; }
+        /// <summary>
+        /// Base64 encoded background image data
+        /// </summary>
+        public string? BackgroundImageData { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
         public bool IsActive { get; set; }

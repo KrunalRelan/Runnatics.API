@@ -22,7 +22,6 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(cf => cf.FieldType)
                 .HasColumnName("FieldType")
-                .HasConversion<string>()
                 .IsRequired();
 
             builder.Property(cf => cf.Content)
@@ -82,8 +81,7 @@ namespace Runnatics.Data.EF.Config
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.CreatedBy)
-                    .HasColumnName("CreatedBy")
-                    .IsRequired();
+                    .HasColumnName("CreatedBy");
 
                 ap.Property(p => p.CreatedDate)
                     .HasColumnName("CreatedAt")

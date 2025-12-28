@@ -188,8 +188,7 @@ namespace Runnatics.Services
                     Height = f.Height,
                     Alignment = f.Alignment ?? "left",
                     FontWeight = f.FontWeight ?? "normal",
-                    FontStyle = f.FontStyle ?? "normal",
-                    AuditProperties = CreateAuditProperties(currentUserId)
+                    FontStyle = f.FontStyle ?? "normal"
                 }).ToList();
 
                 await fieldRepo.AddRangeAsync(newFields);

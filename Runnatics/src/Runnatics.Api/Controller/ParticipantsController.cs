@@ -313,5 +313,64 @@ namespace Runnatics.Api.Controller
             response.Message = result;
             return Ok(response);
         }
+
+        /// <summary>
+        /// Update existing participants by matching bib numbers from uploaded CSV file
+        /// </summary>
+        /// <remarks>
+        /// Use this endpoint when participants were created using AddParticipantRange (with only bib numbers)
+        /// and you now want to update them with full details (name, email, phone, etc.) from a CSV file.
+        /// The CSV should contain a BIB column that matches existing participant bib numbers.
+        /// Only matching bib numbers will be updated; non-matching bibs are reported in the response.
+        /// </remarks>
+        [HttpPost("{eventId}/{raceId}/update-by-bib")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<UpdateParticipantsByBibResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UpdateParticipantsByBib(
+            [FromRoute] string eventId,
+            [FromRoute] string raceId,
+            [FromForm] UpdateParticipantsByBibRequest request)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Event ID and Race ID are required." });
+            }
+
+            if (request?.File == null || request.File.Length == 0)
+            {
+                return BadRequest(new { error = "CSV file is required." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
+            }
+
+            var response = new ResponseBase<UpdateParticipantsByBibResponse>();
+            var result = await _service.UpdateParticipantsByBibAsync(eventId, raceId, request);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<UpdateParticipantsByBibResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
     }
 }

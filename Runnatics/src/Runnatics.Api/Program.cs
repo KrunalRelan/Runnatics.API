@@ -19,6 +19,7 @@ builder.Services.AddControllers()
     {
         options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
 
 // Swagger
@@ -155,6 +156,7 @@ builder.Services.AddScoped<IParticipantImportService, ParticipantImportService>(
 builder.Services.AddScoped<ICheckpointsService, CheckpointService>();
 builder.Services.AddScoped<IDevicesService, DevicesService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<ICertificatesService, CertificatesService>();
 
 // Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);

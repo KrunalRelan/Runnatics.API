@@ -33,6 +33,8 @@ namespace Runnatics.Data.EF
         public DbSet<ParticipantStaging> ParticipantStagings { get; set; }
 
         public DbSet<Device> Devices { get; set; }
+        public DbSet<CertificateTemplate> CertificateTemplates { get; set; }
+        public DbSet<CertificateField> CertificateFields { get; set; }
 
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
@@ -63,6 +65,8 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new ImportBatchConfiguration());
             modelBuilder.ApplyConfiguration(new ParticipantStagingConfiguration());
             modelBuilder.ApplyConfiguration(new DeviceConfiguration());
+            modelBuilder.ApplyConfiguration(new CertificateTemplateConfiguration());
+            modelBuilder.ApplyConfiguration(new CertificateFieldConfiguration());
             //modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here

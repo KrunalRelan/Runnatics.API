@@ -49,6 +49,11 @@ namespace Runnatics.Data.EF.Config
                 .IsRequired()
                 .HasDefaultValue(1240);
 
+            builder.Property(ct => ct.IsDefault)
+                .HasColumnName("IsDefault")
+                .IsRequired()
+                .HasDefaultValue(false);
+
             //builder.Property(ct => ct.IsActive)
             //    .HasColumnName("IsActive")
             //    .IsRequired()
@@ -85,6 +90,8 @@ namespace Runnatics.Data.EF.Config
             // Indexes
             builder.HasIndex(ct => ct.EventId);
             builder.HasIndex(ct => new { ct.EventId, ct.RaceId });
+            builder.HasIndex(ct => new { ct.EventId, ct.IsDefault })
+                .HasDatabaseName("IX_CertificateTemplates_EventId_IsDefault");
 
             // Foreign Key Relationships
             builder.HasOne(ct => ct.Event)

@@ -187,7 +187,7 @@ namespace Runnatics.Api.Controller
         /// Returns the race-specific template if it exists, otherwise returns the event-wide template.
         /// If neither exists, returns 404.
         /// </remarks>
-        [HttpGet("templates/race/{eventId}/{raceId}")]
+        [HttpGet("templates/event/{eventId}/race/{raceId}")]
         [ProducesResponseType(typeof(CertificateTemplateResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]

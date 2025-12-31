@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Runnatics.Data.EF;
 
@@ -11,9 +12,11 @@ using Runnatics.Data.EF;
 namespace Runnatics.Data.EF.Migrations
 {
     [DbContext(typeof(RaceSyncDbContext))]
-    partial class RaceSyncDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251231065258_AddIsDefaultToCertificateTemplate")]
+    partial class AddIsDefaultToCertificateTemplate
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

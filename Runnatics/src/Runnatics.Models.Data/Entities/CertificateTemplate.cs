@@ -37,6 +37,13 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         public int Height { get; set; } = 1240;
 
+        /// <summary>
+        /// Indicates if this template is the default template for the event.
+        /// Only one template per event can be marked as default.
+        /// </summary>
+        [Required]
+        public bool IsDefault { get; set; } = false;
+
         //public bool IsActive { get; set; } = true;
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();

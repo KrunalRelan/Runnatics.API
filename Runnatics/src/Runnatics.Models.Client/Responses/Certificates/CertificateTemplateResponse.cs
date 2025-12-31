@@ -14,6 +14,7 @@ namespace Runnatics.Models.Client.Responses.Certificates
         public string? BackgroundImageData { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
+        public bool IsDefault { get; set; }
         public bool IsActive { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }

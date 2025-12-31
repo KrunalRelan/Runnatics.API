@@ -53,6 +53,12 @@ namespace Runnatics.Services
                 var currentUserId = GetCurrentUserId();
                 var templateRepo = _repository.GetRepository<CertificateTemplate>();
 
+                // If this template is being set as default, unmark any existing default templates for the event
+                if (request.IsDefault)
+                {
+                    await UnmarkExistingDefaultTemplatesAsync(decryptedEventId, currentUserId);
+                }
+
                 var template = new CertificateTemplate
                 {
                     EventId = decryptedEventId,
@@ -62,6 +68,7 @@ namespace Runnatics.Services
                     Width = request.Width,
                     Height = request.Height,
                     BackgroundImageData = request.BackgroundImageData,
+                    IsDefault = request.IsDefault,
                     //IsActive = request.IsActive,
                     AuditProperties = CreateAuditProperties(currentUserId)
                 };
@@ -147,6 +154,12 @@ namespace Runnatics.Services
 
                 var currentUserId = GetCurrentUserId();
 
+                // If this template is being set as default, unmark any existing default templates for the event
+                if (request.IsDefault && !existing.IsDefault)
+                {
+                    await UnmarkExistingDefaultTemplatesAsync(decryptedEventId, currentUserId, existing.Id);
+                }
+
                 existing.EventId = decryptedEventId;
                 existing.RaceId = decryptedRaceId;
                 existing.Name = request.Name;
@@ -154,6 +167,7 @@ namespace Runnatics.Services
                 existing.Width = request.Width;
                 existing.Height = request.Height;
                 existing.BackgroundImageData = request.BackgroundImageData;
+                existing.IsDefault = request.IsDefault;
                 //existing.IsActive = request.IsActive;
                 existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 existing.AuditProperties.UpdatedBy = currentUserId;
@@ -285,6 +299,20 @@ namespace Runnatics.Services
 
                 if (template == null)
                 {
+                    // Try to find the default template for the event
+                    var defaultTemplate = await templateRepo
+                        .GetQuery(t => t.EventId == decryptedEventId && t.IsDefault)
+                        .Where(IsActiveFilter)
+                        .Include(t => t.Fields.Where(f => f.AuditProperties.IsActive && !f.AuditProperties.IsDeleted))
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+
+                    if (defaultTemplate != null)
+                    {
+                        return MapToResponse(defaultTemplate);
+                    }
+
+                    // Fallback to any event-wide template (RaceId is null)
                     var eventWideTemplate = await templateRepo
                         .GetQuery(t => t.EventId == decryptedEventId && t.RaceId == null)
                         .Where(IsActiveFilter)
@@ -410,7 +438,8 @@ namespace Runnatics.Services
                 BackgroundImageData = template.BackgroundImageData,
                 Width = template.Width,
                 Height = template.Height,
-                //IsActive = template.IsActive,
+                IsDefault = template.IsDefault,
+                IsActive = template.AuditProperties.IsActive,
                 CreatedAt = template.AuditProperties.CreatedDate,
                 UpdatedAt = template.AuditProperties.UpdatedDate,
                 Fields = template.Fields.Select(f => new CertificateFieldResponse
@@ -441,6 +470,43 @@ namespace Runnatics.Services
                 CreatedDate = DateTime.UtcNow,
                 CreatedBy = userId
             };
+        }
+
+        /// <summary>
+        /// Unmarks all existing default templates for a given event
+        /// </summary>
+        /// <param name="eventId">The event ID</param>
+        /// <param name="currentUserId">The current user ID for audit tracking</param>
+        /// <param name="excludeTemplateId">Optional template ID to exclude from unmarking (used during updates)</param>
+        private async Task UnmarkExistingDefaultTemplatesAsync(int eventId, int currentUserId, int? excludeTemplateId = null)
+        {
+            var templateRepo = _repository.GetRepository<CertificateTemplate>();
+            
+            var existingDefaultTemplates = await templateRepo
+                .GetQuery(t => t.EventId == eventId && t.IsDefault)
+                .Where(IsActiveFilter)
+                .ToListAsync();
+
+            if (excludeTemplateId.HasValue)
+            {
+                existingDefaultTemplates = existingDefaultTemplates
+                    .Where(t => t.Id != excludeTemplateId.Value)
+                    .ToList();
+            }
+
+            foreach (var template in existingDefaultTemplates)
+            {
+                template.IsDefault = false;
+                template.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                template.AuditProperties.UpdatedBy = currentUserId;
+            }
+
+            if (existingDefaultTemplates.Any())
+            {
+                await templateRepo.UpdateRangeAsync(existingDefaultTemplates);
+                _logger.LogInformation("Unmarked {Count} existing default templates for EventId: {EventId}",
+                    existingDefaultTemplates.Count, eventId);
+            }
         }
 
         #endregion

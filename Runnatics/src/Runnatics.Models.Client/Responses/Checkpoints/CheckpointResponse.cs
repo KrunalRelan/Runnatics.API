@@ -5,7 +5,7 @@
         public string Id { get; set; }
         public string EventId { get; set; }
         public string RaceId { get; set; }
-        public string Name { get; set; }
+        public string? Name { get; set; }
         public decimal DistanceFromStart { get; set; }
         public string DeviceId { get; set; }
         public string? ParentDeviceId { get; set; }

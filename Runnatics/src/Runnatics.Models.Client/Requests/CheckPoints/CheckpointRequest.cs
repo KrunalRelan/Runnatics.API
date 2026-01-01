@@ -6,9 +6,8 @@ namespace Runnatics.Models.Client.Requests.CheckPoints
     {
         public required string DeviceId { get; set; }
 
-        [Required]
-        [MaxLength(100)]
-        public string Name { get; set; } = string.Empty;
+        [MaxLength(100, ErrorMessage = "Name cannot exceed 100 characters")]
+        public string? Name { get; set; }
 
         [Required]
         public decimal DistanceFromStart { get; set; }

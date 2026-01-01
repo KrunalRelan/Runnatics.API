@@ -21,7 +21,7 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.Name)
                 .HasMaxLength(100)
-                .IsRequired();
+                .IsRequired(false);
 
             builder.Property(e => e.DistanceFromStart)
                 .HasColumnType("decimal(6,3)")

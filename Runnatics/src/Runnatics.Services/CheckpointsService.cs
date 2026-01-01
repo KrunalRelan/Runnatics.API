@@ -239,6 +239,58 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<bool> DeleteAll(string eventId, string raceId)
+        {
+            try
+            {
+                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
+
+                if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedRaceId))
+                {
+                    return false;
+                }
+
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+
+                var checkpoints = await checkpointRepo.GetQuery(c =>
+                        c.EventId == decryptedEventId &&
+                        c.RaceId == decryptedRaceId &&
+                        c.AuditProperties.IsActive &&
+                        !c.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                if (checkpoints == null || checkpoints.Count == 0)
+                {
+                    ErrorMessage = "No checkpoints found to delete.";
+                    _logger.LogWarning("No checkpoints found for deletion. EventId: {EventId}, RaceId: {RaceId}", decryptedEventId, decryptedRaceId);
+                    return false;
+                }
+
+                var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
+
+                // Soft delete all checkpoints
+                foreach (var checkpoint in checkpoints)
+                {
+                    checkpoint.AuditProperties.IsActive = false;
+                    checkpoint.AuditProperties.IsDeleted = true;
+                    checkpoint.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    checkpoint.AuditProperties.UpdatedBy = currentUserId;
+                }
+
+                await checkpointRepo.UpdateRangeAsync(checkpoints);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Deleted {Count} checkpoints for EventId: {EventId}, RaceId: {RaceId}", checkpoints.Count, decryptedEventId, decryptedRaceId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting all checkpoints. EventId: {EventId}, RaceId: {RaceId}", eventId, raceId);
+                ErrorMessage = "Error deleting checkpoints.";
+                return false;
+            }
+        }
+
         public async Task<CheckpointResponse> GetCheckpoint(string eventId, string raceId, string checkpointId)
         {
             try

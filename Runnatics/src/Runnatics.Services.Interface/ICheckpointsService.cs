@@ -15,6 +15,8 @@ namespace Runnatics.Services.Interface
         Task<bool> Update(string eventId, string raceId, string checkpointId, CheckpointRequest request);
 
         Task<bool> Delete(string eventId, string raceId, string checkpointId);
+        
+        Task<bool> DeleteAll(string eventId, string raceId);
 
         Task<CheckpointResponse> GetCheckpoint(string eventId, string raceId, string checkpointId);
         

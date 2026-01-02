@@ -320,5 +320,55 @@ namespace Runnatics.Api.Controller
 
             return Ok(new { message = "Checkpoints cloned successfully." });
         }
+
+        /// <summary>
+        /// Delete all checkpoints for a race
+        /// </summary>
+        [HttpDelete("{eventId}/{raceId}/all")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> DeleteAll(string eventId, string raceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Invalid identifiers provided." });
+            }
+
+            var response = new ResponseBase<object>();
+            var result = await _checkpointsService.DeleteAll(eventId, raceId);
+
+            if (_checkpointsService.HasError)
+            {
+                response.Error = new ResponseBase<object>.ErrorData()
+                {
+                    Message = _checkpointsService.ErrorMessage
+                };
+
+                // Return 404 Not Found if event/race doesn't exist or no checkpoints found
+                if (_checkpointsService.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                    _checkpointsService.ErrorMessage.Contains("No checkpoints", StringComparison.OrdinalIgnoreCase))
+                {
+                    return NotFound(response);
+                }
+
+                // Return 500 for database errors or unexpected errors
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (!result)
+            {
+                response.Error = new ResponseBase<object>.ErrorData()
+                {
+                    Message = "Checkpoint deletion failed. Please try again."
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = new { message = "All checkpoints deleted successfully for the race" };
+            return Ok(response);
+        }
     }
 }

@@ -42,6 +42,7 @@ namespace Runnatics.Data.EF.Config
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
 
@@ -51,15 +52,18 @@ namespace Runnatics.Data.EF.Config
                     .IsRequired();
 
                 ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
                     .IsRequired(false);
 
                 ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy")
                     .IsRequired(false);
 
                 ap.Property(p => p.UpdatedDate)
                     .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });

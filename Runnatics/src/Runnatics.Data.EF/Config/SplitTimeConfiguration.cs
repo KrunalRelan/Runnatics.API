@@ -12,33 +12,31 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasKey(e => e.Id);
             builder.Property(e => e.Id)
-                     .ValueGeneratedOnAdd()
-                        .IsRequired();
-
-            builder.Property(e => e.EventId)
+                .ValueGeneratedOnAdd()
                 .IsRequired();
 
             builder.Property(e => e.ParticipantId)
                 .IsRequired();
 
-            builder.Property(e => e.CheckpointId)
+            builder.Property(e => e.FromCheckpointId)
                 .IsRequired();
 
-            builder.Property(e => e.ReadNormalizedId);
-
-            builder.Property(e => e.SplitTimeMs)
+            builder.Property(e => e.ToCheckpointId)
                 .IsRequired();
 
-            builder.Property(e => e.SegmentTime);
+            builder.Property(e => e.SplitTimeValue)
+                .HasColumnName("SplitTime")
+                .HasColumnType("time")
+                .IsRequired();
 
-            builder.Property(e => e.Pace)
+            builder.Property(e => e.Distance)
                 .HasColumnType("decimal(10,3)");
 
-            builder.Property(e => e.Rank);
+            builder.Property(e => e.AveragePace)
+                .HasColumnType("decimal(10,3)");
 
-            builder.Property(e => e.GenderRank);
-
-            builder.Property(e => e.CategoryRank);
+            // Ignore computed property
+            builder.Ignore(e => e.SplitTimeMs);
 
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
@@ -48,15 +46,18 @@ namespace Runnatics.Data.EF.Config
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
                 ap.Property(p => p.CreatedBy)
-                    .IsRequired();
+                    .IsRequired(false);
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedBy)
+                    .IsRequired(false);
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsActive)
                     .HasDefaultValue(true)
@@ -64,54 +65,25 @@ namespace Runnatics.Data.EF.Config
             });
 
             // Relationships
-            builder.HasOne(e => e.Event)
-                .WithMany()
-                .HasForeignKey(e => e.EventId)
-                .OnDelete(DeleteBehavior.Restrict);
-
             builder.HasOne(e => e.Participant)
-                .WithMany()
+                .WithMany(p => p.SplitTimes)
                 .HasForeignKey(e => e.ParticipantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            builder.HasOne(e => e.Checkpoint)
+            builder.HasOne(e => e.FromCheckpoint)
                 .WithMany()
-                .HasForeignKey(e => e.CheckpointId)
+                .HasForeignKey(e => e.FromCheckpointId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            builder.HasOne(e => e.ReadNormalized)
+            builder.HasOne(e => e.ToCheckpoint)
                 .WithMany()
-                .HasForeignKey(e => e.ReadNormalizedId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .HasForeignKey(e => e.ToCheckpointId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             // Indexes
-            builder.HasIndex(e => e.SplitTimeMs);
-            
-            builder.HasIndex(e => e.Rank);
-
-            builder.HasIndex(e => e.ReadNormalizedId);
-            
-            builder.OwnsOne(o => o.AuditProperties, ap =>
-            {
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-
-                ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
-
-                ap.Property(p => p.UpdatedBy);
-
-                ap.Property(p => p.UpdatedDate);
-
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
-                    .IsRequired();
-
-                ap.Property(p => p.IsActive)
-                    .HasDefaultValue(true)
-                    .IsRequired();
-            });
+            builder.HasIndex(e => e.ParticipantId);
+            builder.HasIndex(e => e.FromCheckpointId);
+            builder.HasIndex(e => e.ToCheckpointId);
         }
     }
 }

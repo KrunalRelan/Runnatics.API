@@ -3,27 +3,25 @@ namespace Runnatics.Models.Data.Entities
     using System;
     using System.ComponentModel.DataAnnotations;
     using Runnatics.Models.Data.Common;
-    using Runnatics.Models.Data.Entities;
 
     public class SplitTime
     {
         [Key]
         public int Id { get; set; }
-        public int EventId { get; set; }
         public int ParticipantId { get; set; }
-        public int CheckpointId { get; set; }
-        public int? ReadNormalizedId { get; set; }
-        public long SplitTimeMs { get; set; } // Milliseconds from start to this checkpoint
-        public long? SegmentTime { get; set; } // Milliseconds from previous checkpoint
-        public decimal? Pace { get; set; } // Minutes per km
-        public int? Rank { get; set; } // Overall rank at this checkpoint
-        public int? GenderRank { get; set; }
-        public int? CategoryRank { get; set; }
+        public int FromCheckpointId { get; set; }
+        public int ToCheckpointId { get; set; }
+        public TimeSpan SplitTimeValue { get; set; } // Maps to SplitTime column (time type)
+        public decimal? Distance { get; set; }
+        public decimal? AveragePace { get; set; }
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
+
+        // Computed property for milliseconds (used by service layer)
+        public long SplitTimeMs => (long)SplitTimeValue.TotalMilliseconds;
+
         // Navigation Properties
-        public virtual Event Event { get; set; } = null!;
         public virtual Participant Participant { get; set; } = null!;
-        public virtual Checkpoint Checkpoint { get; set; } = null!;
-        public virtual ReadNormalized? ReadNormalized { get; set; }
+        public virtual Checkpoint FromCheckpoint { get; set; } = null!;
+        public virtual Checkpoint ToCheckpoint { get; set; } = null!;
     }
 }

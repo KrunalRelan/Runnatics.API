@@ -1356,10 +1356,9 @@ namespace Runnatics.Services
                 var splitTimeRepo = _repository.GetRepository<SplitTime>();
                 var splitTimes = await splitTimeRepo.GetQuery(st =>
                     st.ParticipantId == decryptedParticipantId &&
-                    st.EventId == decryptedEventId &&
                     !st.AuditProperties.IsDeleted)
-                    .Include(st => st.Checkpoint)
-                    .OrderBy(st => st.Checkpoint.DistanceFromStart)
+                    .Include(st => st.ToCheckpoint)
+                    .OrderBy(st => st.ToCheckpoint.DistanceFromStart)
                     .AsNoTracking()
                     .ToListAsync();
 

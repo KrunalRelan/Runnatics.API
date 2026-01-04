@@ -1,3 +1,4 @@
+using Runnatics.Models.Client.Helpers;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Services.Interface;
@@ -6,106 +7,93 @@ namespace Runnatics.Services.Helpers
 {
     /// <summary>
     /// Helper class for calculating performance metrics from split times
-    /// Follows Single Responsibility Principle - only handles performance calculations
     /// </summary>
-    public class PerformanceMetricsBuilder
+    public class PerformanceMetricsBuilder(IEncryptionService encryptionService)
     {
-        private readonly IEncryptionService _encryptionService;
-
-        public PerformanceMetricsBuilder(IEncryptionService encryptionService)
-        {
-            _encryptionService = encryptionService;
-        }
+        private readonly IEncryptionService _encryptionService = encryptionService;
 
         public void BuildSplitTimesAndPerformance(ParticipantDetailsResponse response, List<SplitTime> splitTimes)
         {
-            response.SplitTimes = new List<SplitTimeInfo>();
-            response.PaceProgression = new List<PaceProgressionInfo>();
+            response.SplitTimes = [];
+            response.PaceProgression = [];
+
+            if (splitTimes.Count == 0)
+            {
+                response.Performance = new PerformanceOverview();
+                return;
+            }
 
             var metrics = new PerformanceMetrics();
-            long previousCumulativeMs = 0;
+            long cumulativeTimeMs = 0;
 
             foreach (var st in splitTimes)
             {
-                var checkpoint = st.Checkpoint;
-                var distanceKm = checkpoint?.DistanceFromStart ?? 0;
-                var segmentDistanceKm = distanceKm - metrics.TotalDistance;
-                metrics.TotalDistance = distanceKm;
-
-                var segmentTimeMs = st.SegmentTime ?? (st.SplitTimeMs - previousCumulativeMs);
-                previousCumulativeMs = st.SplitTimeMs;
-
-                var (paceValue, speedValue) = CalculatePaceAndSpeed(segmentDistanceKm, segmentTimeMs);
-
-                if (paceValue.HasValue && speedValue.HasValue)
-                {
-                    metrics.UpdateMetrics(paceValue.Value, speedValue.Value);
-                }
-
-                var splitTimeInfo = BuildSplitTimeInfo(st, checkpoint, distanceKm, segmentTimeMs, paceValue, speedValue);
+                var (splitTimeInfo, progressionInfo, segmentPace, segmentSpeed) = ProcessSplitTime(st, metrics, ref cumulativeTimeMs);
+                
                 response.SplitTimes.Add(splitTimeInfo);
-
-                var progressionInfo = BuildPaceProgressionInfo(checkpoint?.Name, distanceKm, splitTimeInfo);
                 response.PaceProgression.Add(progressionInfo);
+
+                if (segmentPace.HasValue && segmentSpeed.HasValue)
+                {
+                    metrics.UpdateMetrics(segmentPace.Value, segmentSpeed.Value);
+                }
             }
 
-            response.Performance = metrics.BuildPerformanceOverview();
+            response.Performance = BuildPerformanceOverview(metrics);
         }
 
-        private SplitTimeInfo BuildSplitTimeInfo(
+        private (SplitTimeInfo splitInfo, PaceProgressionInfo progressionInfo, decimal? pace, decimal? speed) ProcessSplitTime(
             SplitTime st,
-            Checkpoint? checkpoint,
-            decimal distanceKm,
-            long segmentTimeMs,
-            decimal? paceValue,
-            decimal? speedValue)
+            PerformanceMetrics metrics,
+            ref long cumulativeTimeMs)
         {
-            return new SplitTimeInfo
+            var checkpoint = st.ToCheckpoint;
+            var distanceKm = checkpoint?.DistanceFromStart ?? st.Distance ?? 0;
+            var segmentDistanceKm = distanceKm - metrics.TotalDistance;
+            metrics.TotalDistance = distanceKm;
+
+            var segmentTimeMs = st.SplitTimeMs;
+            cumulativeTimeMs += segmentTimeMs;
+
+            var (calculatedPace, speed) = CalculatePaceAndSpeed(segmentDistanceKm, segmentTimeMs);
+            var effectivePace = st.AveragePace ?? calculatedPace;
+
+            var splitTimeInfo = new SplitTimeInfo
             {
                 CheckpointId = checkpoint != null ? _encryptionService.Encrypt(checkpoint.Id.ToString()) : null,
                 CheckpointName = checkpoint?.Name,
                 Distance = $"{distanceKm} km",
                 DistanceKm = distanceKm,
                 SplitTime = TimeFormatter.FormatTimeSpan(segmentTimeMs),
-                CumulativeTime = TimeFormatter.FormatTimeSpan(st.SplitTimeMs),
-                Pace = paceValue.HasValue ? TimeFormatter.FormatPace(paceValue.Value) : null,
-                PaceValue = paceValue.HasValue ? Math.Round(paceValue.Value, 2) : null,
-                Speed = speedValue.HasValue ? Math.Round(speedValue.Value, 1) : null,
-                OverallRank = st.Rank,
-                GenderRank = st.GenderRank,
-                CategoryRank = st.CategoryRank
+                CumulativeTime = TimeFormatter.FormatTimeSpan(cumulativeTimeMs),
+                Pace = effectivePace.HasValue ? TimeFormatter.FormatPace(effectivePace.Value) : null,
+                PaceValue = effectivePace.HasValue ? Math.Round(effectivePace.Value, 2) : null,
+                Speed = speed.HasValue ? Math.Round(speed.Value, 1) : null
             };
-        }
 
-        private static PaceProgressionInfo BuildPaceProgressionInfo(
-            string? checkpointName,
-            decimal distanceKm,
-            SplitTimeInfo splitTimeInfo)
-        {
-            var progressionSegment = GetPaceProgressionSegment(checkpointName, distanceKm);
-            return new PaceProgressionInfo
+            var progressionInfo = new PaceProgressionInfo
             {
-                Segment = progressionSegment,
+                Segment = GetPaceProgressionSegment(checkpoint?.Name, distanceKm),
                 Pace = splitTimeInfo.Pace,
                 PaceValue = splitTimeInfo.PaceValue,
                 Speed = splitTimeInfo.Speed,
                 SplitTime = splitTimeInfo.SplitTime
             };
+
+            return (splitTimeInfo, progressionInfo, effectivePace, speed);
         }
 
-        private static (decimal? paceValue, decimal? speedValue) CalculatePaceAndSpeed(decimal segmentDistanceKm, long segmentTimeMs)
+        private static (decimal? pace, decimal? speed) CalculatePaceAndSpeed(decimal segmentDistanceKm, long segmentTimeMs)
         {
             if (segmentDistanceKm <= 0 || segmentTimeMs <= 0)
-            {
                 return (null, null);
-            }
 
-            // Pace in minutes per km
-            var paceValue = (decimal)segmentTimeMs / 60000m / segmentDistanceKm;
-            // Speed in km/h
-            var speedValue = segmentDistanceKm / ((decimal)segmentTimeMs / 3600000m);
+            // Pace: minutes per km
+            var pace = segmentTimeMs / 60000m / segmentDistanceKm;
+            // Speed: km per hour
+            var speed = segmentDistanceKm / (segmentTimeMs / 3600000m);
 
-            return (paceValue, speedValue);
+            return (pace, speed);
         }
 
         private static string GetPaceProgressionSegment(string? checkpointName, decimal distanceKm)
@@ -121,42 +109,24 @@ namespace Runnatics.Services.Helpers
                     return checkpointName.ToUpper().Replace("KM", "K");
             }
 
-            if (distanceKm >= 21) return "FINISH";
             return $"{(int)distanceKm}K";
         }
 
-        private class PerformanceMetrics
+        private static PerformanceOverview BuildPerformanceOverview(PerformanceMetrics metrics)
         {
-            public decimal TotalDistance { get; set; }
-            public decimal? BestPaceValue { get; private set; }
-            public decimal? MaxSpeed { get; private set; }
-            public decimal TotalPace { get; private set; }
-            public decimal TotalSpeed { get; private set; }
-            public int PaceCount { get; private set; }
+            if (!metrics.HasData)
+                return new PerformanceOverview();
 
-            public void UpdateMetrics(decimal paceValue, decimal speedValue)
+            var avgPace = metrics.GetAveragePace();
+            var avgSpeed = metrics.GetAverageSpeed();
+
+            return new PerformanceOverview
             {
-                TotalPace += paceValue;
-                TotalSpeed += speedValue;
-                PaceCount++;
-
-                if (!BestPaceValue.HasValue || paceValue < BestPaceValue)
-                    BestPaceValue = paceValue;
-
-                if (!MaxSpeed.HasValue || speedValue > MaxSpeed)
-                    MaxSpeed = speedValue;
-            }
-
-            public PerformanceOverview BuildPerformanceOverview()
-            {
-                return new PerformanceOverview
-                {
-                    AverageSpeed = PaceCount > 0 ? Math.Round(TotalSpeed / PaceCount, 2) : null,
-                    AveragePace = PaceCount > 0 ? TimeFormatter.FormatPace(TotalPace / PaceCount) : null,
-                    MaxSpeed = MaxSpeed.HasValue ? Math.Round(MaxSpeed.Value, 1) : null,
-                    BestPace = BestPaceValue.HasValue ? TimeFormatter.FormatPace(BestPaceValue.Value) : null
-                };
-            }
+                AverageSpeed = avgSpeed.HasValue ? Math.Round(avgSpeed.Value, 2) : null,
+                AveragePace = avgPace.HasValue ? TimeFormatter.FormatPace(avgPace.Value) : null,
+                MaxSpeed = metrics.MaxSpeed.HasValue ? Math.Round(metrics.MaxSpeed.Value, 1) : null,
+                BestPace = metrics.BestPaceValue.HasValue ? TimeFormatter.FormatPace(metrics.BestPaceValue.Value) : null
+            };
         }
     }
 }

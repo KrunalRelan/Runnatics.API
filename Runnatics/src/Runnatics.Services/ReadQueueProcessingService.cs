@@ -1,13 +1,12 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Runnatics.Data.EF;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using Runnatics.Models.Data.Enumerations;
+using Runnatics.Repositories.Interface;
 
 namespace Runnatics.Services
 {
@@ -62,12 +61,19 @@ namespace Runnatics.Services
         private async Task<int> ProcessQueueAsync(CancellationToken stoppingToken)
         {
             using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<RunnaticsDbContext>();
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork<RaceSyncDbContext>>();
+
+            var queueRepo = unitOfWork.GetRepository<ReadQueueItem>();
+            var chipRepo = unitOfWork.GetRepository<Chip>();
+            var readRawRepo = unitOfWork.GetRepository<ReadRaw>();
+            var raceRepo = unitOfWork.GetRepository<Race>();
 
             // Get pending reads from queue
-            var pendingReads = await context.ReadQueue
-                .Where(r => r.ProcessingStatus == ReadRecordStatus.Pending &&
-                           r.RetryCount < r.MaxRetries)
+            var pendingReads = await queueRepo.GetQuery(
+                    r => r.ProcessingStatus == ReadRecordStatus.Pending &&
+                         r.RetryCount < r.MaxRetries,
+                    ignoreQueryFilters: false,
+                    includeNavigationProperties: false)
                 .OrderByDescending(r => r.Priority)
                 .ThenBy(r => r.Id)
                 .Take(_batchSize)
@@ -77,11 +83,13 @@ namespace Runnatics.Services
 
             // Get chip lookup
             var epcs = pendingReads.Select(r => r.Epc.ToUpperInvariant()).Distinct().ToList();
-            var chips = await context.Chips
-                .Where(c => epcs.Contains(c.Epc.ToUpperInvariant()) &&
-                           c.AuditProperties.IsActive &&
-                           !c.AuditProperties.IsDeleted)
-                .ToDictionaryAsync(c => c.Epc.ToUpperInvariant(), c => c, stoppingToken);
+            var chips = await chipRepo.GetQuery(
+                    c => epcs.Contains(c.EPC.ToUpperInvariant()) &&
+                         c.AuditProperties.IsActive &&
+                         !c.AuditProperties.IsDeleted,
+                    ignoreQueryFilters: false,
+                    includeNavigationProperties: false)
+                .ToDictionaryAsync(c => c.EPC.ToUpperInvariant(), c => c, stoppingToken);
 
             int processedCount = 0;
 
@@ -103,10 +111,13 @@ namespace Runnatics.Services
                     }
 
                     // Check for duplicate
-                    var isDuplicate = await context.ReadRaws
-                        .AnyAsync(r => r.Epc == queueItem.Epc &&
-                                      r.ReadTimestamp == queueItem.ReadTimestamp &&
-                                      r.CheckpointId == queueItem.CheckpointId, stoppingToken);
+                    var isDuplicate = await readRawRepo.GetQuery(
+                            r => r.Epc == queueItem.Epc &&
+                                 r.ReadTimestamp == queueItem.ReadTimestamp &&
+                                 r.CheckpointId == queueItem.CheckpointId,
+                            ignoreQueryFilters: false,
+                            includeNavigationProperties: false)
+                        .AnyAsync(stoppingToken);
 
                     if (isDuplicate)
                     {
@@ -117,19 +128,39 @@ namespace Runnatics.Services
                         continue;
                     }
 
-                    // Create ReadRaw
+                    // Create ReadRaw - need EventId, use RaceId to look up
+                    var eventId = queueItem.RaceId.HasValue
+                        ? await raceRepo.GetQuery(
+                                r => r.Id == queueItem.RaceId,
+                                ignoreQueryFilters: false,
+                                includeNavigationProperties: false)
+                            .Select(r => r.EventId)
+                            .FirstOrDefaultAsync(stoppingToken)
+                        : 0;
+
+                    if (eventId == 0)
+                    {
+                        queueItem.ProcessingStatus = ReadRecordStatus.Error;
+                        queueItem.ErrorMessage = "Could not determine event for race";
+                        queueItem.ProcessedAt = DateTime.UtcNow;
+                        processedCount++;
+                        continue;
+                    }
+
                     var readRaw = new ReadRaw
                     {
+                        EventId = eventId,
+                        ChipEPC = queueItem.Epc,
                         Epc = queueItem.Epc,
-                        ChipId = chip.Id,
-                        ReaderDeviceId = queueItem.ReaderDeviceId,
+                        ReaderDeviceId = queueItem.ReaderDeviceId ?? 0,
                         CheckpointId = queueItem.CheckpointId,
-                        RaceId = queueItem.RaceId,
+                        Timestamp = queueItem.ReadTimestamp,
                         ReadTimestamp = queueItem.ReadTimestamp,
                         AntennaPort = queueItem.AntennaPort,
-                        RssiDbm = queueItem.RssiDbm,
+                        Rssi = queueItem.RssiDbm.HasValue ? (int)queueItem.RssiDbm.Value : null,
                         Source = queueItem.Source,
                         FileUploadBatchId = queueItem.FileUploadBatchId,
+                        IsProcessed = false,
                         AuditProperties = new AuditProperties
                         {
                             CreatedDate = DateTime.UtcNow,
@@ -138,7 +169,7 @@ namespace Runnatics.Services
                         }
                     };
 
-                    context.ReadRaws.Add(readRaw);
+                    await readRawRepo.AddAsync(readRaw);
 
                     queueItem.ProcessingStatus = ReadRecordStatus.Processed;
                     queueItem.ProcessedAt = DateTime.UtcNow;
@@ -152,7 +183,7 @@ namespace Runnatics.Services
                 }
             }
 
-            await context.SaveChangesAsync(stoppingToken);
+            await unitOfWork.SaveChangesAsync();
 
             if (processedCount > 0)
             {

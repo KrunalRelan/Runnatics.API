@@ -1,4 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
+using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Services.Interface;
 using System;
 using System.Collections.Generic;
@@ -14,7 +16,7 @@ namespace Runnatics.Services
     public class GenericCsvParser : IFileParser
     {
         private readonly ILogger<GenericCsvParser> _logger;
-        public UploadFileFormat Format => UploadFileFormat.GenericCsv;
+        public FileFormat Format => FileFormat.CSV;
 
         public GenericCsvParser(ILogger<GenericCsvParser> logger)
         {
@@ -23,8 +25,9 @@ namespace Runnatics.Services
 
         public async Task<List<ImpinjTagRead>> ParseAsync(Stream stream, FileUploadMapping? mapping = null)
         {
-            // Use same logic as ImpinjCsvParser but with configurable column names
-            var impinjParser = new ImpinjCsvParser(_logger as ILogger<ImpinjCsvParser>);
+            // Use same logic as ImpinjCsvParser
+            var impinjParser = new ImpinjCsvParser(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ImpinjCsvParser>.Instance);
             return await impinjParser.ParseAsync(stream, mapping);
         }
     }

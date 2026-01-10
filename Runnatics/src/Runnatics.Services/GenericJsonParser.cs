@@ -1,4 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
+using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Services.Interface;
 using System;
 using System.Collections.Generic;
@@ -14,7 +16,7 @@ namespace Runnatics.Services
     public class GenericJsonParser : IFileParser
     {
         private readonly ILogger<GenericJsonParser> _logger;
-        public UploadFileFormat Format => UploadFileFormat.CustomJson;
+        public FileFormat Format => FileFormat.JSON;
 
         public GenericJsonParser(ILogger<GenericJsonParser> logger)
         {
@@ -23,7 +25,8 @@ namespace Runnatics.Services
 
         public async Task<List<ImpinjTagRead>> ParseAsync(Stream stream, FileUploadMapping? mapping = null)
         {
-            var impinjParser = new ImpinjJsonParser(_logger as ILogger<ImpinjJsonParser>);
+            var impinjParser = new ImpinjJsonParser(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ImpinjJsonParser>.Instance);
             return await impinjParser.ParseAsync(stream, mapping);
         }
     }

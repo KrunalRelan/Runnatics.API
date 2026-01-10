@@ -1,22 +1,22 @@
 ﻿using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
+using Runnatics.Models.Client.FileUpload;
 using Runnatics.Models.Data.Common;
+using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Services
 {
-    public class FileUploadService : IFileUploadService
+    /// <summary>
+    /// Service for file upload operations
+    /// </summary>
+    public class FileUploadService : ServiceBase<IUnitOfWork<RaceSyncDbContext>>, IFileUploadService
     {
-       private readonly IUnitOfWork<RaceSyncDbContext> repository;
         private readonly ILogger<FileUploadService> _logger;
         private readonly IFileParserFactory _parserFactory;
         private readonly string _uploadPath;
@@ -25,9 +25,8 @@ namespace Runnatics.Services
             IUnitOfWork<RaceSyncDbContext> repository,
             ILogger<FileUploadService> logger,
             IFileParserFactory parserFactory,
-            IConfiguration configuration)
+            IConfiguration configuration) : base(repository)
         {
-            this.repository = repository;
             _logger = logger;
             _parserFactory = parserFactory;
             _uploadPath = configuration["FileUpload:Path"] ?? Path.Combine(Directory.GetCurrentDirectory(), "uploads");
@@ -59,18 +58,20 @@ namespace Runnatics.Services
 
             // Calculate file hash
             string fileHash;
-            using (var md5 = MD5.Create())
+            using (var md5 = System.Security.Cryptography.MD5.Create())
             {
                 using var stream = file.OpenReadStream();
                 var hash = await md5.ComputeHashAsync(stream);
                 fileHash = Convert.ToHexString(hash);
             }
 
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+
             // Check for duplicate file
-            var existingBatch = await _context.FileUploadBatches
-                .FirstOrDefaultAsync(b => b.FileHash == fileHash &&
-                                         b.RaceId == request.RaceId &&
-                                         !b.AuditProperties.IsDeleted);
+            var existingBatch = await batchRepo.GetQuery(
+                    b => b.FileHash == fileHash && b.RaceId == request.RaceId && !b.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
 
             if (existingBatch != null)
             {
@@ -82,8 +83,8 @@ namespace Runnatics.Services
                     BatchId = existingBatch.Id,
                     BatchGuid = existingBatch.BatchGuid,
                     FileName = file.FileName,
-                    FileSizeBytes = file.Length,
-                    DetectedFormat = existingBatch.FileFormat,
+                    FileSize = file.Length,
+                    FileFormat = existingBatch.FileFormat,
                     Status = existingBatch.ProcessingStatus,
                     Message = $"Duplicate file detected. Matches existing batch {existingBatch.Id}."
                 };
@@ -122,8 +123,8 @@ namespace Runnatics.Services
                 }
             };
 
-            _context.FileUploadBatches.Add(batch);
-            await _context.SaveChangesAsync();
+            await batchRepo.AddAsync(batch);
+            await _repository.SaveChangesAsync();
 
             _logger.LogInformation("File uploaded successfully: {FileName} -> Batch {BatchId}",
                 file.FileName, batch.Id);
@@ -133,8 +134,8 @@ namespace Runnatics.Services
                 BatchId = batch.Id,
                 BatchGuid = batch.BatchGuid,
                 FileName = file.FileName,
-                FileSizeBytes = file.Length,
-                DetectedFormat = detectedFormat,
+                FileSize = file.Length,
+                FileFormat = detectedFormat,
                 Status = FileProcessingStatus.Pending,
                 Message = "File uploaded successfully. Processing will begin shortly."
             };
@@ -142,9 +143,14 @@ namespace Runnatics.Services
 
         public async Task<FileUploadStatusDto> GetBatchStatusAsync(int batchId)
         {
-            var batch = await _context.FileUploadBatches
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+
+            var batch = await batchRepo.GetQuery(
+                    b => b.Id == batchId && !b.AuditProperties.IsDeleted,
+                    includeNavigationProperties: true)
                 .Include(b => b.UploadedByUser)
-                .FirstOrDefaultAsync(b => b.Id == batchId && !b.AuditProperties.IsDeleted);
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
 
             if (batch == null)
             {
@@ -156,18 +162,26 @@ namespace Runnatics.Services
 
         public async Task<FileUploadStatusDto?> GetBatchStatusByGuidAsync(Guid batchGuid)
         {
-            var batch = await _context.FileUploadBatches
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+
+            var batch = await batchRepo.GetQuery(
+                    b => b.BatchGuid == batchGuid && !b.AuditProperties.IsDeleted,
+                    includeNavigationProperties: true)
                 .Include(b => b.UploadedByUser)
-                .FirstOrDefaultAsync(b => b.BatchGuid == batchGuid && !b.AuditProperties.IsDeleted);
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
 
             return batch == null ? null : MapToStatusDto(batch);
         }
 
         public async Task<FileUploadBatchListDto> GetBatchesAsync(int raceId, int pageNumber = 1, int pageSize = 20)
         {
-            var query = _context.FileUploadBatches
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+
+            var query = batchRepo.GetQuery(
+                    b => b.RaceId == raceId && !b.AuditProperties.IsDeleted,
+                    includeNavigationProperties: true)
                 .Include(b => b.UploadedByUser)
-                .Where(b => b.RaceId == raceId && !b.AuditProperties.IsDeleted)
                 .OrderByDescending(b => b.AuditProperties.CreatedDate);
 
             var totalCount = await query.CountAsync();
@@ -175,6 +189,7 @@ namespace Runnatics.Services
             var batches = await query
                 .Skip((pageNumber - 1) * pageSize)
                 .Take(pageSize)
+                .AsNoTracking()
                 .ToListAsync();
 
             return new FileUploadBatchListDto
@@ -188,13 +203,17 @@ namespace Runnatics.Services
 
         public async Task<List<FileUploadRecordDto>> GetBatchRecordsAsync(int batchId, int pageNumber = 1, int pageSize = 100)
         {
-            var records = await _context.FileUploadRecords
+            var recordRepo = _repository.GetRepository<FileUploadRecord>();
+
+            var records = await recordRepo.GetQuery(
+                    r => r.FileUploadBatchId == batchId,
+                    includeNavigationProperties: true)
                 .Include(r => r.MatchedChip)
                 .Include(r => r.MatchedParticipant)
-                .Where(r => r.FileUploadBatchId == batchId)
                 .OrderBy(r => r.RowNumber)
                 .Skip((pageNumber - 1) * pageSize)
                 .Take(pageSize)
+                .AsNoTracking()
                 .Select(r => new FileUploadRecordDto
                 {
                     Id = r.Id,
@@ -206,7 +225,7 @@ namespace Runnatics.Services
                     Status = r.ProcessingStatus,
                     ErrorMessage = r.ErrorMessage,
                     MatchedChipId = r.MatchedChipId,
-                    MatchedChipCode = r.MatchedChip != null ? r.MatchedChip.ChipCode : null,
+                    MatchedChipEpc = r.MatchedChip != null ? r.MatchedChip.EPC : null,
                     MatchedParticipantId = r.MatchedParticipantId,
                     MatchedParticipantName = r.MatchedParticipant != null
                         ? $"{r.MatchedParticipant.FirstName} {r.MatchedParticipant.LastName}"
@@ -220,15 +239,18 @@ namespace Runnatics.Services
 
         public async Task<bool> CancelBatchAsync(int batchId)
         {
-            var batch = await _context.FileUploadBatches
-                .FirstOrDefaultAsync(b => b.Id == batchId && !b.AuditProperties.IsDeleted);
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+
+            var batch = await batchRepo.GetQuery(b => b.Id == batchId && !b.AuditProperties.IsDeleted)
+                .FirstOrDefaultAsync();
 
             if (batch == null) return false;
 
             if (batch.ProcessingStatus == FileProcessingStatus.Processing)
             {
                 batch.ProcessingStatus = FileProcessingStatus.Cancelled;
-                await _context.SaveChangesAsync();
+                await batchRepo.UpdateAsync(batch);
+                await _repository.SaveChangesAsync();
                 return true;
             }
 
@@ -237,8 +259,11 @@ namespace Runnatics.Services
 
         public async Task<bool> ReprocessBatchAsync(ReprocessBatchRequest request)
         {
-            var batch = await _context.FileUploadBatches
-                .FirstOrDefaultAsync(b => b.Id == request.BatchId && !b.AuditProperties.IsDeleted);
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+            var recordRepo = _repository.GetRepository<FileUploadRecord>();
+
+            var batch = await batchRepo.GetQuery(b => b.Id == request.BatchId && !b.AuditProperties.IsDeleted)
+                .FirstOrDefaultAsync();
 
             if (batch == null) return false;
 
@@ -255,8 +280,7 @@ namespace Runnatics.Services
             if (request.ReprocessAll)
             {
                 // Reset all records
-                var records = await _context.FileUploadRecords
-                    .Where(r => r.FileUploadBatchId == request.BatchId)
+                var records = await recordRepo.GetQuery(r => r.FileUploadBatchId == request.BatchId)
                     .ToListAsync();
 
                 foreach (var record in records)
@@ -265,14 +289,14 @@ namespace Runnatics.Services
                     record.ErrorMessage = null;
                     record.ProcessedAt = null;
                 }
+
+                await recordRepo.UpdateRangeAsync(records);
             }
             else if (request.ReprocessErrors)
             {
                 // Reset only error records
-                var errorRecords = await _context.FileUploadRecords
-                    .Where(r => r.FileUploadBatchId == request.BatchId &&
-                               (r.ProcessingStatus == ReadRecordStatus.InvalidEpc ||
-                                r.ProcessingStatus == ReadRecordStatus.InvalidTimestamp))
+                var errorRecords = await recordRepo.GetQuery(
+                        r => r.FileUploadBatchId == request.BatchId && r.ProcessingStatus == ReadRecordStatus.Error)
                     .ToListAsync();
 
                 foreach (var record in errorRecords)
@@ -281,27 +305,32 @@ namespace Runnatics.Services
                     record.ErrorMessage = null;
                     record.ProcessedAt = null;
                 }
+
+                await recordRepo.UpdateRangeAsync(errorRecords);
             }
 
-            await _context.SaveChangesAsync();
+            await batchRepo.UpdateAsync(batch);
+            await _repository.SaveChangesAsync();
             return true;
         }
 
         public async Task<bool> DeleteBatchAsync(int batchId)
         {
-            var batch = await _context.FileUploadBatches
-                .FirstOrDefaultAsync(b => b.Id == batchId && !b.AuditProperties.IsDeleted);
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+            var recordRepo = _repository.GetRepository<FileUploadRecord>();
+
+            var batch = await batchRepo.GetQuery(b => b.Id == batchId && !b.AuditProperties.IsDeleted)
+                .FirstOrDefaultAsync();
 
             if (batch == null) return false;
 
-            // Soft delete
+            // Soft delete batch
             batch.AuditProperties.IsDeleted = true;
             batch.AuditProperties.IsActive = false;
             batch.AuditProperties.UpdatedDate = DateTime.UtcNow;
 
             // Also soft delete records
-            var records = await _context.FileUploadRecords
-                .Where(r => r.FileUploadBatchId == batchId)
+            var records = await recordRepo.GetQuery(r => r.FileUploadBatchId == batchId)
                 .ToListAsync();
 
             foreach (var record in records)
@@ -310,7 +339,9 @@ namespace Runnatics.Services
                 record.AuditProperties.IsActive = false;
             }
 
-            await _context.SaveChangesAsync();
+            await batchRepo.UpdateAsync(batch);
+            await recordRepo.UpdateRangeAsync(records);
+            await _repository.SaveChangesAsync();
 
             // Optionally delete the physical file
             var filePath = Path.Combine(_uploadPath, batch.StoredFileName);
@@ -322,24 +353,38 @@ namespace Runnatics.Services
             return true;
         }
 
-        private UploadFileFormat DetectFileFormat(string fileName, string extension)
+        /// <inheritdoc />
+        public async Task<FileUploadBatch?> GetBatchByIdAsync(int batchId)
+        {
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+
+            return await batchRepo.GetQuery(
+                    b => b.Id == batchId && !b.AuditProperties.IsDeleted,
+                    includeNavigationProperties: false)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+        }
+
+        #region Private Methods
+
+        private static FileFormat DetectFileFormat(string fileName, string extension)
         {
             var lowerName = fileName.ToLowerInvariant();
 
             if (lowerName.Contains("impinj") || lowerName.Contains("r700"))
             {
-                return extension == ".json" ? UploadFileFormat.ImpinjJson : UploadFileFormat.ImpinjCsv;
+                return extension == ".json" ? FileFormat.ImpinjJson : FileFormat.ImpinjCsv;
             }
 
             if (lowerName.Contains("chronotrack"))
             {
-                return UploadFileFormat.ChronotrackCsv;
+                return FileFormat.ChronotrackCsv;
             }
 
-            return extension == ".json" ? UploadFileFormat.CustomJson : UploadFileFormat.GenericCsv;
+            return extension == ".json" ? FileFormat.CustomJson : FileFormat.GenericCsv;
         }
 
-        private FileUploadStatusDto MapToStatusDto(FileUploadBatch batch)
+        private static FileUploadStatusDto MapToStatusDto(FileUploadBatch batch)
         {
             return new FileUploadStatusDto
             {
@@ -356,8 +401,14 @@ namespace Runnatics.Services
                 ProcessingCompletedAt = batch.ProcessingCompletedAt,
                 ErrorMessage = batch.ErrorMessage,
                 CreatedAt = batch.AuditProperties.CreatedDate,
-                UploadedByUserName = batch.UploadedByUser?.UserName
+                UploadedByUserName = batch.UploadedByUser != null
+                    ? (batch.UploadedByUser.FirstName != null 
+                        ? $"{batch.UploadedByUser.FirstName} {batch.UploadedByUser.LastName}" 
+                        : batch.UploadedByUser.Email)
+                    : null
             };
         }
+
+        #endregion
     }
 }

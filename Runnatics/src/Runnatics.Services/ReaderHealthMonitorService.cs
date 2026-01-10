@@ -6,6 +6,7 @@ using Runnatics.Data.EF;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Models.Data.Enumerations;
+using Runnatics.Repositories.Interface;
 
 namespace Runnatics.Services
 {
@@ -51,17 +52,23 @@ namespace Runnatics.Services
         private async Task CheckReaderHealthAsync(CancellationToken stoppingToken)
         {
             using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<RaceSyncDbContext>();
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork<RaceSyncDbContext>>();
+
+            var healthStatusRepo = unitOfWork.GetRepository<ReaderHealthStatus>();
+            var alertRepo = unitOfWork.GetRepository<ReaderAlert>();
+            var connectionLogRepo = unitOfWork.GetRepository<ReaderConnectionLog>();
 
             var now = DateTime.UtcNow;
             var offlineThreshold = now - _offlineThreshold;
 
             // Get readers that haven't sent heartbeat
-            var offlineReaders = await context.ReaderHealthStatuses
+            var offlineReaders = await healthStatusRepo.GetQuery(
+                    h => h.IsOnline &&
+                         h.LastHeartbeat.HasValue &&
+                         h.LastHeartbeat.Value < offlineThreshold,
+                    ignoreQueryFilters: false,
+                    includeNavigationProperties: true)
                 .Include(h => h.ReaderDevice)
-                .Where(h => h.IsOnline &&
-                           h.LastHeartbeat.HasValue &&
-                           h.LastHeartbeat.Value < offlineThreshold)
                 .ToListAsync(stoppingToken);
 
             foreach (var healthStatus in offlineReaders)
@@ -73,6 +80,8 @@ namespace Runnatics.Services
                 healthStatus.IsOnline = false;
                 healthStatus.ReaderMode = ReaderMode.Offline;
                 healthStatus.AuditProperties.UpdatedDate = now;
+
+                await healthStatusRepo.UpdateAsync(healthStatus);
 
                 // Create alert
                 var alert = new ReaderAlert
@@ -89,7 +98,7 @@ namespace Runnatics.Services
                     }
                 };
 
-                context.ReaderAlerts.Add(alert);
+                await alertRepo.AddAsync(alert);
 
                 // Log connection event
                 var connectionLog = new ReaderConnectionLog
@@ -106,12 +115,12 @@ namespace Runnatics.Services
                     }
                 };
 
-                context.ReaderConnectionLogs.Add(connectionLog);
+                await connectionLogRepo.AddAsync(connectionLog);
             }
 
             if (offlineReaders.Any())
             {
-                await context.SaveChangesAsync(stoppingToken);
+                await unitOfWork.SaveChangesAsync();
             }
         }
     }

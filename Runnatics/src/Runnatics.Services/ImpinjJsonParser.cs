@@ -1,18 +1,15 @@
 ﻿using Microsoft.Extensions.Logging;
+using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Services.Interface;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
 
 namespace Runnatics.Services
 {
     public class ImpinjJsonParser : IFileParser
     {
         private readonly ILogger<ImpinjJsonParser> _logger;
-        public UploadFileFormat Format => UploadFileFormat.ImpinjJson;
+        public FileFormat Format => FileFormat.JSON;
 
         public ImpinjJsonParser(ILogger<ImpinjJsonParser> logger)
         {
@@ -28,13 +25,6 @@ namespace Runnatics.Services
 
             try
             {
-                // Try parsing as array first
-                var jsonOptions = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                };
-
-                // Impinj JSON format typically has tag_reads array
                 var doc = JsonDocument.Parse(content);
 
                 JsonElement tagsArray;
@@ -63,6 +53,7 @@ namespace Runnatics.Services
                 throw;
             }
 
+            _logger.LogInformation("Parsed {Count} records from JSON", results.Count);
             return results;
         }
 
@@ -74,9 +65,9 @@ namespace Runnatics.Services
                 if (string.IsNullOrWhiteSpace(epc)) return null;
 
                 var timestampStr = GetStringProperty(tag, "timestamp", "Timestamp", "time", "readTime", "read_time");
-                if (string.IsNullOrWhiteSpace(timestampStr) || !DateTime.TryParse(timestampStr, out var timestamp))
+                DateTime timestamp;
+                if (string.IsNullOrWhiteSpace(timestampStr) || !DateTime.TryParse(timestampStr, out timestamp))
                 {
-                    // Try Unix timestamp
                     if (tag.TryGetProperty("timestamp", out var tsElement) && tsElement.TryGetInt64(out var unixMs))
                     {
                         timestamp = DateTimeOffset.FromUnixTimeMilliseconds(unixMs).UtcDateTime;
@@ -91,8 +82,8 @@ namespace Runnatics.Services
                 {
                     Epc = epc,
                     Timestamp = timestamp.ToUniversalTime(),
-                    AntennaPort = GetIntProperty(tag, "antenna_port", "antennaPort", "antenna") ?? 0,
-                    RssiDbm = GetDoubleProperty(tag, "peak_rssi", "peakRssi", "rssi") ?? 0,
+                    AntennaPort = GetIntProperty(tag, "antenna_port", "antennaPort", "antenna"),
+                    RssiDbm = GetDoubleProperty(tag, "peak_rssi", "peakRssi", "rssi"),
                     PhaseAngleDegrees = GetDoubleProperty(tag, "phase_angle", "phaseAngle", "phase"),
                     DopplerFrequencyHz = GetDoubleProperty(tag, "doppler", "dopplerFrequency"),
                     ChannelIndex = GetIntProperty(tag, "channel_index", "channelIndex", "channel"),
@@ -107,7 +98,7 @@ namespace Runnatics.Services
             }
         }
 
-        private string? GetStringProperty(JsonElement element, params string[] names)
+        private static string? GetStringProperty(JsonElement element, params string[] names)
         {
             foreach (var name in names)
             {
@@ -119,7 +110,7 @@ namespace Runnatics.Services
             return null;
         }
 
-        private int? GetIntProperty(JsonElement element, params string[] names)
+        private static int? GetIntProperty(JsonElement element, params string[] names)
         {
             foreach (var name in names)
             {
@@ -131,7 +122,7 @@ namespace Runnatics.Services
             return null;
         }
 
-        private double? GetDoubleProperty(JsonElement element, params string[] names)
+        private static double? GetDoubleProperty(JsonElement element, params string[] names)
         {
             foreach (var name in names)
             {
@@ -143,5 +134,4 @@ namespace Runnatics.Services
             return null;
         }
     }
-
 }

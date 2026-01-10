@@ -1,12 +1,8 @@
 ﻿using Microsoft.Extensions.Logging;
+using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Services.Interface;
-using System;
-using System.Collections.Generic;
-using System.Formats.Asn1;
 using System.Globalization;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Services
 {
@@ -16,7 +12,7 @@ namespace Runnatics.Services
     public class ImpinjCsvParser : IFileParser
     {
         private readonly ILogger<ImpinjCsvParser> _logger;
-        public UploadFileFormat Format => UploadFileFormat.ImpinjCsv;
+        public FileFormat Format => FileFormat.CSV;
 
         public ImpinjCsvParser(ILogger<ImpinjCsvParser> logger)
         {
@@ -29,24 +25,8 @@ namespace Runnatics.Services
 
             using var reader = new StreamReader(stream);
 
-            var config = new CsvConfiguration(CultureInfo.InvariantCulture)
-            {
-                HasHeaderRecord = mapping?.HasHeaderRow ?? true,
-                MissingFieldFound = null,
-                HeaderValidated = null,
-                BadDataFound = null
-            };
-
-            if (!string.IsNullOrEmpty(mapping?.Delimiter))
-            {
-                config.Delimiter = mapping.Delimiter;
-            }
-
-            using var csv = new CsvReader(reader, config);
-
-            // Read header
-            await csv.ReadAsync();
-            csv.ReadHeader();
+            var hasHeader = mapping?.HasHeaderRow ?? true;
+            var delimiter = mapping?.Delimiter ?? ",";
 
             // Map column names
             var epcCol = mapping?.EpcColumn ?? "epc";
@@ -61,62 +41,105 @@ namespace Runnatics.Services
 
             var timestampFormat = mapping?.TimestampFormat ?? "yyyy-MM-ddTHH:mm:ss.fffZ";
 
-            while (await csv.ReadAsync())
+            Dictionary<string, int>? headerMap = null;
+            int lineNumber = 0;
+
+            while (!reader.EndOfStream)
             {
+                var line = await reader.ReadLineAsync();
+                lineNumber++;
+
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                var fields = line.Split(delimiter[0]);
+
+                // First line is header
+                if (lineNumber == 1 && hasHeader)
+                {
+                    headerMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < fields.Length; i++)
+                    {
+                        headerMap[fields[i].Trim().Trim('"')] = i;
+                    }
+                    continue;
+                }
+
                 try
                 {
-                    var epc = csv.GetField(epcCol);
+                    var epc = GetFieldValue(fields, headerMap, epcCol, 0);
                     if (string.IsNullOrWhiteSpace(epc)) continue;
 
-                    var timestampStr = csv.GetField(timestampCol);
+                    var timestampStr = GetFieldValue(fields, headerMap, timestampCol, 1);
                     if (!DateTime.TryParseExact(timestampStr, timestampFormat,
-                        CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var timestamp))
+                        CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var timestamp))
                     {
-                        // Try parsing with standard formats
                         if (!DateTime.TryParse(timestampStr, CultureInfo.InvariantCulture,
-                            DateTimeStyles.AssumeUniversal, out timestamp))
+                            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out timestamp))
                         {
-                            _logger.LogWarning("Could not parse timestamp: {Timestamp}", timestampStr);
+                            _logger.LogWarning("Could not parse timestamp at line {Line}: {Timestamp}", lineNumber, timestampStr);
                             continue;
                         }
                     }
 
                     var tagRead = new ImpinjTagRead
                     {
-                        Epc = epc,
-                        Timestamp = timestamp.ToUniversalTime()
+                        Epc = epc.Trim().Trim('"'),
+                        Timestamp = timestamp
                     };
 
                     // Parse optional fields
-                    if (int.TryParse(csv.GetField(antennaCol), out var antenna))
+                    var antennaStr = GetFieldValue(fields, headerMap, antennaCol, -1);
+                    if (int.TryParse(antennaStr, out var antenna))
                         tagRead.AntennaPort = antenna;
 
-                    if (double.TryParse(csv.GetField(rssiCol), out var rssi))
+                    var rssiStr = GetFieldValue(fields, headerMap, rssiCol, -1);
+                    if (double.TryParse(rssiStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var rssi))
                         tagRead.RssiDbm = rssi;
 
-                    if (double.TryParse(csv.GetField(phaseCol), out var phase))
+                    var phaseStr = GetFieldValue(fields, headerMap, phaseCol, -1);
+                    if (double.TryParse(phaseStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var phase))
                         tagRead.PhaseAngleDegrees = phase;
 
-                    if (double.TryParse(csv.GetField(dopplerCol), out var doppler))
+                    var dopplerStr = GetFieldValue(fields, headerMap, dopplerCol, -1);
+                    if (double.TryParse(dopplerStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var doppler))
                         tagRead.DopplerFrequencyHz = doppler;
 
-                    if (int.TryParse(csv.GetField(channelCol), out var channel))
+                    var channelStr = GetFieldValue(fields, headerMap, channelCol, -1);
+                    if (int.TryParse(channelStr, out var channel))
                         tagRead.ChannelIndex = channel;
 
-                    tagRead.ReaderSerialNumber = csv.GetField(readerSerialCol);
+                    tagRead.ReaderSerialNumber = GetFieldValue(fields, headerMap, readerSerialCol, -1)?.Trim().Trim('"');
 
-                    if (int.TryParse(csv.GetField(tagCountCol), out var tagCount))
+                    var tagCountStr = GetFieldValue(fields, headerMap, tagCountCol, -1);
+                    if (int.TryParse(tagCountStr, out var tagCount))
                         tagRead.TagSeenCount = tagCount;
 
                     results.Add(tagRead);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Error parsing CSV row");
+                    _logger.LogWarning(ex, "Error parsing line {Line}", lineNumber);
                 }
             }
 
+            _logger.LogInformation("Parsed {Count} records from CSV", results.Count);
             return results;
+        }
+
+        private static string? GetFieldValue(string[] fields, Dictionary<string, int>? headerMap, string columnName, int defaultIndex)
+        {
+            int index = defaultIndex;
+            if (headerMap != null && headerMap.TryGetValue(columnName, out var mappedIndex))
+            {
+                index = mappedIndex;
+            }
+
+            if (index >= 0 && index < fields.Length)
+            {
+                return fields[index];
+            }
+
+            return null;
         }
     }
 }

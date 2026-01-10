@@ -1,42 +1,50 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Services
 {
-    public class FileProcessingService : IFileProcessingService
+    /// <summary>
+    /// Service for processing uploaded files
+    /// </summary>
+    public class FileProcessingService : ServiceBase<IUnitOfWork<RaceSyncDbContext>>, IFileProcessingService
     {
-        private readonly IUnitOfWork<RaceSyncDbContext> _context;
         private readonly ILogger<FileProcessingService> _logger;
         private readonly IFileParserFactory _parserFactory;
+        private readonly IRaceNotificationService? _notificationService;
         private readonly string _uploadPath;
 
         public FileProcessingService(
-            IUnitOfWork<RaceSyncDbContext> context,
+            IUnitOfWork<RaceSyncDbContext> repository,
             ILogger<FileProcessingService> logger,
             IFileParserFactory parserFactory,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IRaceNotificationService? notificationService = null) : base(repository)
         {
-            _context = context;
             _logger = logger;
             _parserFactory = parserFactory;
+            _notificationService = notificationService;
             _uploadPath = configuration["FileUpload:Path"] ?? Path.Combine(Directory.GetCurrentDirectory(), "uploads");
         }
 
         public async Task ProcessBatchAsync(int batchId, CancellationToken cancellationToken = default)
         {
-            var batch = await _context.FileUploadBatches
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+            var recordRepo = _repository.GetRepository<FileUploadRecord>();
+            var readRawRepo = _repository.GetRepository<ReadRaw>();
+            var chipRepo = _repository.GetRepository<Chip>();
+            var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+            var checkpointRepo = _repository.GetRepository<Checkpoint>();
+
+            var batch = await batchRepo.GetQuery(b => b.Id == batchId, includeNavigationProperties: true)
                 .Include(b => b.Race)
-                .FirstOrDefaultAsync(b => b.Id == batchId, cancellationToken);
+                .FirstOrDefaultAsync(cancellationToken);
 
             if (batch == null)
             {
@@ -55,7 +63,8 @@ namespace Runnatics.Services
                 // Update status to processing
                 batch.ProcessingStatus = FileProcessingStatus.Processing;
                 batch.ProcessingStartedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync(cancellationToken);
+                await batchRepo.UpdateAsync(batch);
+                await _repository.SaveChangesAsync();
 
                 // Parse file
                 var tagReads = await ParseFileAsync(batchId);
@@ -64,25 +73,42 @@ namespace Runnatics.Services
                 _logger.LogInformation("Parsed {Count} records from batch {BatchId}", tagReads.Count, batchId);
 
                 // Get mapping for chip lookup
-                var chipLookup = await _context.Chips
-                    .Where(c => c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
-                    .ToDictionaryAsync(c => c.Epc.ToUpperInvariant(), c => c, cancellationToken);
+                var chips = await chipRepo.GetQuery(
+                        c => c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync(cancellationToken);
+                var chipLookup = chips.ToDictionary(c => c.EPC.ToUpperInvariant(), c => c);
 
                 // Get chip assignments for participant lookup
-                var chipAssignments = await _context.ChipAssignments
+                var assignments = await chipAssignmentRepo.GetQuery(
+                        ca => ca.AuditProperties.IsActive && !ca.AuditProperties.IsDeleted,
+                        includeNavigationProperties: true)
                     .Include(ca => ca.Participant)
-                    .Where(ca => ca.RaceId == batch.RaceId &&
-                                ca.AuditProperties.IsActive &&
-                                !ca.AuditProperties.IsDeleted)
-                    .ToDictionaryAsync(ca => ca.ChipId, ca => ca, cancellationToken);
+                    .Include(ca => ca.Event)
+                    .Where(ca => ca.Event.Id == batch.Race!.EventId)
+                    .AsNoTracking()
+                    .ToListAsync(cancellationToken);
+                var chipAssignments = assignments.ToDictionary(ca => ca.ChipId, ca => ca);
 
-                // Get checkpoint and reader info
-                var checkpoint = batch.CheckpointId.HasValue
-                    ? await _context.Checkpoints.FindAsync(batch.CheckpointId.Value)
-                    : null;
+                // Get checkpoint info
+                Checkpoint? checkpoint = null;
+                if (batch.CheckpointId.HasValue)
+                {
+                    checkpoint = await checkpointRepo.GetByIdAsync(batch.CheckpointId.Value);
+                }
+
+                // Get EventId from Race
+                var eventId = batch.Race?.EventId ?? 0;
+                if (eventId == 0)
+                {
+                    throw new InvalidOperationException("Could not determine event for batch");
+                }
 
                 // Process each record
                 int rowNumber = 0;
+                var recordsToAdd = new List<FileUploadRecord>();
+                var readRawsToAdd = new List<ReadRaw>();
+
                 foreach (var tagRead in tagReads)
                 {
                     if (cancellationToken.IsCancellationRequested)
@@ -120,36 +146,36 @@ namespace Runnatics.Services
                     // Validate EPC
                     if (string.IsNullOrWhiteSpace(tagRead.Epc))
                     {
-                        record.ProcessingStatus = ReadRecordStatus.InvalidEpc;
+                        record.ProcessingStatus = ReadRecordStatus.Error;
                         record.ErrorMessage = "Empty EPC";
                         batch.ErrorRecords++;
-                        _context.FileUploadRecords.Add(record);
+                        recordsToAdd.Add(record);
                         continue;
                     }
 
                     // Validate timestamp
                     if (tagRead.Timestamp == default || tagRead.Timestamp < new DateTime(2020, 1, 1))
                     {
-                        record.ProcessingStatus = ReadRecordStatus.InvalidTimestamp;
+                        record.ProcessingStatus = ReadRecordStatus.Error;
                         record.ErrorMessage = "Invalid timestamp";
                         batch.ErrorRecords++;
-                        _context.FileUploadRecords.Add(record);
+                        recordsToAdd.Add(record);
                         continue;
                     }
 
                     // Check if timestamp is within race window
                     if (batch.Race != null)
                     {
-                        var raceStart = batch.Race.StartTime?.AddHours(-1); // 1 hour buffer
-                        var raceEnd = batch.Race.EndTime?.AddHours(2); // 2 hour buffer
+                        var raceStart = batch.Race.StartTime?.AddHours(-1);
+                        var raceEnd = batch.Race.EndTime?.AddHours(2);
 
                         if ((raceStart.HasValue && tagRead.Timestamp < raceStart) ||
                             (raceEnd.HasValue && tagRead.Timestamp > raceEnd))
                         {
-                            record.ProcessingStatus = ReadRecordStatus.OutOfRaceWindow;
+                            record.ProcessingStatus = ReadRecordStatus.Error;
                             record.ErrorMessage = "Timestamp outside race window";
                             batch.ErrorRecords++;
-                            _context.FileUploadRecords.Add(record);
+                            recordsToAdd.Add(record);
                             continue;
                         }
                     }
@@ -171,21 +197,21 @@ namespace Runnatics.Services
                     {
                         record.ProcessingStatus = ReadRecordStatus.UnknownChip;
                         record.ErrorMessage = "Chip not found in system";
-                        // Still add to records, might be useful for debugging
                     }
 
                     // Check for duplicates
-                    var isDuplicate = await _context.ReadRaws
-                        .AnyAsync(r => r.Epc == tagRead.Epc &&
-                                      r.ReadTimestamp == tagRead.Timestamp &&
-                                      r.CheckpointId == batch.CheckpointId, cancellationToken);
+                    var isDuplicate = await readRawRepo.GetQuery(
+                            r => r.Epc == tagRead.Epc &&
+                                 r.ReadTimestamp == tagRead.Timestamp &&
+                                 r.CheckpointId == batch.CheckpointId)
+                        .AnyAsync(cancellationToken);
 
                     if (isDuplicate)
                     {
                         record.ProcessingStatus = ReadRecordStatus.Duplicate;
                         record.ErrorMessage = "Duplicate read already exists";
                         batch.DuplicateRecords++;
-                        _context.FileUploadRecords.Add(record);
+                        recordsToAdd.Add(record);
                         continue;
                     }
 
@@ -194,16 +220,18 @@ namespace Runnatics.Services
                     {
                         var readRaw = new ReadRaw
                         {
+                            EventId = eventId,
+                            ChipEPC = tagRead.Epc,
                             Epc = tagRead.Epc,
-                            ChipId = record.MatchedChipId,
-                            ReaderDeviceId = batch.ReaderDeviceId,
+                            ReaderDeviceId = batch.ReaderDeviceId ?? 0,
                             CheckpointId = batch.CheckpointId,
-                            RaceId = batch.RaceId,
+                            Timestamp = tagRead.Timestamp,
                             ReadTimestamp = tagRead.Timestamp,
-                            AntennaPort = (byte?)tagRead.AntennaPort,
-                            RssiDbm = (decimal?)tagRead.RssiDbm,
+                            AntennaPort = tagRead.AntennaPort,
+                            Rssi = tagRead.RssiDbm.HasValue ? (int)tagRead.RssiDbm.Value : null,
                             Source = "FileUpload",
                             FileUploadBatchId = batchId,
+                            IsProcessed = false,
                             AuditProperties = new AuditProperties
                             {
                                 CreatedDate = DateTime.UtcNow,
@@ -212,32 +240,51 @@ namespace Runnatics.Services
                             }
                         };
 
-                        _context.ReadRaws.Add(readRaw);
-                        await _context.SaveChangesAsync(cancellationToken);
-
-                        record.CreatedReadRawId = readRaw.Id;
+                        readRawsToAdd.Add(readRaw);
                         record.ProcessingStatus = ReadRecordStatus.Processed;
                     }
                     else
                     {
-                        record.ProcessingStatus = ReadRecordStatus.Valid;
+                        record.ProcessingStatus = ReadRecordStatus.Matched;
                     }
 
                     record.ProcessedAt = DateTime.UtcNow;
                     batch.ProcessedRecords++;
-                    _context.FileUploadRecords.Add(record);
+                    recordsToAdd.Add(record);
 
-                    // Save in batches of 100
+                    // Save in batches of 100 and send progress notification
                     if (rowNumber % 100 == 0)
                     {
-                        await _context.SaveChangesAsync(cancellationToken);
+                        if (readRawsToAdd.Count > 0)
+                        {
+                            await readRawRepo.AddRangeAsync(readRawsToAdd);
+                            readRawsToAdd.Clear();
+                        }
+                        await recordRepo.AddRangeAsync(recordsToAdd);
+                        recordsToAdd.Clear();
+                        await batchRepo.UpdateAsync(batch);
+                        await _repository.SaveChangesAsync();
+
                         _logger.LogDebug("Processed {Count}/{Total} records for batch {BatchId}",
                             rowNumber, batch.TotalRecords, batchId);
+
+                        if (_notificationService != null)
+                        {
+                            await _notificationService.NotifyFileProcessingProgressAsync(batch);
+                        }
                     }
                 }
 
-                // Final save
-                await _context.SaveChangesAsync(cancellationToken);
+                // Final save for remaining records
+                if (readRawsToAdd.Count > 0)
+                {
+                    await readRawRepo.AddRangeAsync(readRawsToAdd);
+                }
+                if (recordsToAdd.Count > 0)
+                {
+                    await recordRepo.AddRangeAsync(recordsToAdd);
+                }
+                await _repository.SaveChangesAsync();
 
                 // Update batch status
                 batch.ProcessingStatus = batch.ErrorRecords > 0 && batch.ProcessedRecords > 0
@@ -247,7 +294,13 @@ namespace Runnatics.Services
                         : FileProcessingStatus.Completed;
 
                 batch.ProcessingCompletedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync(cancellationToken);
+                await batchRepo.UpdateAsync(batch);
+                await _repository.SaveChangesAsync();
+
+                if (_notificationService != null)
+                {
+                    await _notificationService.NotifyFileProcessingCompleteAsync(batch);
+                }
 
                 _logger.LogInformation(
                     "Completed processing batch {BatchId}: {Processed} processed, {Matched} matched, {Duplicates} duplicates, {Errors} errors",
@@ -259,15 +312,26 @@ namespace Runnatics.Services
                 batch.ProcessingStatus = FileProcessingStatus.Failed;
                 batch.ErrorMessage = ex.Message;
                 batch.ProcessingCompletedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync(CancellationToken.None);
+                await batchRepo.UpdateAsync(batch);
+                await _repository.SaveChangesAsync();
+
+                if (_notificationService != null)
+                {
+                    await _notificationService.NotifyFileProcessingCompleteAsync(batch);
+                }
+
                 throw;
             }
         }
 
         public async Task<List<ImpinjTagRead>> ParseFileAsync(int batchId)
         {
-            var batch = await _context.FileUploadBatches
-                .FirstOrDefaultAsync(b => b.Id == batchId);
+            var batchRepo = _repository.GetRepository<FileUploadBatch>();
+            var mappingRepo = _repository.GetRepository<FileUploadMapping>();
+
+            var batch = await batchRepo.GetQuery(b => b.Id == batchId)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
 
             if (batch == null)
             {
@@ -281,10 +345,12 @@ namespace Runnatics.Services
             }
 
             // Get mapping configuration
-            var mapping = await _context.FileUploadMappings
-                .FirstOrDefaultAsync(m => m.FileFormat == batch.FileFormat && m.IsDefault);
+            var mapping = await mappingRepo.GetQuery(
+                    m => m.FileFormat == batch.FileFormat && m.IsDefault)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
 
-            var parser = _parserFactory.GetParser(batch.FileFormat);
+            var parser = await _parserFactory.GetParser(batch.FileFormat);
 
             using var stream = File.OpenRead(filePath);
             return await parser.ParseAsync(stream, mapping);

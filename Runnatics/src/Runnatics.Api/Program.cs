@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Runnatics.Api.Hubs;
 using Runnatics.Data.EF;
 using Runnatics.Repositories.EF;
 using Runnatics.Repositories.Interface;
@@ -21,6 +22,13 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
+
+// SignalR
+builder.Services.AddSignalR(options =>
+{
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+    options.MaximumReceiveMessageSize = 102400; // 100KB
+});
 
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
@@ -111,20 +119,47 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
         ClockSkew = TimeSpan.Zero
     };
+
+    // Configure JWT events for SignalR
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+
+            // If the request is for our hub...
+            var path = context.HttpContext.Request.Path;
+            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+            {
+                // Read the token out of the query string
+                context.Token = accessToken;
+            }
+            return Task.CompletedTask;
+        }
+    };
 });
 
 builder.Services.AddAuthorization();
 
-// 🚨 DEV-ONLY: ultra-relaxed CORS to prove it’s not CORS
+// CORS configuration for both API and SignalR
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("DevCors", policy =>
     {
         policy
-            .AllowAnyOrigin()   // no origin restriction at all
+            .AllowAnyOrigin()
             .AllowAnyHeader()
             .AllowAnyMethod();
-        // NO .AllowCredentials() here, because that conflicts with AllowAnyOrigin
+    });
+
+    // SignalR CORS policy (allows credentials)
+    options.AddPolicy("SignalRCors", policy =>
+    {
+        policy
+            .SetIsOriginAllowed(_ => true) // Allow any origin for dev
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
 
@@ -157,6 +192,9 @@ builder.Services.AddScoped<ICheckpointsService, CheckpointService>();
 builder.Services.AddScoped<IDevicesService, DevicesService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<ICertificatesService, CertificatesService>();
+
+// SignalR Notification Service
+builder.Services.AddScoped<IRaceNotificationService, RaceNotificationService>();
 
 // Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);
@@ -209,6 +247,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthChecks("/health");
+app.MapHub<RaceHub>("/hubs/race").RequireCors("SignalRCors");
 
 // (Optional) seeding
 if (app.Environment.IsDevelopment())

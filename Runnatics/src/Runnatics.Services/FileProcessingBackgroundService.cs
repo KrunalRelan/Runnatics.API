@@ -3,13 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
+using Runnatics.Models.Data.Entities;
 using Runnatics.Models.Data.Enumerations;
+using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Services
 {
@@ -54,13 +51,17 @@ namespace Runnatics.Services
         private async Task ProcessPendingBatchesAsync(CancellationToken stoppingToken)
         {
             using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<RaceSyncDbContext>();
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork<RaceSyncDbContext>>();
             var processingService = scope.ServiceProvider.GetRequiredService<IFileProcessingService>();
 
+            var batchRepo = unitOfWork.GetRepository<FileUploadBatch>();
+
             // Get pending batches
-            var pendingBatches = await context.FileUploadBatches
-                .Where(b => b.ProcessingStatus == FileProcessingStatus.Pending &&
-                           !b.AuditProperties.IsDeleted)
+            var pendingBatches = await batchRepo.GetQuery(
+                    b => b.ProcessingStatus == FileProcessingStatus.Pending &&
+                         !b.AuditProperties.IsDeleted,
+                    ignoreQueryFilters: false,
+                    includeNavigationProperties: false)
                 .OrderBy(b => b.AuditProperties.CreatedDate)
                 .Take(5) // Process up to 5 batches at a time
                 .Select(b => b.Id)

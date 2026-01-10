@@ -1,9 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using Runnatics.Models.Client.FileUpload;
+using Runnatics.Models.Data.Entities;
 
 namespace Runnatics.Services.Interface
 {
@@ -17,5 +14,10 @@ namespace Runnatics.Services.Interface
         Task<bool> CancelBatchAsync(int batchId);
         Task<bool> ReprocessBatchAsync(ReprocessBatchRequest request);
         Task<bool> DeleteBatchAsync(int batchId);
+        
+        /// <summary>
+        /// Get batch entity by ID (for notifications)
+        /// </summary>
+        Task<FileUploadBatch?> GetBatchByIdAsync(int batchId);
     }
 }

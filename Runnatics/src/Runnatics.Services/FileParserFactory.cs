@@ -1,10 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Services.Interface;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Runnatics.Services
 {
@@ -17,16 +13,18 @@ namespace Runnatics.Services
             _serviceProvider = serviceProvider;
         }
 
-        public IFileParser GetParser(UploadFileFormat format)
+        public Task<IFileParser> GetParser(FileFormat format)
         {
-            return format switch
+            IFileParser parser = format switch
             {
-                UploadFileFormat.ImpinjCsv => _serviceProvider.GetRequiredService<ImpinjCsvParser>(),
-                UploadFileFormat.ImpinjJson => _serviceProvider.GetRequiredService<ImpinjJsonParser>(),
-                UploadFileFormat.GenericCsv => _serviceProvider.GetRequiredService<GenericCsvParser>(),
-                UploadFileFormat.CustomJson => _serviceProvider.GetRequiredService<GenericJsonParser>(),
+                FileFormat.CSV or FileFormat.ImpinjCsv => _serviceProvider.GetRequiredService<ImpinjCsvParser>(),
+                FileFormat.JSON or FileFormat.ImpinjJson => _serviceProvider.GetRequiredService<ImpinjJsonParser>(),
+                FileFormat.GenericCsv or FileFormat.ChronotrackCsv => _serviceProvider.GetRequiredService<GenericCsvParser>(),
+                FileFormat.CustomJson => _serviceProvider.GetRequiredService<GenericJsonParser>(),
+                FileFormat.XML => throw new NotSupportedException("XML format is not yet supported"),
                 _ => throw new NotSupportedException($"File format {format} is not supported")
             };
+            return Task.FromResult(parser);
         }
     }
 }

@@ -11,6 +11,7 @@ namespace Runnatics.Models.Data.Enumerations
         XML = 3,
         ImpinjCsv = 10,
         ImpinjJson = 11,
+        ImpinjSqlite = 12,
         ChronotrackCsv = 20,
         GenericCsv = 30,
         CustomJson = 31

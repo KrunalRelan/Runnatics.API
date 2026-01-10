@@ -19,6 +19,7 @@ namespace Runnatics.Services
             {
                 FileFormat.CSV or FileFormat.ImpinjCsv => _serviceProvider.GetRequiredService<ImpinjCsvParser>(),
                 FileFormat.JSON or FileFormat.ImpinjJson => _serviceProvider.GetRequiredService<ImpinjJsonParser>(),
+                FileFormat.ImpinjSqlite => _serviceProvider.GetRequiredService<ImpinjSqliteParser>(),
                 FileFormat.GenericCsv or FileFormat.ChronotrackCsv => _serviceProvider.GetRequiredService<GenericCsvParser>(),
                 FileFormat.CustomJson => _serviceProvider.GetRequiredService<GenericJsonParser>(),
                 FileFormat.XML => throw new NotSupportedException("XML format is not yet supported"),

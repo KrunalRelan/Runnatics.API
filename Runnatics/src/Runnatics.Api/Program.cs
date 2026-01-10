@@ -193,6 +193,24 @@ builder.Services.AddScoped<IDevicesService, DevicesService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<ICertificatesService, CertificatesService>();
 
+// File Upload Services
+builder.Services.AddScoped<IFileUploadService, FileUploadService>();
+builder.Services.AddScoped<IFileProcessingService, FileProcessingService>();
+builder.Services.AddScoped<IFileParserFactory, FileParserFactory>();
+builder.Services.AddScoped<IReaderService, ReaderService>();
+
+// File Parsers
+builder.Services.AddScoped<ImpinjCsvParser>();
+builder.Services.AddScoped<ImpinjJsonParser>();
+builder.Services.AddScoped<ImpinjSqliteParser>();
+builder.Services.AddScoped<GenericCsvParser>();
+builder.Services.AddScoped<GenericJsonParser>();
+
+// Background Services
+builder.Services.AddHostedService<FileProcessingBackgroundService>();
+builder.Services.AddHostedService<ReadQueueProcessingService>();
+builder.Services.AddHostedService<ReaderHealthMonitorService>();
+
 // SignalR Notification Service
 builder.Services.AddScoped<IRaceNotificationService, RaceNotificationService>();
 

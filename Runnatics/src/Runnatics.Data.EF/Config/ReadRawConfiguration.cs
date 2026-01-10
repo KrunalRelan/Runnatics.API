@@ -26,8 +26,15 @@ namespace Runnatics.Data.EF.Config
                                 .HasMaxLength(50)
                                 .IsRequired();
 
+                        builder.Property(e => e.Epc)
+                                .HasMaxLength(64);
+
+                        builder.Property(e => e.ReadTimestamp);
+
                         builder.Property(e => e.Timestamp)
                                 .IsRequired();
+
+                        builder.Property(e => e.CheckpointId);
 
                         builder.Property(e => e.IsProcessed)
                                 .HasDefaultValue(false);
@@ -35,6 +42,12 @@ namespace Runnatics.Data.EF.Config
                         builder.Property(e => e.CreatedAt)
                                 .HasDefaultValueSql("GETUTCDATE()")
                                 .IsRequired();
+
+                        // New columns
+                        builder.Property(e => e.FileUploadBatchId);
+
+                        builder.Property(e => e.Source)
+                                .HasMaxLength(50);
 
                         // High-performance indexes for timing data
                         builder.HasIndex(e => new
@@ -55,6 +68,9 @@ namespace Runnatics.Data.EF.Config
                             .HasDatabaseName("IX_ReadRaws_IsProcessed")
                             .HasFilter("[IsProcessed] = 0");
 
+                        builder.HasIndex(e => e.FileUploadBatchId)
+                            .HasDatabaseName("IX_ReadRaws_FileUploadBatch");
+
                         // Relationships
                         builder.HasOne(e => e.Event)
                             .WithMany(ev => ev.ReadRaws)
@@ -66,26 +82,36 @@ namespace Runnatics.Data.EF.Config
                             .HasForeignKey(e => e.ReaderDeviceId)
                             .OnDelete(DeleteBehavior.Restrict);
 
+                        builder.HasOne(e => e.FileUploadBatch)
+                            .WithMany()
+                            .HasForeignKey(e => e.FileUploadBatchId)
+                            .OnDelete(DeleteBehavior.SetNull);
+
                         builder.OwnsOne(o => o.AuditProperties, ap =>
                         {
                                 ap.Property(p => p.CreatedBy)
-                                .IsRequired();
+                                .HasColumnName("CreatedBy");
 
                                 ap.Property(p => p.CreatedDate)
+                .HasColumnName("CreatedAt")
                 .HasDefaultValueSql("GETUTCDATE()")
                 .IsRequired();
 
-                                ap.Property(p => p.UpdatedBy);
+                                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
 
-                                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
 
-                                ap.Property(p => p.IsDeleted)
-                .HasDefaultValue(false)
-                .IsRequired();
+                ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
+                    .HasDefaultValue(false)
+                    .IsRequired();
 
-                                ap.Property(p => p.IsActive)
-                .HasDefaultValue(true)
-                .IsRequired();
+                ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
+                    .HasDefaultValue(true)
+                    .IsRequired();
                         });
                 }
         }

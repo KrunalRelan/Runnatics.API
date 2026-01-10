@@ -36,6 +36,17 @@ namespace Runnatics.Data.EF
         public DbSet<CertificateTemplate> CertificateTemplates { get; set; }
         public DbSet<CertificateField> CertificateFields { get; set; }
 
+        // New RFID Offline Upload System DbSets
+        public DbSet<ReaderProfile> ReaderProfiles { get; set; }
+        public DbSet<ReaderAntenna> ReaderAntennas { get; set; }
+        public DbSet<ReaderConnectionLog> ReaderConnectionLogs { get; set; }
+        public DbSet<ReaderHealthStatus> ReaderHealthStatuses { get; set; }
+        public DbSet<ReaderAlert> ReaderAlerts { get; set; }
+        public DbSet<FileUploadMapping> FileUploadMappings { get; set; }
+        public DbSet<FileUploadBatch> FileUploadBatches { get; set; }
+        public DbSet<FileUploadRecord> FileUploadRecords { get; set; }
+        public DbSet<ReadQueueItem> ReadQueue { get; set; }
+
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
         #endregion
@@ -67,6 +78,17 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new DeviceConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateTemplateConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateFieldConfiguration());
+
+            // New RFID Offline Upload System Configurations
+            modelBuilder.ApplyConfiguration(new ReaderProfileConfiguration());
+            modelBuilder.ApplyConfiguration(new ReaderAntennaConfiguration());
+            modelBuilder.ApplyConfiguration(new ReaderConnectionLogConfiguration());
+            modelBuilder.ApplyConfiguration(new ReaderHealthStatusConfiguration());
+            modelBuilder.ApplyConfiguration(new ReaderAlertConfiguration());
+            modelBuilder.ApplyConfiguration(new FileUploadMappingConfiguration());
+            modelBuilder.ApplyConfiguration(new FileUploadBatchConfiguration());
+            modelBuilder.ApplyConfiguration(new FileUploadRecordConfiguration());
+            modelBuilder.ApplyConfiguration(new ReadQueueItemConfiguration());
             //modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here

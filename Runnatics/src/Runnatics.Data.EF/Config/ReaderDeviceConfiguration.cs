@@ -30,6 +30,9 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.MacAddress)
                 .HasMaxLength(17);
 
+            builder.Property(e => e.Hostname)
+                .HasMaxLength(100);
+
             builder.Property(e => e.FirmwareVersion)
                 .HasMaxLength(50);
 
@@ -49,34 +52,41 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.Notes)
                 .HasColumnType("nvarchar(max)");
 
-            // Configure AuditProperties as owned entity
-            builder.OwnsOne(e => e.AuditProperties, ap =>
-            {
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
-                    .IsRequired();
+            // New columns
+            builder.Property(e => e.ConnectionType);
 
-                ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
+            builder.Property(e => e.LlrpPort);
 
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
+            builder.Property(e => e.RestApiPort);
 
-                ap.Property(p => p.UpdatedBy);
+            builder.Property(e => e.Username)
+                .HasMaxLength(100);
 
-                ap.Property(p => p.UpdatedDate);
+            builder.Property(e => e.PasswordHash)
+                .HasMaxLength(255);
 
-                ap.Property(p => p.IsActive)
-                    .HasDefaultValue(true)
-                    .IsRequired();
-            });
+            builder.Property(e => e.ReaderModel)
+                .HasMaxLength(50);
+
+            builder.Property(e => e.ProfileId);
+
+            builder.Property(e => e.CheckpointId);
 
             // Relationships
             builder.HasOne(e => e.Organization)
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            builder.HasOne(e => e.Profile)
+                .WithMany(p => p.ReaderDevices)
+                .HasForeignKey(e => e.ProfileId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            builder.HasOne(e => e.Checkpoint)
+                .WithMany()
+                .HasForeignKey(e => e.CheckpointId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             // Indexes
             builder.HasIndex(e => e.SerialNumber)
@@ -86,24 +96,30 @@ namespace Runnatics.Data.EF.Config
 
             builder.HasIndex(e => e.TenantId);
 
+            // Audit Properties
             builder.OwnsOne(o => o.AuditProperties, ap =>
             {
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-
-                ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
-
-                ap.Property(p => p.UpdatedBy);
-
-                ap.Property(p => p.UpdatedDate);
-
                 ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
 
+                ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedAt")
+                    .HasDefaultValueSql("GETUTCDATE()")
+                    .IsRequired();
+
+                ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy");
+
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
+
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedAt");
+
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });

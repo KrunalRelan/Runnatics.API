@@ -34,6 +34,10 @@ namespace Runnatics.Data.EF.Config
                         builder.Property(e => e.Timestamp)
                                 .IsRequired();
 
+                        builder.Property(e => e.Rssi);
+
+                        builder.Property(e => e.AntennaPort);
+
                         builder.Property(e => e.CheckpointId);
 
                         builder.Property(e => e.IsProcessed)
@@ -43,11 +47,24 @@ namespace Runnatics.Data.EF.Config
                                 .HasDefaultValueSql("GETUTCDATE()")
                                 .IsRequired();
 
-                        // New columns
+                        // File upload and source tracking
                         builder.Property(e => e.FileUploadBatchId);
 
                         builder.Property(e => e.Source)
-                                .HasMaxLength(50);
+                                .HasMaxLength(50)
+                                .HasDefaultValue("realtime");
+
+                        // RFID signal properties
+                        builder.Property(e => e.PhaseAngleDegrees)
+                                .HasColumnType("decimal(6,2)");
+
+                        builder.Property(e => e.DopplerFrequencyHz)
+                                .HasColumnType("decimal(10,2)");
+
+                        builder.Property(e => e.ChannelIndex);
+
+                        builder.Property(e => e.TagSeenCount)
+                                .HasDefaultValue(1);
 
                         // High-performance indexes for timing data
                         builder.HasIndex(e => new
@@ -71,6 +88,9 @@ namespace Runnatics.Data.EF.Config
                         builder.HasIndex(e => e.FileUploadBatchId)
                             .HasDatabaseName("IX_ReadRaws_FileUploadBatch");
 
+                        builder.HasIndex(e => e.Source)
+                            .HasDatabaseName("IX_ReadRaws_Source");
+
                         // Relationships
                         builder.HasOne(e => e.Event)
                             .WithMany(ev => ev.ReadRaws)
@@ -90,28 +110,28 @@ namespace Runnatics.Data.EF.Config
                         builder.OwnsOne(o => o.AuditProperties, ap =>
                         {
                                 ap.Property(p => p.CreatedBy)
-                                .HasColumnName("CreatedBy");
+                                  .HasColumnName("CreatedBy");
 
                                 ap.Property(p => p.CreatedDate)
-                .HasColumnName("CreatedAt")
-                .HasDefaultValueSql("GETUTCDATE()")
-                .IsRequired();
+                                  .HasColumnName("CreatedAt")
+                                  .HasDefaultValueSql("GETUTCDATE()")
+                                  .IsRequired();
 
                                 ap.Property(p => p.UpdatedBy)
-                    .HasColumnName("UpdatedBy");
+                                  .HasColumnName("UpdatedBy");
 
-                ap.Property(p => p.UpdatedDate)
-                    .HasColumnName("UpdatedAt");
+                                ap.Property(p => p.UpdatedDate)
+                                    .HasColumnName("UpdatedAt");
 
-                ap.Property(p => p.IsDeleted)
-                    .HasColumnName("IsDeleted")
-                    .HasDefaultValue(false)
-                    .IsRequired();
+                                ap.Property(p => p.IsDeleted)
+                                    .HasColumnName("IsDeleted")
+                                    .HasDefaultValue(false)
+                                    .IsRequired();
 
-                ap.Property(p => p.IsActive)
-                    .HasColumnName("IsActive")
-                    .HasDefaultValue(true)
-                    .IsRequired();
+                                ap.Property(p => p.IsActive)
+                                    .HasColumnName("IsActive")
+                                    .HasDefaultValue(true)
+                                    .IsRequired();
                         });
                 }
         }

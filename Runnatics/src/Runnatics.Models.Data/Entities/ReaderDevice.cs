@@ -40,22 +40,51 @@ namespace Runnatics.Models.Data.Entities
         public int AntennaCount { get; set; } = 4;
         public string? Notes { get; set; }
 
-        // New columns from ALTER TABLE
+        // Connection settings
         public ConnectionType? ConnectionType { get; set; }
-        public int? LlrpPort { get; set; }
-        public int? RestApiPort { get; set; }
 
+        /// <summary>
+        /// LLRP port (default 5084)
+        /// </summary>
+        public int? LlrpPort { get; set; } = 5084;
+
+        /// <summary>
+        /// REST API port (default 443)
+        /// </summary>
+        public int? RestApiPort { get; set; } = 443;
+
+        /// <summary>
+        /// Username for reader authentication
+        /// </summary>
         [MaxLength(100)]
         public string? Username { get; set; }
 
+        /// <summary>
+        /// Password hash for reader authentication
+        /// </summary>
         [MaxLength(255)]
         public string? PasswordHash { get; set; }
 
+        /// <summary>
+        /// Reader model type (e.g., "Impinj R700")
+        /// </summary>
         [MaxLength(50)]
         public string? ReaderModel { get; set; }
 
+        /// <summary>
+        /// Reference to reader profile/configuration
+        /// </summary>
         public int? ProfileId { get; set; }
+
+        /// <summary>
+        /// Reference to assigned checkpoint
+        /// </summary>
         public int? CheckpointId { get; set; }
+
+        /// <summary>
+        /// Reference to assigned race
+        /// </summary>
+        public int? RaceId { get; set; }
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 
@@ -63,6 +92,7 @@ namespace Runnatics.Models.Data.Entities
         public virtual Organization Organization { get; set; } = null!;
         public virtual ReaderProfile? Profile { get; set; }
         public virtual Checkpoint? Checkpoint { get; set; }
+        public virtual Race? Race { get; set; }
         public virtual ReaderHealthStatus? HealthStatus { get; set; }
         public virtual ICollection<ReaderAssignment> ReaderAssignments { get; set; } = new List<ReaderAssignment>();
         public virtual ICollection<ReadRaw> ReadRaws { get; set; } = new List<ReadRaw>();

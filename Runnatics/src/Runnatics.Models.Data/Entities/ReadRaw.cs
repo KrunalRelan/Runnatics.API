@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using Runnatics.Models.Data.Common;
 
 namespace Runnatics.Models.Data.Entities
@@ -33,11 +34,36 @@ namespace Runnatics.Models.Data.Entities
         public bool IsProcessed { get; set; } = false;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-        // New columns from ALTER TABLE
+        // File upload support
         public int? FileUploadBatchId { get; set; }
 
+        /// <summary>
+        /// Source of the read: "realtime" or "fileupload"
+        /// </summary>
         [MaxLength(50)]
-        public string? Source { get; set; }
+        public string? Source { get; set; } = "realtime";
+
+        /// <summary>
+        /// Phase angle in degrees (RFID signal characteristic)
+        /// </summary>
+        [Column(TypeName = "decimal(6,2)")]
+        public decimal? PhaseAngleDegrees { get; set; }
+
+        /// <summary>
+        /// Doppler frequency in Hz (indicates tag movement)
+        /// </summary>
+        [Column(TypeName = "decimal(10,2)")]
+        public decimal? DopplerFrequencyHz { get; set; }
+
+        /// <summary>
+        /// Channel index used for the read
+        /// </summary>
+        public int? ChannelIndex { get; set; }
+
+        /// <summary>
+        /// Number of times tag was seen (for aggregated reads)
+        /// </summary>
+        public int TagSeenCount { get; set; } = 1;
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

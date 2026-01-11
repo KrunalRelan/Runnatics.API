@@ -1,5 +1,6 @@
 using AutoMapper;
 using Runnatics.API.Models.Requests;
+using Runnatics.Models.Client.Reader;
 using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Requests.CheckPoints;
 using Runnatics.Models.Client.Requests.Events;
@@ -385,6 +386,131 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.ParentDeviceName, opt => opt.MapFrom(src => src.ParentDevice != null ? src.ParentDevice.Name : string.Empty));
 
             #endregion Checkpoint
+
+            #region RFID Reader mappings
+
+            // TagReadRequest -> ReadRaw
+            CreateMap<TagReadRequest, ReadRaw>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.EventId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.ReaderDeviceId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.CheckpointId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.ChipEPC, opt => opt.MapFrom(src => src.Epc.ToUpperInvariant()))
+                .ForMember(dest => dest.Epc, opt => opt.MapFrom(src => src.Epc.ToUpperInvariant()))
+                .ForMember(dest => dest.ReadTimestamp, opt => opt.MapFrom(src => src.Timestamp))
+                .ForMember(dest => dest.Timestamp, opt => opt.MapFrom(src => src.Timestamp))
+                .ForMember(dest => dest.AntennaPort, opt => opt.MapFrom(src => src.AntennaPort))
+                .ForMember(dest => dest.Rssi, opt => opt.MapFrom(src => src.Rssi.HasValue ? (int)src.Rssi.Value : (int?)null))
+                .ForMember(dest => dest.Source, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.IsProcessed, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.FileUploadBatchId, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+                .ForMember(dest => dest.Event, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderDevice, opt => opt.Ignore())
+                .ForMember(dest => dest.FileUploadBatch, opt => opt.Ignore())
+                .ForMember(dest => dest.ReadNormalized, opt => opt.Ignore())
+                .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(_ => DateTime.UtcNow));
+
+            // TagReadItem -> ReadRaw (for batch processing)
+            CreateMap<TagReadItem, ReadRaw>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.EventId, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderDeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.CheckpointId, opt => opt.Ignore())
+                .ForMember(dest => dest.ChipEPC, opt => opt.MapFrom(src => src.Epc.ToUpperInvariant()))
+                .ForMember(dest => dest.Epc, opt => opt.MapFrom(src => src.Epc.ToUpperInvariant()))
+                .ForMember(dest => dest.ReadTimestamp, opt => opt.MapFrom(src => src.Timestamp))
+                .ForMember(dest => dest.Timestamp, opt => opt.MapFrom(src => src.Timestamp))
+                .ForMember(dest => dest.AntennaPort, opt => opt.MapFrom(src => src.AntennaPort))
+                .ForMember(dest => dest.Rssi, opt => opt.MapFrom(src => src.Rssi.HasValue ? (int)src.Rssi.Value : (int?)null))
+                .ForMember(dest => dest.Source, opt => opt.Ignore())
+                .ForMember(dest => dest.IsProcessed, opt => opt.Ignore())
+                .ForMember(dest => dest.FileUploadBatchId, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+                .ForMember(dest => dest.Event, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderDevice, opt => opt.Ignore())
+                .ForMember(dest => dest.FileUploadBatch, opt => opt.Ignore())
+                .ForMember(dest => dest.ReadNormalized, opt => opt.Ignore())
+                .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(_ => DateTime.UtcNow));
+
+            // ReaderRegistrationRequest -> ReaderDevice
+            CreateMap<ReaderRegistrationRequest, ReaderDevice>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.SerialNumber, opt => opt.MapFrom(src => src.SerialNumber))
+                .ForMember(dest => dest.ReaderModel, opt => opt.MapFrom(src => src.Model ?? "Impinj R700"))
+                .ForMember(dest => dest.Model, opt => opt.MapFrom(src => src.Model))
+                .ForMember(dest => dest.IpAddress, opt => opt.MapFrom(src => src.IpAddress))
+                .ForMember(dest => dest.MacAddress, opt => opt.MapFrom(src => src.MacAddress))
+                .ForMember(dest => dest.Hostname, opt => opt.MapFrom(src => src.Hostname))
+                .ForMember(dest => dest.CheckpointId, opt => opt.MapFrom(src => src.CheckpointId))
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.FirmwareVersion))
+                .ForMember(dest => dest.ConnectionType, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.Status, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+                .ForMember(dest => dest.Organization, opt => opt.Ignore())
+                .ForMember(dest => dest.Profile, opt => opt.Ignore())
+                .ForMember(dest => dest.Checkpoint, opt => opt.Ignore())
+                .ForMember(dest => dest.HealthStatus, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderAssignments, opt => opt.Ignore())
+                .ForMember(dest => dest.ReadRaws, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderAntennas, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderConnectionLogs, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderAlerts, opt => opt.Ignore())
+                .ForMember(dest => dest.LastHeartbeat, opt => opt.Ignore())
+                .ForMember(dest => dest.PowerLevel, opt => opt.Ignore())
+                .ForMember(dest => dest.AntennaCount, opt => opt.MapFrom(_ => 4))
+                .ForMember(dest => dest.Notes, opt => opt.Ignore())
+                .ForMember(dest => dest.LlrpPort, opt => opt.Ignore())
+                .ForMember(dest => dest.RestApiPort, opt => opt.Ignore())
+                .ForMember(dest => dest.Username, opt => opt.Ignore())
+                .ForMember(dest => dest.PasswordHash, opt => opt.Ignore())
+                .ForMember(dest => dest.ProfileId, opt => opt.Ignore());
+
+            // ReaderHeartbeatRequest -> ReaderHealthStatus (partial update)
+            CreateMap<ReaderHeartbeatRequest, ReaderHealthStatus>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderDeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.IsOnline, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.LastHeartbeat, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.CpuTemperatureCelsius, opt => opt.MapFrom(src => src.CpuTemperature))
+                .ForMember(dest => dest.AmbientTemperatureCelsius, opt => opt.MapFrom(src => src.AmbientTemperature))
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.FirmwareVersion))
+                .ForMember(dest => dest.UptimeSeconds, opt => opt.MapFrom(src => src.UptimeSeconds))
+                .ForMember(dest => dest.MemoryUsagePercent, opt => opt.MapFrom(src => src.MemoryUsagePercent))
+                .ForMember(dest => dest.CpuUsagePercent, opt => opt.MapFrom(src => src.CpuUsagePercent))
+                .ForMember(dest => dest.ReaderMode, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.TotalReadsToday, opt => opt.Ignore())
+                .ForMember(dest => dest.LastReadTimestamp, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderDevice, opt => opt.Ignore());
+
+            // ReaderDevice -> ReaderStatusDto
+            CreateMap<ReaderDevice, ReaderStatusDto>()
+                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.SerialNumber))
+                .ForMember(dest => dest.SerialNumber, opt => opt.MapFrom(src => src.SerialNumber))
+                .ForMember(dest => dest.IpAddress, opt => opt.MapFrom(src => src.IpAddress))
+                .ForMember(dest => dest.IsOnline, opt => opt.MapFrom(src => src.HealthStatus != null && src.HealthStatus.IsOnline))
+                .ForMember(dest => dest.LastHeartbeat, opt => opt.MapFrom(src => src.HealthStatus != null ? src.HealthStatus.LastHeartbeat : null))
+                .ForMember(dest => dest.CpuTemperatureCelsius, opt => opt.MapFrom(src => src.HealthStatus != null ? src.HealthStatus.CpuTemperatureCelsius : null))
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.HealthStatus != null ? src.HealthStatus.FirmwareVersion : src.FirmwareVersion))
+                .ForMember(dest => dest.TotalReadsToday, opt => opt.MapFrom(src => src.HealthStatus != null ? src.HealthStatus.TotalReadsToday : 0))
+                .ForMember(dest => dest.LastReadTimestamp, opt => opt.MapFrom(src => src.HealthStatus != null ? src.HealthStatus.LastReadTimestamp : null))
+                .ForMember(dest => dest.CheckpointName, opt => opt.MapFrom(src => src.Checkpoint != null ? src.Checkpoint.Name : null))
+                .ForMember(dest => dest.Antennas, opt => opt.MapFrom(src => src.ReaderAntennas))
+                .ForMember(dest => dest.UnacknowledgedAlerts, opt => opt.MapFrom(src => src.ReaderAlerts != null ? src.ReaderAlerts.Count(a => !a.IsAcknowledged) : 0));
+
+            // ReaderAntenna -> AntennaStatusDto
+            CreateMap<ReaderAntenna, AntennaStatusDto>()
+                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.Port, opt => opt.MapFrom(src => src.AntennaPort))
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.AntennaName))
+                .ForMember(dest => dest.IsEnabled, opt => opt.MapFrom(src => src.IsEnabled))
+                .ForMember(dest => dest.TxPowerCdBm, opt => opt.MapFrom(src => src.TxPowerCdBm))
+                .ForMember(dest => dest.Position, opt => opt.MapFrom(src => src.Position.HasValue ? src.Position.Value.ToString() : null));
+
+            #endregion RFID Reader mappings
         }
     }
 }

@@ -52,12 +52,14 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.Notes)
                 .HasColumnType("nvarchar(max)");
 
-            // New columns
+            // Connection settings
             builder.Property(e => e.ConnectionType);
 
-            builder.Property(e => e.LlrpPort);
+            builder.Property(e => e.LlrpPort)
+                .HasDefaultValue(5084);
 
-            builder.Property(e => e.RestApiPort);
+            builder.Property(e => e.RestApiPort)
+                .HasDefaultValue(443);
 
             builder.Property(e => e.Username)
                 .HasMaxLength(100);
@@ -71,6 +73,8 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.ProfileId);
 
             builder.Property(e => e.CheckpointId);
+
+            builder.Property(e => e.RaceId);
 
             // Relationships
             builder.HasOne(e => e.Organization)
@@ -88,13 +92,30 @@ namespace Runnatics.Data.EF.Config
                 .HasForeignKey(e => e.CheckpointId)
                 .OnDelete(DeleteBehavior.SetNull);
 
+            builder.HasOne(e => e.Race)
+                .WithMany()
+                .HasForeignKey(e => e.RaceId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             // Indexes
             builder.HasIndex(e => e.SerialNumber)
-                .IsUnique();
+                .IsUnique()
+                .HasDatabaseName("IX_ReaderDevices_SerialNumber");
 
-            builder.HasIndex(e => e.MacAddress);
+            builder.HasIndex(e => e.MacAddress)
+                .HasDatabaseName("IX_ReaderDevices_MacAddress");
 
-            builder.HasIndex(e => e.TenantId);
+            builder.HasIndex(e => e.TenantId)
+                .HasDatabaseName("IX_ReaderDevices_TenantId");
+
+            builder.HasIndex(e => e.CheckpointId)
+                .HasDatabaseName("IX_ReaderDevices_CheckpointId");
+
+            builder.HasIndex(e => e.RaceId)
+                .HasDatabaseName("IX_ReaderDevices_RaceId");
+
+            builder.HasIndex(e => e.Status)
+                .HasDatabaseName("IX_ReaderDevices_Status");
 
             // Audit Properties
             builder.OwnsOne(o => o.AuditProperties, ap =>

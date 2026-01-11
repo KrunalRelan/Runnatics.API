@@ -12,18 +12,10 @@ namespace Runnatics.Api.Controller
     [ApiController]
     [Route("api/[controller]")]
     [Authorize]
-    public class ReaderController : ControllerBase
+    public class ReaderController(
+        IReaderService readerService,
+        ILogger<ReaderController> logger) : ControllerBase
     {
-        private readonly IReaderService _readerService;
-        private readonly ILogger<ReaderController> _logger;
-
-        public ReaderController(
-            IReaderService readerService,
-            ILogger<ReaderController> logger)
-        {
-            _readerService = readerService;
-            _logger = logger;
-        }
 
         /// <summary>
         /// Get all readers with status
@@ -33,7 +25,7 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(typeof(List<ReaderStatusDto>), StatusCodes.Status200OK)]
         public async Task<ActionResult<List<ReaderStatusDto>>> GetReaders()
         {
-            var readers = await _readerService.GetAllReadersAsync();
+            var readers = await readerService.GetAllReadersAsync();
             return Ok(readers);
         }
 
@@ -47,7 +39,7 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<ActionResult<ReaderStatusDto>> GetReader(int id)
         {
-            var reader = await _readerService.GetReaderByIdAsync(id);
+            var reader = await readerService.GetReaderByIdAsync(id);
             if (reader == null)
             {
                 return NotFound(new { error = "Reader not found" });
@@ -67,7 +59,7 @@ namespace Runnatics.Api.Controller
             [FromQuery] bool unacknowledgedOnly = true,
             [FromQuery] int? readerId = null)
         {
-            var alerts = await _readerService.GetAlertsAsync(unacknowledgedOnly, readerId);
+            var alerts = await readerService.GetAlertsAsync(unacknowledgedOnly, readerId);
             return Ok(alerts);
         }
 
@@ -83,7 +75,7 @@ namespace Runnatics.Api.Controller
         public async Task<ActionResult> AcknowledgeAlert(long alertId, [FromBody] string? resolutionNotes = null)
         {
             var userId = GetCurrentUserId();
-            var success = await _readerService.AcknowledgeAlertAsync(alertId, userId, resolutionNotes);
+            var success = await readerService.AcknowledgeAlertAsync(alertId, userId, resolutionNotes);
 
             if (!success)
             {
@@ -101,7 +93,7 @@ namespace Runnatics.Api.Controller
         [ProducesResponseType(typeof(RfidDashboardDto), StatusCodes.Status200OK)]
         public async Task<ActionResult<RfidDashboardDto>> GetDashboard()
         {
-            var dashboard = await _readerService.GetDashboardAsync();
+            var dashboard = await readerService.GetDashboardAsync();
             return Ok(dashboard);
         }
 

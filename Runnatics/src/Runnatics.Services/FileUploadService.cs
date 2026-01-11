@@ -294,9 +294,17 @@ namespace Runnatics.Services
             }
             else if (request.ReprocessErrors)
             {
-                // Reset only error records
+                // Reset error records - includes InvalidEpc, InvalidTimestamp, OutOfRaceWindow, UnknownChip
+                var errorStatuses = new[] 
+                { 
+                    ReadRecordStatus.InvalidEpc, 
+                    ReadRecordStatus.InvalidTimestamp, 
+                    ReadRecordStatus.OutOfRaceWindow,
+                    ReadRecordStatus.UnknownChip 
+                };
+                
                 var errorRecords = await recordRepo.GetQuery(
-                        r => r.FileUploadBatchId == request.BatchId && r.ProcessingStatus == ReadRecordStatus.Error)
+                        r => r.FileUploadBatchId == request.BatchId && errorStatuses.Contains(r.ProcessingStatus))
                     .ToListAsync();
 
                 foreach (var record in errorRecords)

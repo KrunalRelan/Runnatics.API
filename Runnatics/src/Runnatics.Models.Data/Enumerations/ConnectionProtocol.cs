@@ -1,12 +1,13 @@
 namespace Runnatics.Models.Data.Enumerations
 {
     /// <summary>
-    /// Reader connection protocols
+    /// Reader connection protocol
     /// </summary>
     public enum ConnectionProtocol
     {
-        LLRP = 0,
-        REST = 1,
-        WebSocket = 2
+        LLRP = 1,
+        REST = 2,
+        MQTT = 3,
+        FileUpload = 4
     }
 }

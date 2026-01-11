@@ -140,7 +140,7 @@ namespace Runnatics.Services
 
                     if (eventId == 0)
                     {
-                        queueItem.ProcessingStatus = ReadRecordStatus.Error;
+                        queueItem.ProcessingStatus = ReadRecordStatus.InvalidEpc;
                         queueItem.ErrorMessage = "Could not determine event for race";
                         queueItem.ProcessedAt = DateTime.UtcNow;
                         processedCount++;

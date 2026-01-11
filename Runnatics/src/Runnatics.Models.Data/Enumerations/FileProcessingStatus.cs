@@ -1,15 +1,16 @@
 namespace Runnatics.Models.Data.Enumerations
 {
     /// <summary>
-    /// File processing status
+    /// Status of file upload processing
     /// </summary>
     public enum FileProcessingStatus
     {
         Pending = 0,
-        Processing = 1,
-        Completed = 2,
-        Failed = 3,
+        Validating = 1,
+        Processing = 2,
+        Completed = 3,
         PartiallyCompleted = 4,
-        Cancelled = 5
+        Failed = 5,
+        Cancelled = 6
     }
 }

@@ -1,17 +1,16 @@
 namespace Runnatics.Models.Data.Enumerations
 {
     /// <summary>
-    /// Reader alert types
+    /// Reader alert type
     /// </summary>
     public enum ReaderAlertType
     {
-        Offline = 0,
-        HighTemperature = 1,
-        LowSignal = 2,
-        AntennaError = 3,
-        FirmwareOutdated = 4,
-        HighCpuUsage = 5,
-        HighMemoryUsage = 6,
-        ConnectionError = 7
+        Offline = 1,
+        HighTemperature = 2,
+        LowReadRate = 3,
+        AntennaDisconnected = 4,
+        NetworkIssue = 5,
+        MemoryFull = 6,
+        FirmwareUpdateAvailable = 7
     }
 }

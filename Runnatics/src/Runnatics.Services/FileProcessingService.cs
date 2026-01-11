@@ -146,7 +146,7 @@ namespace Runnatics.Services
                     // Validate EPC
                     if (string.IsNullOrWhiteSpace(tagRead.Epc))
                     {
-                        record.ProcessingStatus = ReadRecordStatus.Error;
+                        record.ProcessingStatus = ReadRecordStatus.InvalidEpc;
                         record.ErrorMessage = "Empty EPC";
                         batch.ErrorRecords++;
                         recordsToAdd.Add(record);
@@ -156,7 +156,7 @@ namespace Runnatics.Services
                     // Validate timestamp
                     if (tagRead.Timestamp == default || tagRead.Timestamp < new DateTime(2020, 1, 1))
                     {
-                        record.ProcessingStatus = ReadRecordStatus.Error;
+                        record.ProcessingStatus = ReadRecordStatus.InvalidTimestamp;
                         record.ErrorMessage = "Invalid timestamp";
                         batch.ErrorRecords++;
                         recordsToAdd.Add(record);
@@ -172,7 +172,7 @@ namespace Runnatics.Services
                         if ((raceStart.HasValue && tagRead.Timestamp < raceStart) ||
                             (raceEnd.HasValue && tagRead.Timestamp > raceEnd))
                         {
-                            record.ProcessingStatus = ReadRecordStatus.Error;
+                            record.ProcessingStatus = ReadRecordStatus.OutOfRaceWindow;
                             record.ErrorMessage = "Timestamp outside race window";
                             batch.ErrorRecords++;
                             recordsToAdd.Add(record);
@@ -245,7 +245,7 @@ namespace Runnatics.Services
                     }
                     else
                     {
-                        record.ProcessingStatus = ReadRecordStatus.Matched;
+                        record.ProcessingStatus = ReadRecordStatus.Valid;
                     }
 
                     record.ProcessedAt = DateTime.UtcNow;

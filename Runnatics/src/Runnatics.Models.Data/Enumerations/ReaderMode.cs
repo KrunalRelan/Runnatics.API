@@ -1,13 +1,14 @@
 namespace Runnatics.Models.Data.Enumerations
 {
     /// <summary>
-    /// Reader operating modes
+    /// Reader operational mode
     /// </summary>
     public enum ReaderMode
     {
-        AutoSetDenseReader = 0,
-        MaxThroughput = 1,
-        DenseReaderM4 = 2,
-        Offline = 3
+        Active = 1,
+        Standby = 2,
+        Idle = 3,
+        Maintenance = 4,
+        Offline = 5
     }
 }

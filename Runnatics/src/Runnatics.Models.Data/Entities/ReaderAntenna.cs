@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Runnatics.Models.Data.Common;
+using Runnatics.Models.Data.Enumerations;
 
 namespace Runnatics.Models.Data.Entities
 {
@@ -27,7 +28,7 @@ namespace Runnatics.Models.Data.Entities
 
         public int? CheckpointId { get; set; }
 
-        public int? Position { get; set; }
+        public AntennaPosition? Position { get; set; }
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

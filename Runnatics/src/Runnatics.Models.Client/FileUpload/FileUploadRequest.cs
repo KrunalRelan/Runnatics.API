@@ -8,24 +8,24 @@ namespace Runnatics.Models.Client.FileUpload
     public class FileUploadRequest
     {
         /// <summary>
-        /// The race to associate the upload with
+        /// The race to associate the upload with (encrypted)
         /// </summary>
-        public int RaceId { get; set; }
+        public string RaceId { get; set; } = string.Empty;
 
         /// <summary>
-        /// Optional event ID
+        /// Optional event ID (encrypted)
         /// </summary>
-        public int? EventId { get; set; }
+        public string? EventId { get; set; }
 
         /// <summary>
-        /// Optional checkpoint to associate reads with
+        /// Optional checkpoint to associate reads with (encrypted)
         /// </summary>
-        public int? CheckpointId { get; set; }
+        public string? CheckpointId { get; set; }
 
         /// <summary>
-        /// Optional reader device to associate reads with
+        /// Optional reader device to associate reads with (encrypted)
         /// </summary>
-        public int? ReaderDeviceId { get; set; }
+        public string? ReaderDeviceId { get; set; }
 
         /// <summary>
         /// Description of the upload
@@ -38,8 +38,8 @@ namespace Runnatics.Models.Client.FileUpload
         public FileFormat? FileFormat { get; set; }
 
         /// <summary>
-        /// Optional field mapping ID
+        /// Optional field mapping ID (encrypted)
         /// </summary>
-        public int? MappingId { get; set; }
+        public string? MappingId { get; set; }
     }
 }

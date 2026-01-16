@@ -1,7 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Runnatics.Models.Client.FileUpload;
 using Runnatics.Models.Data.Enumerations;
+using Runnatics.Services;
 using Runnatics.Services.Interface;
 using System.Security.Claims;
 
@@ -35,46 +37,24 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Upload RFID read file(s) for offline data import
         /// </summary>
-        /// <param name="file">The file to upload</param>
-        /// <param name="raceId">Race ID to associate the upload with</param>
-        /// <param name="eventId">Optional event ID</param>
-        /// <param name="readerDeviceId">Optional reader device ID</param>
-        /// <param name="checkpointId">Optional checkpoint ID</param>
-        /// <param name="description">Optional description</param>
-        /// <param name="fileFormat">Optional file format override</param>
-        /// <param name="mappingId">Optional mapping ID</param>
+        /// <param name="request">The file upload form request containing file and metadata</param>
         /// <returns>File upload response</returns>
         [HttpPost("upload")]
         [RequestSizeLimit(100_000_000)] // 100MB limit
         [ProducesResponseType(typeof(FileUploadResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<ActionResult<FileUploadResponse>> UploadFile(
-            [FromForm] IFormFile file,
-            [FromForm] int raceId,
-            [FromForm] int? eventId = null,
-            [FromForm] int? readerDeviceId = null,
-            [FromForm] int? checkpointId = null,
-            [FromForm] string? description = null,
-            [FromForm] FileFormat? fileFormat = null,
-            [FromForm] int? mappingId = null)
+        public async Task<ActionResult<FileUploadResponse>> UploadFile([FromForm] FileUploadFormRequest request)
         {
             try
             {
-                var userId = GetCurrentUserId();
-
-                var request = new FileUploadRequest
+                if (request.File == null || request.File.Length == 0)
                 {
-                    RaceId = raceId,
-                    EventId = eventId,
-                    ReaderDeviceId = readerDeviceId,
-                    CheckpointId = checkpointId,
-                    Description = description,
-                    FileFormat = fileFormat,
-                    MappingId = mappingId
-                };
+                    return BadRequest(new { error = "No file uploaded" });
+                }
 
-                var result = await _uploadService.UploadFileAsync(file, request, userId);
+                var userId = GetCurrentUserId();
+                var result = await _uploadService.UploadFileAsync(request, userId);
 
                 // Get the batch for notification
                 var batch = await _uploadService.GetBatchByIdAsync(result.BatchId);
@@ -100,41 +80,37 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Upload multiple files at once
         /// </summary>
-        /// <param name="files">List of files to upload</param>
-        /// <param name="raceId">Race ID to associate uploads with</param>
-        /// <param name="eventId">Optional event ID</param>
-        /// <param name="readerDeviceId">Optional reader device ID</param>
-        /// <param name="checkpointId">Optional checkpoint ID</param>
-        /// <param name="description">Optional description</param>
+        /// <param name="request">The multi-file upload form request containing files and metadata</param>
         /// <returns>List of file upload responses</returns>
         [HttpPost("upload-multiple")]
         [RequestSizeLimit(500_000_000)] // 500MB limit for multiple files
         [ProducesResponseType(typeof(List<FileUploadResponse>), StatusCodes.Status200OK)]
         public async Task<ActionResult<List<FileUploadResponse>>> UploadMultipleFiles(
-            [FromForm] List<IFormFile> files,
-            [FromForm] int raceId,
-            [FromForm] int? eventId = null,
-            [FromForm] int? readerDeviceId = null,
-            [FromForm] int? checkpointId = null,
-            [FromForm] string? description = null)
+            [FromForm] MultiFileUploadFormRequest request)
         {
             var results = new List<FileUploadResponse>();
             var userId = GetCurrentUserId();
 
-            foreach (var file in files)
+            if (request.Files == null || request.Files.Count == 0)
+            {
+                return BadRequest(new { error = "No files uploaded" });
+            }
+
+            foreach (var file in request.Files)
             {
                 try
                 {
-                    var request = new FileUploadRequest
+                    var fileRequest = new FileUploadFormRequest
                     {
-                        RaceId = raceId,
-                        EventId = eventId,
-                        ReaderDeviceId = readerDeviceId,
-                        CheckpointId = checkpointId,
-                        Description = description
+                        File = file,
+                        RaceId = request.RaceId,
+                        EventId = request.EventId,
+                        ReaderDeviceId = request.ReaderDeviceId,
+                        CheckpointId = request.CheckpointId,
+                        Description = request.Description
                     };
 
-                    var result = await _uploadService.UploadFileAsync(file, request, userId);
+                    var result = await _uploadService.UploadFileAsync(fileRequest, userId);
                     results.Add(result);
 
                     // Notify for each upload
@@ -201,14 +177,14 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Get batches for a race
         /// </summary>
-        /// <param name="raceId">Race ID</param>
+        /// <param name="raceId">Race ID (encrypted)</param>
         /// <param name="pageNumber">Page number (default 1)</param>
         /// <param name="pageSize">Page size (default 20)</param>
         /// <returns>Paginated batch list</returns>
         [HttpGet("race/{raceId}/batches")]
         [ProducesResponseType(typeof(FileUploadBatchListDto), StatusCodes.Status200OK)]
         public async Task<ActionResult<FileUploadBatchListDto>> GetRaceBatches(
-            int raceId,
+            string raceId,
             [FromQuery] int pageNumber = 1,
             [FromQuery] int pageSize = 20)
         {

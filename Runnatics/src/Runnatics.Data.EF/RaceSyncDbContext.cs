@@ -36,6 +36,11 @@ namespace Runnatics.Data.EF
         public DbSet<CertificateTemplate> CertificateTemplates { get; set; }
         public DbSet<CertificateField> CertificateFields { get; set; }
 
+        // RFID Entities
+        public DbSet<UploadBatch> UploadBatches { get; set; }
+        public DbSet<RawRFIDReading> RawRFIDReadings { get; set; }
+        public DbSet<ReadingCheckpointAssignment> ReadingCheckpointAssignments { get; set; }
+
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
         #endregion
@@ -67,6 +72,12 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new DeviceConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateTemplateConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateFieldConfiguration());
+            
+            // RFID Configurations
+            modelBuilder.ApplyConfiguration(new UploadBatchConfiguration());
+            modelBuilder.ApplyConfiguration(new RawRFIDReadingConfiguration());
+            modelBuilder.ApplyConfiguration(new ReadingCheckpointAssignmentConfiguration());
+            
             //modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here

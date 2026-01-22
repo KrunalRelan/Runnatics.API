@@ -157,6 +157,7 @@ builder.Services.AddScoped<ICheckpointsService, CheckpointService>();
 builder.Services.AddScoped<IDevicesService, DevicesService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<ICertificatesService, CertificatesService>();
+builder.Services.AddScoped<IRFIDImportService, RFIDImportService>();
 
 // Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);

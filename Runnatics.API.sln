@@ -38,11 +38,18 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Models.Client", "
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Docs", "Docs", "{5A74516F-2894-430D-99C4-070981F7BDB3}"
 	ProjectSection(SolutionItems) = preProject
+		..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\1. 2026-01-25_0016251292ae_(box15).db = ..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\1. 2026-01-25_0016251292ae_(box15).db
+		..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\1.1 2026-01-25_0016251292a1_(Box-16).db = ..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\1.1 2026-01-25_0016251292a1_(Box-16).db
+		..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\10km participants data.csv = ..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\10km participants data.csv
+		..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\2. 2026-01-25_00162512dbb0_(Box-19).db = ..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\2. 2026-01-25_00162512dbb0_(Box-19).db
+		..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\2.1 2026-01-25_001625135f24_(box_24).db = ..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\bhopal marathon\2.1 2026-01-25_001625135f24_(box_24).db
+		..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\BHOPAL EPC DATA.xlsx = ..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\BHOPAL EPC DATA.xlsx
 		..\..\Users\MANPREET\Downloads\files\ParticipantService.cs = ..\..\Users\MANPREET\Downloads\files\ParticipantService.cs
 		..\..\Users\MANPREET\Downloads\files\QUICK_REFERENCE.md = ..\..\Users\MANPREET\Downloads\files\QUICK_REFERENCE.md
 		..\..\Users\MANPREET\Downloads\files\RfidController.cs = ..\..\Users\MANPREET\Downloads\files\RfidController.cs
 		..\..\Users\MANPREET\Downloads\files\RfidServices.cs = ..\..\Users\MANPREET\Downloads\files\RfidServices.cs
 		..\..\Users\MANPREET\Downloads\files\SERVICES_SETUP_GUIDE.md = ..\..\Users\MANPREET\Downloads\files\SERVICES_SETUP_GUIDE.md
+		..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\WhatsApp Image 2026-01-25 at 2.52.21 PM.jpeg = ..\..\Users\MANPREET\OneDrive\Runnatics\Events Sample Data\WhatsApp Image 2026-01-25 at 2.52.21 PM.jpeg
 	EndProjectSection
 EndProject
 Global

@@ -10,6 +10,8 @@ using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
 using System.Data.SQLite;
 using System.Security.Cryptography;
+using System.IO;
+using System.Text;
 
 namespace Runnatics.Services
 {
@@ -32,6 +34,256 @@ namespace Runnatics.Services
             _logger = logger;
             _userContext = userContext;
             _encryptionService = encryptionService;
+        }
+
+        public async Task<EPCMappingImportResponse> UploadEPCMappingAsync(string eventId, string raceId, EPCMappingImportRequest request)
+        {
+            var userId = _userContext.UserId;
+            var tenantId = _userContext.TenantId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+            var response = new EPCMappingImportResponse
+            {
+                FileName = request.File.FileName,
+                ProcessedAt = DateTime.UtcNow,
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Starting EPC-BIB mapping upload for Event {EventId}, Race {RaceId}", decryptedEventId, decryptedRaceId);
+
+                // Validate file
+                if (request.File == null || request.File.Length == 0)
+                {
+                    ErrorMessage = "File is empty or not provided";
+                    _logger.LogWarning("Upload failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Validate Excel file
+                var isExcel = request.File.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ||
+                             request.File.FileName.EndsWith(".xls", StringComparison.OrdinalIgnoreCase);
+
+                if (!isExcel)
+                {
+                    ErrorMessage = "Only Excel files (.xlsx, .xls) are supported";
+                    _logger.LogWarning("Upload failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Validate event exists
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventExists = await eventRepo.GetQuery(e =>
+                    e.Id == decryptedEventId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .AnyAsync();
+
+                if (!eventExists)
+                {
+                    ErrorMessage = "Event not found or you don't have access";
+                    _logger.LogWarning("Upload failed: Event {EventId} not found", decryptedEventId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Parse CSV/Excel file manually
+                var records = new List<(string Epc, string Bib)>();
+                
+                using var stream = new MemoryStream();
+                await request.File.CopyToAsync(stream);
+                stream.Position = 0;
+                
+                using var reader = new StreamReader(stream);
+                var headerLine = await reader.ReadLineAsync();
+                if (string.IsNullOrEmpty(headerLine))
+                {
+                    ErrorMessage = "File is empty or has no headers";
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Find EPC and BIB columns
+                var headers = headerLine.Split(',', '\t');
+                int? epcColumn = null;
+                int? bibColumn = null;
+                
+                for (int i = 0; i < headers.Length; i++)
+                {
+                    var header = headers[i].Trim().ToLower();
+                    if (header.Contains("epc") || header.Contains("tag") || header.Contains("rfid"))
+                        epcColumn = i;
+                    else if (header.Contains("bib") || header.Contains("number"))
+                        bibColumn = i;
+                }
+
+                if (!epcColumn.HasValue || !bibColumn.HasValue)
+                {
+                    ErrorMessage = "Could not find EPC and BIB columns in file. Headers should contain 'EPC' and 'BIB'";
+                    _logger.LogWarning("Upload failed: Missing EPC or BIB column");
+                    response.Status = "Failed";
+                    return response;
+                }
+                
+                // Parse data rows
+                while (!reader.EndOfStream)
+                {
+                    var line = await reader.ReadLineAsync();
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    
+                    var values = line.Split(',', '\t');
+                    if (values.Length > Math.Max(epcColumn.Value, bibColumn.Value))
+                    {
+                        var epc = values[epcColumn.Value].Trim().Trim('"');
+                        var bib = values[bibColumn.Value].Trim().Trim('"');
+                        if (!string.IsNullOrEmpty(epc) && !string.IsNullOrEmpty(bib))
+                        {
+                            records.Add((epc, bib));
+                        }
+                    }
+                }
+
+                // Get participants by BIB number
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var participants = await participantRepo.GetQuery(p =>
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                var participantsByBib = participants.ToDictionary(p => p.BibNumber ?? string.Empty, p => p);
+
+                // Get or create chips
+                var chipRepo = _repository.GetRepository<Chip>();
+                var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+
+                var totalRecords = 0;
+                var successCount = 0;
+                var errorCount = 0;
+                var notFoundBibs = new List<string>();
+                var errors = new List<string>();
+
+                await _repository.BeginTransactionAsync();
+
+                try
+                {
+                    var rowNumber = 2; // Start from 2 (after header)
+                    foreach (var (epc, bib) in records)
+                    {
+                        totalRecords++;
+
+                        // Find participant by BIB
+                        if (!participantsByBib.TryGetValue(bib, out var participant))
+                        {
+                            if (!notFoundBibs.Contains(bib))
+                            {
+                                notFoundBibs.Add(bib);
+                            }
+                            errors.Add($"Row {rowNumber}: Participant not found with BIB {bib}");
+                            errorCount++;
+                            rowNumber++;
+                            continue;
+                        }
+
+                        // Get or create chip
+                        var chip = await chipRepo.GetQuery(c =>
+                            c.EPC == epc &&
+                            c.TenantId == tenantId)
+                            .FirstOrDefaultAsync();
+
+                        if (chip == null)
+                        {
+                            chip = new Chip
+                            {
+                                TenantId = tenantId,
+                                EPC = epc,
+                                Status = "Assigned",
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            };
+                            await chipRepo.AddAsync(chip);
+                            await _repository.SaveChangesAsync(); // Save to get chip ID
+                        }
+                        else if (chip.Status == "Available")
+                        {
+                            chip.Status = "Assigned";
+                            await chipRepo.UpdateAsync(chip);
+                        }
+
+                        // Check if assignment already exists
+                        var existingAssignment = await chipAssignmentRepo.GetQuery(ca =>
+                            ca.EventId == decryptedEventId &&
+                            ca.ParticipantId == participant.Id &&
+                            ca.ChipId == chip.Id &&
+                            !ca.UnassignedAt.HasValue)
+                            .FirstOrDefaultAsync();
+
+                        if (existingAssignment == null)
+                        {
+                            // Create chip assignment
+                            var assignment = new ChipAssignment
+                            {
+                                EventId = decryptedEventId,
+                                ParticipantId = participant.Id,
+                                ChipId = chip.Id,
+                                AssignedAt = DateTime.UtcNow,
+                                AssignedByUserId = userId,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            };
+                            await chipAssignmentRepo.AddAsync(assignment);
+                        }
+
+                        successCount++;
+                        rowNumber++;
+                    }
+
+                    await _repository.SaveChangesAsync();
+                    await _repository.CommitTransactionAsync();
+
+                    _logger.LogInformation(
+                        "EPC mapping upload completed. Success: {Success}, Errors: {Errors}, Not Found: {NotFound}",
+                        successCount, errorCount, notFoundBibs.Count);
+                }
+                catch (Exception ex)
+                {
+                    await _repository.RollbackTransactionAsync();
+                    throw;
+                }
+
+                response.TotalRecords = totalRecords;
+                response.SuccessCount = successCount;
+                response.ErrorCount = errorCount;
+                response.NotFoundBibCount = notFoundBibs.Count;
+                response.NotFoundBibs = notFoundBibs;
+                response.Errors = errors.Take(100).ToList(); // Limit errors to first 100
+                response.Status = errorCount > 0 ? "CompletedWithErrors" : "Completed";
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error uploading EPC mapping: {ex.Message}";
+                _logger.LogError(ex, "Error uploading EPC mapping file");
+                response.Status = "Failed";
+                return response;
+            }
         }
 
         public async Task<RFIDImportResponse> UploadRFIDFileAsync(string eventId, string raceId, RFIDImportRequest request)
@@ -468,6 +720,170 @@ namespace Runnatics.Services
             using var stream = File.OpenRead(filePath);
             var hash = md5.ComputeHash(stream);
             return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+        }
+
+        public async Task<DeduplicationResponse> DeduplicateAndNormalizeAsync(string eventId, string raceId)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var startTime = DateTime.UtcNow;
+
+            var response = new DeduplicationResponse
+            {
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Starting deduplication and normalization for Race {RaceId}", decryptedRaceId);
+
+                // Get race start time
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r =>
+                    r.Id == decryptedRaceId &&
+                    r.EventId == decryptedEventId)
+                    .FirstOrDefaultAsync();
+
+                if (race == null)
+                {
+                    ErrorMessage = "Race not found";
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                var raceStartTime = race.StartTime;
+
+                // Get all successfully processed readings with checkpoint assignments
+                var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+
+                // Get readings that are successfully processed but not yet normalized
+                var rawReadings = await (
+                    from r in readingRepo.GetQuery(r =>
+                        r.ProcessResult == "Success" &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                    join a in assignmentRepo.GetQuery()
+                        on r.Id equals a.ReadingId
+                    join ca in chipAssignmentRepo.GetQuery(ca =>
+                        ca.Participant.RaceId == decryptedRaceId &&
+                        !ca.UnassignedAt.HasValue)
+                        .Include(ca => ca.Participant)
+                        .Include(ca => ca.Chip)
+                        on r.Epc equals ca.Chip.EPC
+                    select new
+                    {
+                        Reading = r,
+                        CheckpointId = a.CheckpointId,
+                        ParticipantId = ca.ParticipantId,
+                        RawReadId = r.Id
+                    }
+                ).ToListAsync();
+                
+                // Filter out already normalized readings
+                var existingNormalizedReadIds = await normalizedRepo.GetQuery()
+                    .Select(n => n.RawReadId)
+                    .ToListAsync();
+                    
+                rawReadings = rawReadings
+                    .Where(r => !existingNormalizedReadIds.Contains(r.RawReadId))
+                    .ToList();
+
+                response.TotalRawReadings = rawReadings.Count;
+
+                // Group by Participant + Checkpoint
+                var grouped = rawReadings
+                    .GroupBy(r => new { r.ParticipantId, r.CheckpointId })
+                    .ToList();
+
+                response.CheckpointsProcessed = grouped.Select(g => g.Key.CheckpointId).Distinct().Count();
+                response.ParticipantsProcessed = grouped.Select(g => g.Key.ParticipantId).Distinct().Count();
+
+                var normalizedReadings = new List<ReadNormalized>();
+                var duplicateCount = 0;
+
+                await _repository.BeginTransactionAsync();
+
+                try
+                {
+                    foreach (var group in grouped)
+                    {
+                        // Sort by timestamp (earliest first), then by RSSI (strongest first)
+                        var orderedReadings = group
+                            .OrderBy(r => r.Reading.TimestampMs)
+                            .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
+                            .ToList();
+
+                        // Keep only the first reading (earliest with strongest RSSI)
+                        var bestReading = orderedReadings.First();
+                        duplicateCount += orderedReadings.Count - 1;
+
+                        // Calculate GunTime (milliseconds from race start)
+                        long? gunTime = null;
+                        if (raceStartTime.HasValue)
+                        {
+                            var readTime = bestReading.Reading.ReadTimeUtc;
+                            gunTime = (long)(readTime - raceStartTime.Value).TotalMilliseconds;
+                        }
+
+                        // Create normalized reading
+                        var normalized = new ReadNormalized
+                        {
+                            EventId = decryptedEventId,
+                            ParticipantId = bestReading.ParticipantId,
+                            CheckpointId = bestReading.CheckpointId,
+                            RawReadId = bestReading.Reading.Id,
+                            ChipTime = bestReading.Reading.ReadTimeUtc,
+                            GunTime = gunTime,
+                            NetTime = null, // TODO: Calculate net time (from participant start)
+                            IsManualEntry = false,
+                            CreatedByUserId = userId,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+
+                        normalizedReadings.Add(normalized);
+                    }
+
+                    // Bulk insert normalized readings
+                    await normalizedRepo.AddRangeAsync(normalizedReadings);
+                    await _repository.SaveChangesAsync();
+                    await _repository.CommitTransactionAsync();
+
+                    response.NormalizedReadings = normalizedReadings.Count;
+                    response.DuplicatesRemoved = duplicateCount;
+                    response.Status = "Completed";
+
+                    var endTime = DateTime.UtcNow;
+                    response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
+
+                    _logger.LogInformation(
+                        "Deduplication completed. Normalized: {Normalized}, Duplicates: {Duplicates}, Time: {Time}ms",
+                        normalizedReadings.Count, duplicateCount, response.ProcessingTimeMs);
+
+                    return response;
+                }
+                catch (Exception ex)
+                {
+                    await _repository.RollbackTransactionAsync();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error during deduplication: {ex.Message}";
+                _logger.LogError(ex, "Error during deduplication and normalization");
+                response.Status = "Failed";
+                return response;
+            }
         }
     }
 }

@@ -116,7 +116,7 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Process uploaded RFID readings and link to participants
         /// </summary>
-        [HttpPost("{eventId}/{raceId}/import/{importBatchId}/process")]
+        [HttpPost("{eventId}/{raceId}/import/{uploadBatchId}/process")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<ProcessRFIDImportResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -128,9 +128,9 @@ namespace Runnatics.Api.Controller
         {
             if (string.IsNullOrEmpty(request.EventId) || 
                 string.IsNullOrEmpty(request.RaceId) || 
-                string.IsNullOrEmpty(request.ImportBatchId))
+                string.IsNullOrEmpty(request.UploadBatchId))  // Changed from ImportBatchId
             {
-                return BadRequest(new { error = "Invalid input provided. Event ID, Race ID, and Import Batch ID are required." });
+                return BadRequest(new { error = "Invalid input provided. Event ID, Race ID, and Upload Batch ID are required." });
             }
 
             if (!ModelState.IsValid)

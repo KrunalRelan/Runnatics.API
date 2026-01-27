@@ -20,7 +20,7 @@ namespace Runnatics.Data.EF
                    var isActiveProperty = auditPropertiesType.GetProperties().FirstOrDefault(p => p.Name == "IsActive");
                    var isDeletedProperty = auditPropertiesType.GetProperties().FirstOrDefault(p => p.Name == "IsDeleted");
 
-                   if (isActiveProperty != null && isDeletedProperty != null)
+                   if (isActiveProperty != null && isDeletedProperty != null && auditPropertiesNavigation.PropertyInfo != null)
                    {
                         var parameter = Expression.Parameter(entityType.ClrType, "e");
 

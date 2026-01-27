@@ -8,7 +8,7 @@ namespace Runnatics.Models.Data.Common
         public static string GetDescription(this UserRole role)
         {
             var fieldInfo = role.GetType().GetField(role.ToString());
-            var attributes = (DescriptionAttribute[])fieldInfo?.GetCustomAttributes(typeof(DescriptionAttribute), false);
+            var attributes = fieldInfo?.GetCustomAttributes(typeof(DescriptionAttribute), false) as DescriptionAttribute[];
             return attributes?.Length > 0 ? attributes[0].Description : role.ToString();
         }
 

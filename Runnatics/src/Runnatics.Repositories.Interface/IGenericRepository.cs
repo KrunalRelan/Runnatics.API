@@ -4,7 +4,7 @@ using System.Linq.Expressions;
 
 public interface IGenericRepository<T> where T : class
 {
-    Task<PagingList<T>> SearchAsync(Expression<Func<T, bool>> filter = null,
+    Task<PagingList<T>> SearchAsync(Expression<Func<T, bool>>? filter = null,
         int? pageSize = null,
         int? pageNumber = 1,
         SortDirection sortDirection = SortDirection.Ascending,

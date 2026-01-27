@@ -655,7 +655,7 @@ namespace Runnatics.Services
                     .Select(p => p.BibNumber)
                     .ToListAsync();
 
-                var existingBibSet = new HashSet<string>(existingBibs, StringComparer.OrdinalIgnoreCase);
+                var existingBibSet = new HashSet<string>(existingBibs.Where(b => b != null)!, StringComparer.OrdinalIgnoreCase);
 
                 var participantsToAdd = new List<Models.Data.Entities.Participant>();
                 var skippedBibs = new List<string>();
@@ -711,7 +711,7 @@ namespace Runnatics.Services
                             "Successfully added {Count} participants for EventId: {EventId}, RaceId: {RaceId}",
                             participantsToAdd.Count, decryptedEventId, decryptedRaceId);
                     }
-                    catch (Exception ex)
+                    catch
                     {
                         await _repository.RollbackTransactionAsync();
                         throw;
@@ -889,7 +889,7 @@ namespace Runnatics.Services
                         "UpdateParticipantsByBib completed. Updated: {Updated}, NotFound: {NotFound}, Skipped: {Skipped}",
                         updatedCount, notFoundBibs.Count, skippedCount);
                 }
-                catch (Exception ex)
+                catch
                 {
                     await _repository.RollbackTransactionAsync();
                     throw;

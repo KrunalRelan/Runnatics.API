@@ -239,7 +239,7 @@ namespace Runnatics.Services
 
                     return response;
                 }
-                catch (Exception ex)
+                catch
                 {
                     await _repository.RollbackTransactionAsync();
                     throw;
@@ -427,7 +427,7 @@ namespace Runnatics.Services
 
                     return response;
                 }
-                catch (Exception ex)
+                catch
                 {
                     await _repository.RollbackTransactionAsync();
                     throw;

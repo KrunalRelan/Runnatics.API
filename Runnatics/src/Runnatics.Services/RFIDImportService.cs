@@ -27,7 +27,7 @@ namespace Runnatics.Services
             IMapper mapper,
             ILogger<RFIDImportService> logger,
             IUserContextService userContext,
-            IEncryptionService encryptionService) 
+            IEncryptionService encryptionService)
             : base(repository)
         {
             _mapper = mapper;
@@ -94,11 +94,11 @@ namespace Runnatics.Services
 
                 // Parse CSV/Excel file manually
                 var records = new List<(string Epc, string Bib)>();
-                
+
                 using var stream = new MemoryStream();
                 await request.File.CopyToAsync(stream);
                 stream.Position = 0;
-                
+
                 using var reader = new StreamReader(stream);
                 var headerLine = await reader.ReadLineAsync();
                 if (string.IsNullOrEmpty(headerLine))
@@ -112,7 +112,7 @@ namespace Runnatics.Services
                 var headers = headerLine.Split(',', '\t');
                 int? epcColumn = null;
                 int? bibColumn = null;
-                
+
                 for (int i = 0; i < headers.Length; i++)
                 {
                     var header = headers[i].Trim().ToLower();
@@ -129,13 +129,13 @@ namespace Runnatics.Services
                     response.Status = "Failed";
                     return response;
                 }
-                
+
                 // Parse data rows
                 while (!reader.EndOfStream)
                 {
                     var line = await reader.ReadLineAsync();
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    
+
                     var values = line.Split(',', '\t');
                     if (values.Length > Math.Max(epcColumn.Value, bibColumn.Value))
                     {
@@ -261,7 +261,7 @@ namespace Runnatics.Services
                         "EPC mapping upload completed. Success: {Success}, Errors: {Errors}, Not Found: {NotFound}",
                         successCount, errorCount, notFoundBibs.Count);
                 }
-                catch (Exception ex)
+                catch
                 {
                     await _repository.RollbackTransactionAsync();
                     throw;
@@ -371,8 +371,8 @@ namespace Runnatics.Services
 
                 // Check for duplicate upload
                 var batchRepo = _repository.GetRepository<UploadBatch>();
-                var existingBatch = await batchRepo.GetQuery(b => 
-                    b.FileHash == fileHash && 
+                var existingBatch = await batchRepo.GetQuery(b =>
+                    b.FileHash == fileHash &&
                     b.RaceId == decryptedRaceId)
                     .FirstOrDefaultAsync();
 
@@ -387,9 +387,9 @@ namespace Runnatics.Services
                 // Get device ID
                 var deviceId = request.DeviceId ?? "Unknown";
                 int? checkpointId = null;
-                if (!string.IsNullOrEmpty(request.CheckpointId))
+                if (!string.IsNullOrEmpty(request.ExpectedCheckpointId))
                 {
-                    checkpointId = Convert.ToInt32(_encryptionService.Decrypt(request.CheckpointId));
+                    checkpointId = Convert.ToInt32(_encryptionService.Decrypt(request.ExpectedCheckpointId));
                 }
 
                 // Create batch record
@@ -421,13 +421,13 @@ namespace Runnatics.Services
 
                 _logger.LogInformation("Created UploadBatch {BatchId}", batch.Id);
 
-                // Parse SQLite file
+                // Parse SQLite file (treat as local time by default since most readers use local)
                 var readings = await ParseSqliteFileAsync(
                     tempFilePath,
                     batch.Id,
                     deviceId,
                     request.TimeZoneId,
-                    request.TreatAsUtc
+                    false // Default: timestamps from reader are in local time
                 );
 
                 if (readings.Count == 0)
@@ -458,11 +458,14 @@ namespace Runnatics.Services
                 await batchRepo.UpdateAsync(batch);
                 await _repository.SaveChangesAsync();
 
-                response.ImportBatchId = _encryptionService.Encrypt(batch.Id.ToString());
-                response.TotalRecords = readings.Count;
-                response.ValidRecords = readings.Count;
-                response.InvalidRecords = 0;
-                response.Status = "Uploaded";
+                response.UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString());
+                response.TotalReadings = readings.Count;
+                response.UniqueEpcs = readings.Select(r => r.Epc).Distinct().Count();
+                response.TimeRangeStart = readings.Min(r => r.TimestampMs);
+                response.TimeRangeEnd = readings.Max(r => r.TimestampMs);
+                response.FileSizeBytes = request.File.Length;
+                response.FileFormat = "DB";
+                response.Status = "uploaded";
 
                 _logger.LogInformation("RFID file upload completed. Batch: {BatchId}, Readings: {Count}", batch.Id, readings.Count);
 
@@ -477,28 +480,169 @@ namespace Runnatics.Services
             }
         }
 
+        /// <summary>
+        /// Upload RFID file with automatic event/race detection based on device name from filename.
+        /// Extracts device name from filename, finds associated checkpoint, and determines event/race context.
+        /// </summary>
+        public async Task<RFIDImportResponse> UploadRFIDFileAutoAsync(RFIDImportRequest request)
+        {
+            var tenantId = _userContext.TenantId;
+
+            var response = new RFIDImportResponse
+            {
+                FileName = request.File?.FileName ?? "Unknown",
+                UploadedAt = DateTime.UtcNow,
+                Status = "Pending"
+            };
+
+            try
+            {
+                // Validate file
+                if (request.File == null || request.File.Length == 0)
+                {
+                    ErrorMessage = "File is empty or not provided";
+                    _logger.LogWarning("Auto upload failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                _logger.LogInformation("Starting auto-detection RFID file upload for file: {FileName}", request.File.FileName);
+
+                // Extract device name from filename
+                var deviceName = ExtractDeviceNameFromFilename(request.File.FileName);
+                if (string.IsNullOrEmpty(deviceName))
+                {
+                    ErrorMessage = "Unable to extract device name from filename. Expected format: DeviceName_timestamp.db or DeviceName-timestamp.db";
+                    _logger.LogWarning("Auto upload failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                _logger.LogInformation("Extracted device name: {DeviceName} from filename: {FileName}", deviceName, request.File.FileName);
+
+                // Find device by name and tenant
+                var deviceRepo = _repository.GetRepository<Device>();
+                var device = await deviceRepo.GetQuery(d =>
+                    d.Name == deviceName &&
+                    d.TenantId == tenantId &&
+                    d.AuditProperties.IsActive &&
+                    !d.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (device == null)
+                {
+                    ErrorMessage = $"Device '{deviceName}' not found in the system. Please ensure the device is registered.";
+                    _logger.LogWarning("Auto upload failed: Device '{DeviceName}' not found for tenant {TenantId}", deviceName, tenantId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                _logger.LogInformation("Found device: {DeviceId} for name: {DeviceName}", device.Id, deviceName);
+
+                // Find checkpoint associated with this device
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var checkpoint = await checkpointRepo.GetQuery(cp =>
+                    cp.DeviceId == device.Id &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
+                    .OrderByDescending(cp => cp.AuditProperties.CreatedDate)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (checkpoint == null)
+                {
+                    ErrorMessage = $"No checkpoint is assigned to device '{deviceName}'. Please configure the device checkpoint assignment first.";
+                    _logger.LogWarning("Auto upload failed: No checkpoint found for device {DeviceId}", device.Id);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                _logger.LogInformation("Found checkpoint: {CheckpointId} with Event: {EventId}, Race: {RaceId}",
+                    checkpoint.Id, checkpoint.EventId, checkpoint.RaceId);
+
+                // Encrypt IDs and delegate to existing upload method
+                var encryptedEventId = _encryptionService.Encrypt(checkpoint.EventId.ToString());
+                var encryptedRaceId = _encryptionService.Encrypt(checkpoint.RaceId.ToString());
+
+                // Update request with discovered checkpoint info
+                request.ExpectedCheckpointId = _encryptionService.Encrypt(checkpoint.Id.ToString());
+                request.DeviceId = device.Name;
+
+                _logger.LogInformation("Auto-detection complete. Delegating to UploadRFIDFileAsync with EventId: {EventId}, RaceId: {RaceId}",
+                    checkpoint.EventId, checkpoint.RaceId);
+
+                // Delegate to existing upload method with discovered IDs
+                return await UploadRFIDFileAsync(encryptedEventId, encryptedRaceId, request);
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error during auto-detection upload: {ex.Message}";
+                _logger.LogError(ex, "Error during auto-detection RFID upload");
+                response.Status = "Failed";
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Extracts device name from filename.
+        /// Expected format: 2026-01-25_00162512dbb0.db (date_devicename)
+        /// Device name is extracted from the part AFTER the first underscore.
+        /// </summary>
+        private static string ExtractDeviceNameFromFilename(string filename)
+        {
+            if (string.IsNullOrEmpty(filename))
+                return string.Empty;
+
+            // Remove extension
+            var nameWithoutExtension = Path.GetFileNameWithoutExtension(filename);
+            if (string.IsNullOrEmpty(nameWithoutExtension))
+                return string.Empty;
+
+            // Expected format: 2026-01-25_00162512dbb0 (date_devicename)
+            // Device name comes AFTER the first underscore
+            var underscoreParts = nameWithoutExtension.Split('_');
+            if (underscoreParts.Length >= 2)
+            {
+                // Return the part after the underscore (device name)
+                // If multiple underscores, join everything after the first one
+                return string.Join("_", underscoreParts.Skip(1)).Trim();
+            }
+
+            // Fallback: Try splitting by hyphen if underscore pattern not found
+            var hyphenParts = nameWithoutExtension.Split('-');
+            if (hyphenParts.Length >= 2)
+            {
+                // Return the last part (device name)
+                return hyphenParts[^1].Trim();
+            }
+
+            // If no delimiter found, return the whole name (just the device name)
+            return nameWithoutExtension.Trim();
+        }
+
         public async Task<ProcessRFIDImportResponse> ProcessRFIDStagingDataAsync(ProcessRFIDImportRequest request)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(request.EventId));
             var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(request.RaceId));
-            var decryptedImportBatchId = Convert.ToInt32(_encryptionService.Decrypt(request.ImportBatchId));
+            var decryptedUploadBatchId = Convert.ToInt32(_encryptionService.Decrypt(request.UploadBatchId));
 
             var response = new ProcessRFIDImportResponse
             {
-                ImportBatchId = decryptedImportBatchId,
+                ImportBatchId = decryptedUploadBatchId,
                 ProcessedAt = DateTime.UtcNow,
                 Status = "Processing"
             };
 
             try
             {
-                _logger.LogInformation("Starting RFID processing for ImportBatch {BatchId}", decryptedImportBatchId);
+                _logger.LogInformation("Starting RFID processing for UploadBatch {BatchId}", decryptedUploadBatchId);
 
                 // Get import batch
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var importBatch = await batchRepo.GetQuery(b =>
-                    b.Id == decryptedImportBatchId &&
+                    b.Id == decryptedUploadBatchId &&
                     b.RaceId == decryptedRaceId &&
                     b.EventId == decryptedEventId)
                     .FirstOrDefaultAsync();
@@ -506,7 +650,7 @@ namespace Runnatics.Services
                 if (importBatch == null)
                 {
                     ErrorMessage = "Import batch not found";
-                    _logger.LogWarning("Import batch {BatchId} not found", decryptedImportBatchId);
+                    _logger.LogWarning("Upload batch {BatchId} not found", decryptedUploadBatchId);
                     response.Status = "Failed";
                     return response;
                 }
@@ -514,14 +658,14 @@ namespace Runnatics.Services
                 // Get pending readings
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
                 var readings = await readingRepo.GetQuery(r =>
-                    r.BatchId == decryptedImportBatchId &&
+                    r.BatchId == decryptedUploadBatchId &&
                     r.ProcessResult == "Pending")
                     .ToListAsync();
 
                 if (readings.Count == 0)
                 {
                     ErrorMessage = "No pending readings to process";
-                    _logger.LogWarning("No pending readings for ImportBatch {BatchId}", decryptedImportBatchId);
+                    _logger.LogWarning("No pending readings for UploadBatch {BatchId}", decryptedUploadBatchId);
                     response.Status = "Completed";
                     return response;
                 }
@@ -529,7 +673,7 @@ namespace Runnatics.Services
                 // Get participants with chip assignments for this race
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
                 var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
-                
+
                 // Get active chip assignments for participants in this race
                 var chipAssignments = await chipAssignmentRepo.GetQuery(ca =>
                     ca.Participant.RaceId == decryptedRaceId &&
@@ -621,7 +765,7 @@ namespace Runnatics.Services
                         "RFID processing completed. Success: {Success}, Errors: {Errors}, Unlinked: {Unlinked}",
                         successCount, errorCount, unlinkedEPCs.Count);
                 }
-                catch (Exception ex)
+                catch
                 {
                     await _repository.RollbackTransactionAsync();
                     throw;
@@ -638,7 +782,7 @@ namespace Runnatics.Services
             catch (Exception ex)
             {
                 ErrorMessage = $"Error processing RFID import: {ex.Message}";
-                _logger.LogError(ex, "Error processing RFID import batch {BatchId}", decryptedImportBatchId);
+                _logger.LogError(ex, "Error processing RFID import batch {BatchId}", decryptedUploadBatchId);
                 response.Status = "Failed";
                 return response;
             }
@@ -760,37 +904,40 @@ namespace Runnatics.Services
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
                 var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
 
-                // Get readings that are successfully processed but not yet normalized
-                var rawReadings = await (
-                    from r in readingRepo.GetQuery(r =>
-                        r.ProcessResult == "Success" &&
-                        r.AuditProperties.IsActive &&
-                        !r.AuditProperties.IsDeleted)
-                    join a in assignmentRepo.GetQuery()
-                        on r.Id equals a.ReadingId
-                    join ca in chipAssignmentRepo.GetQuery(ca =>
-                        ca.Participant.RaceId == decryptedRaceId &&
-                        !ca.UnassignedAt.HasValue)
-                        .Include(ca => ca.Participant)
-                        .Include(ca => ca.Chip)
-                        on r.Epc equals ca.Chip.EPC
-                    select new
-                    {
-                        Reading = r,
-                        CheckpointId = a.CheckpointId,
-                        ParticipantId = ca.ParticipantId,
-                        RawReadId = r.Id
-                    }
-                ).ToListAsync();
-                
-                // Filter out already normalized readings
+                // First, get already normalized reading IDs to filter them out early
                 var existingNormalizedReadIds = await normalizedRepo.GetQuery()
+                    .AsNoTracking()
                     .Select(n => n.RawReadId)
                     .ToListAsync();
-                    
-                rawReadings = rawReadings
-                    .Where(r => !existingNormalizedReadIds.Contains(r.RawReadId))
-                    .ToList();
+
+                // Optimized query: AsNoTracking for read-only, removed unnecessary Includes, filter early
+                var rawReadings = await readingRepo.GetQuery(r =>
+                        r.ProcessResult == "Success" &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted &&
+                        !existingNormalizedReadIds.Contains(r.Id)) // Filter early
+                    .AsNoTracking()
+                    .Join(
+                        assignmentRepo.GetQuery().AsNoTracking(),
+                        r => r.Id,
+                        a => a.ReadingId,
+                        (r, a) => new { Reading = r, CheckpointId = a.CheckpointId })
+                    .Join(
+                        chipAssignmentRepo.GetQuery(ca =>
+                            ca.Participant.RaceId == decryptedRaceId &&
+                            !ca.UnassignedAt.HasValue)
+                            .AsNoTracking()
+                            .Select(ca => new { ca.ParticipantId, ca.Chip.EPC }), // Project only needed fields
+                        ra => ra.Reading.Epc,
+                        ca => ca.EPC,
+                        (ra, ca) => new
+                        {
+                            Reading = ra.Reading,
+                            CheckpointId = ra.CheckpointId,
+                            ParticipantId = ca.ParticipantId,
+                            RawReadId = ra.Reading.Id
+                        })
+                    .ToListAsync();
 
                 response.TotalRawReadings = rawReadings.Count;
 
@@ -871,7 +1018,7 @@ namespace Runnatics.Services
 
                     return response;
                 }
-                catch (Exception ex)
+                catch
                 {
                     await _repository.RollbackTransactionAsync();
                     throw;

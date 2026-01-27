@@ -203,9 +203,12 @@ namespace Runnatics.Repositories.EF
             }
 
             // Use SqlQueryRaw for non-entity types
+            // Suppressing EF1002: procedureName is an internal parameter, not user input
+#pragma warning disable EF1002
             var query = await context.Database
                 .SqlQueryRaw<T>($"exec {procedureName} {stringOfParameters}", parameters.ToArray())
                 .ToListAsync();
+#pragma warning restore EF1002
 
             toReturn.AddRange(query);
 

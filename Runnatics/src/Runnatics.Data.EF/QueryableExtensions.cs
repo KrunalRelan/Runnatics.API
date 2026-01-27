@@ -54,20 +54,22 @@ namespace Runnatics.Data.EF
             {
                 // use reflection (not ComponentModel) to mirror LINQ
                 var pi = type.GetProperty(prop);
+                if (pi == null)
+                    throw new ArgumentException($"Property '{prop}' not found on type '{type.Name}'");
                 expr = Expression.Property(expr, pi);
                 type = pi.PropertyType;
             }
             Type delegateType = typeof(Func<,>).MakeGenericType(typeof(T), type);
 
             var lambda = Expression.Lambda(delegateType, expr, arg);
-            object result = typeof(Queryable).GetMethods().Single(
+            object? result = typeof(Queryable).GetMethods().Single(
                     method => method.Name == v
                               && method.IsGenericMethodDefinition
                               && method.GetGenericArguments().Length == 2
                               && method.GetParameters().Length == 2)
                 .MakeGenericMethod(typeof(T), type)
                 .Invoke(null, new object[] { source, lambda });
-            return (IOrderedQueryable<T>)result;
+            return (IOrderedQueryable<T>)result!;
         }
     }
 }

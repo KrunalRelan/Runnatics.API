@@ -114,6 +114,52 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Upload SQLite database file with RFID readings using auto-detection.
+        /// Automatically determines event and race based on device name extracted from filename.
+        /// </summary>
+        [HttpPost("import-auto")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<RFIDImportResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UploadRFIDFileAuto([FromForm] RFIDImportRequest request)
+        {
+            if (request == null || request.File == null)
+            {
+                return BadRequest(new { error = "File is required." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
+            }
+
+            var response = new ResponseBase<RFIDImportResponse>();
+            var result = await _service.UploadRFIDFileAutoAsync(request);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<RFIDImportResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
         /// Process uploaded RFID readings and link to participants
         /// </summary>
         [HttpPost("{eventId}/{raceId}/import/{uploadBatchId}/process")]

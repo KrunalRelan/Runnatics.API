@@ -151,10 +151,10 @@ namespace Runnatics.Repositories.EF
             return _tenantId;
         }
 
-        public async Task<dynamic> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string output = null) where O : class
+        public async Task<dynamic> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string? output = null) where O : class
         {
             var repository = GetRepository<O>();
-            return await repository.ExecuteStoredProcedure<I>(storedProcedureName, input, output);
+            return await repository.ExecuteStoredProcedure<I>(storedProcedureName, input, output ?? string.Empty);
         }
     }
 }

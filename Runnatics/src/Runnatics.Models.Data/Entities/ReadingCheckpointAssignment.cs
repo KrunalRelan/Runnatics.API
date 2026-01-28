@@ -14,7 +14,7 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         public int CheckpointId { get; set; }
 
-        public int? DetectionId { get; set; }
+        //public int? DetectionId { get; set; }
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

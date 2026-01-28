@@ -67,12 +67,12 @@ namespace Runnatics.Data.EF.Config
 
             // Relationships
             builder.HasOne(e => e.Event)
-                .WithMany()
+                .WithMany(ev => ev.ReadNormalized)
                 .HasForeignKey(e => e.EventId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.Participant)
-                .WithMany()
+                .WithMany(p => p.ReadNormalized)
                 .HasForeignKey(e => e.ParticipantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
@@ -82,7 +82,7 @@ namespace Runnatics.Data.EF.Config
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.RawRead)
-                .WithMany()
+                .WithMany(rr => rr.ReadNormalized)
                 .HasForeignKey(e => e.RawReadId)
                 .OnDelete(DeleteBehavior.SetNull);
 

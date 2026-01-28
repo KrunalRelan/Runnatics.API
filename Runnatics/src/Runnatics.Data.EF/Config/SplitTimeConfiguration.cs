@@ -65,12 +65,12 @@ namespace Runnatics.Data.EF.Config
 
             // Relationships
             builder.HasOne(e => e.Event)
-                .WithMany()
+                .WithMany(ev => ev.SplitTimes)
                 .HasForeignKey(e => e.EventId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.Participant)
-                .WithMany()
+                .WithMany(p => p.SplitTimes)
                 .HasForeignKey(e => e.ParticipantId)
                 .OnDelete(DeleteBehavior.Restrict);
 

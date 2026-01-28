@@ -214,6 +214,40 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Process ALL pending RFID batches for an event/race with a single call.
+        /// Useful when multiple files have been uploaded and you want to process them all at once.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/process-all")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<BulkProcessRFIDImportResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ProcessAllBatches(string eventId, string raceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
+            }
+
+            var response = new ResponseBase<BulkProcessRFIDImportResponse>();
+            var result = await _service.ProcessAllRFIDDataAsync(eventId, raceId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<BulkProcessRFIDImportResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
         /// Deduplicate RFID readings and populate normalized reading table
         /// </summary>
         [HttpPost("{eventId}/{raceId}/deduplicate")]
@@ -236,6 +270,40 @@ namespace Runnatics.Api.Controller
             if (_service.HasError)
             {
                 response.Error = new ResponseBase<DeduplicationResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Calculate race results from normalized readings and insert into Results table.
+        /// Calculates overall, gender, and category rankings.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/calculate-results")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<CalculateResultsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> CalculateResults(string eventId, string raceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
+            }
+
+            var response = new ResponseBase<CalculateResultsResponse>();
+            var result = await _service.CalculateRaceResultsAsync(eventId, raceId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<CalculateResultsResponse>.ErrorData
                 {
                     Message = _service.ErrorMessage
                 };

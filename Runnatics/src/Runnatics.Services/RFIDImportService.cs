@@ -511,7 +511,7 @@ namespace Runnatics.Services
                 // Find device by name and tenant
                 var deviceRepo = _repository.GetRepository<Device>();
                 var device = await deviceRepo.GetQuery(d =>
-                    d.Name == deviceName &&
+                    d.DeviceId == deviceName &&
                     d.TenantId == tenantId &&
                     d.AuditProperties.IsActive &&
                     !d.AuditProperties.IsDeleted)
@@ -776,6 +776,123 @@ namespace Runnatics.Services
             }
         }
 
+        /// <summary>
+        /// Process ALL pending RFID batches for an event/race with a single call.
+        /// Useful for bulk processing after multiple file uploads.
+        /// </summary>
+        public async Task<BulkProcessRFIDImportResponse> ProcessAllRFIDDataAsync(string eventId, string raceId)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+            var response = new BulkProcessRFIDImportResponse
+            {
+                ProcessedAt = DateTime.UtcNow,
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Starting bulk RFID processing for Race {RaceId}", decryptedRaceId);
+
+                // Get ALL pending batches for this event/race
+                var batchRepo = _repository.GetRepository<UploadBatch>();
+                var pendingBatches = await batchRepo.GetQuery(b =>
+                    b.EventId == decryptedEventId &&
+                    b.RaceId == decryptedRaceId &&
+                    (b.Status == "uploaded" || b.Status == "uploading") &&
+                    b.AuditProperties.IsActive &&
+                    !b.AuditProperties.IsDeleted)
+                    .OrderBy(b => b.AuditProperties.CreatedDate)
+                    .ToListAsync();
+
+                if (pendingBatches.Count == 0)
+                {
+                    response.Status = "NoDataToProcess";
+                    response.Message = "No pending batches found for this race";
+                    _logger.LogInformation("No pending batches found for Race {RaceId}", decryptedRaceId);
+                    return response;
+                }
+
+                response.TotalBatches = pendingBatches.Count;
+                _logger.LogInformation("Processing {Count} batches for Race {RaceId}", pendingBatches.Count, decryptedRaceId);
+
+                // Process each batch
+                foreach (var batch in pendingBatches)
+                {
+                    var batchResult = new BatchProcessResult
+                    {
+                        BatchId = _encryptionService.Encrypt(batch.Id.ToString()),
+                        FileName = batch.OriginalFileName,
+                        DeviceId = batch.DeviceId,
+                        Status = "Processing"
+                    };
+
+                    try
+                    {
+                        _logger.LogInformation("Processing batch {BatchId} - {FileName}", batch.Id, batch.OriginalFileName);
+
+                        // Reuse existing single-batch processing logic
+                        var processRequest = new ProcessRFIDImportRequest
+                        {
+                            EventId = eventId,
+                            RaceId = raceId,
+                            UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString())
+                        };
+
+                        var result = await ProcessRFIDStagingDataAsync(processRequest);
+
+                        batchResult.Status = result.Status;
+                        batchResult.SuccessCount = result.SuccessCount;
+                        batchResult.ErrorCount = result.ErrorCount;
+                        batchResult.UnlinkedCount = result.UnlinkedCount;
+
+                        if (result.Status == "Completed" || result.Status == "CompletedWithErrors")
+                        {
+                            response.SuccessfulBatches++;
+                            response.TotalProcessedReadings += result.SuccessCount;
+                        }
+                        else
+                        {
+                            response.FailedBatches++;
+                            batchResult.ErrorMessage = "Processing failed";
+                        }
+
+                        _logger.LogInformation(
+                            "Batch {BatchId} processed. Success: {Success}, Errors: {Errors}",
+                            batch.Id, result.SuccessCount, result.ErrorCount);
+                    }
+                    catch (Exception ex)
+                    {
+                        batchResult.Status = "Failed";
+                        batchResult.ErrorMessage = ex.Message;
+                        response.FailedBatches++;
+                        _logger.LogError(ex, "Failed to process batch {BatchId}", batch.Id);
+                    }
+
+                    response.BatchResults.Add(batchResult);
+                }
+
+                response.Status = response.FailedBatches > 0 ? "CompletedWithErrors" : "Completed";
+                response.Message = $"Processed {response.SuccessfulBatches} of {response.TotalBatches} batches successfully";
+
+                _logger.LogInformation(
+                    "Bulk processing completed. Success: {Success}, Failed: {Failed}, Total Readings: {Readings}",
+                    response.SuccessfulBatches, response.FailedBatches, response.TotalProcessedReadings);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error during bulk processing: {ex.Message}";
+                _logger.LogError(ex, "Error processing all RFID data for race {RaceId}", decryptedRaceId);
+                response.Status = "Failed";
+                response.Message = ex.Message;
+                return response;
+            }
+        }
+
         private async Task<List<RawRFIDReading>> ParseSqliteFileAsync(
             string filePath,
             int batchId,
@@ -1019,6 +1136,287 @@ namespace Runnatics.Services
                 response.Status = "Failed";
                 return response;
             }
+        }
+
+        /// <summary>
+        /// Calculate race results from normalized readings and insert into Results table.
+        /// Calculates overall, gender, and category rankings.
+        /// </summary>
+        public async Task<CalculateResultsResponse> CalculateRaceResultsAsync(string eventId, string raceId)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var startTime = DateTime.UtcNow;
+
+            var response = new CalculateResultsResponse
+            {
+                ProcessedAt = startTime,
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Starting race results calculation for Race {RaceId}", decryptedRaceId);
+
+                // Get race details
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r =>
+                    r.Id == decryptedRaceId &&
+                    r.EventId == decryptedEventId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (race == null)
+                {
+                    ErrorMessage = "Race not found";
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Get finish checkpoint (checkpoint with maximum distance from start)
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var finishCheckpoint = await checkpointRepo.GetQuery(cp =>
+                    cp.RaceId == decryptedRaceId &&
+                    cp.EventId == decryptedEventId &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
+                    .OrderByDescending(cp => cp.DistanceFromStart)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (finishCheckpoint == null)
+                {
+                    ErrorMessage = "No finish checkpoint found for this race";
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                _logger.LogInformation("Using checkpoint {CheckpointId} as finish line (Distance: {Distance})",
+                    finishCheckpoint.Id, finishCheckpoint.DistanceFromStart);
+
+                // Get normalized readings at finish checkpoint with participant data
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var finishReadings = await normalizedRepo.GetQuery(rn =>
+                    rn.EventId == decryptedEventId &&
+                    rn.CheckpointId == finishCheckpoint.Id &&
+                    rn.AuditProperties.IsActive &&
+                    !rn.AuditProperties.IsDeleted)
+                    .Include(rn => rn.Participant)
+                    .OrderBy(rn => rn.GunTime ?? long.MaxValue)
+                    .ToListAsync();
+
+                if (finishReadings.Count == 0)
+                {
+                    response.Status = "Completed";
+                    response.Message = "No finish line readings found. Run deduplication first.";
+                    return response;
+                }
+
+                // Get existing results to check for updates vs inserts
+                var resultsRepo = _repository.GetRepository<Results>();
+                var existingResults = await resultsRepo.GetQuery(r =>
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId)
+                    .ToDictionaryAsync(r => r.ParticipantId, r => r);
+
+                // Get all registered participants for DNF calculation
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var totalParticipants = await participantRepo.GetQuery(p =>
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .CountAsync();
+
+                await _repository.BeginTransactionAsync();
+
+                try
+                {
+                    var resultsToAdd = new List<Results>();
+                    var resultsToUpdate = new List<Results>();
+
+                    // Calculate overall rankings (already sorted by GunTime)
+                    var overallRank = 1;
+                    foreach (var reading in finishReadings)
+                    {
+                        if (existingResults.TryGetValue(reading.ParticipantId, out var existingResult))
+                        {
+                            // Update existing result
+                            existingResult.FinishTime = reading.GunTime;
+                            existingResult.GunTime = reading.GunTime;
+                            existingResult.NetTime = reading.NetTime;
+                            existingResult.OverallRank = overallRank;
+                            existingResult.Status = "Finished";
+                            existingResult.AuditProperties.UpdatedBy = userId;
+                            existingResult.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            resultsToUpdate.Add(existingResult);
+                        }
+                        else
+                        {
+                            // Create new result
+                            var result = new Results
+                            {
+                                EventId = decryptedEventId,
+                                RaceId = decryptedRaceId,
+                                ParticipantId = reading.ParticipantId,
+                                FinishTime = reading.GunTime,
+                                GunTime = reading.GunTime,
+                                NetTime = reading.NetTime,
+                                OverallRank = overallRank,
+                                Status = "Finished",
+                                IsOfficial = false,
+                                CertificateGenerated = false,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            };
+                            resultsToAdd.Add(result);
+                        }
+                        overallRank++;
+                    }
+
+                    // Bulk insert new results
+                    if (resultsToAdd.Count > 0)
+                    {
+                        await resultsRepo.AddRangeAsync(resultsToAdd);
+                    }
+
+                    // Update existing results
+                    foreach (var result in resultsToUpdate)
+                    {
+                        await resultsRepo.UpdateAsync(result);
+                    }
+
+                    await _repository.SaveChangesAsync();
+
+                    // Calculate gender rankings
+                    await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+
+                    // Calculate category rankings
+                    var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+
+                    await _repository.SaveChangesAsync();
+                    await _repository.CommitTransactionAsync();
+
+                    // Calculate gender stats for response
+                    var genderStats = finishReadings
+                        .GroupBy(r => r.Participant?.Gender?.ToLower() ?? "other")
+                        .ToDictionary(g => g.Key, g => g.Count());
+
+                    response.TotalFinishers = finishReadings.Count;
+                    response.ResultsCreated = resultsToAdd.Count;
+                    response.ResultsUpdated = resultsToUpdate.Count;
+                    response.DNFCount = totalParticipants - finishReadings.Count;
+                    response.CategoriesProcessed = categoriesProcessed;
+                    response.GenderStats = new GenderBreakdown
+                    {
+                        MaleFinishers = genderStats.GetValueOrDefault("male", 0),
+                        FemaleFinishers = genderStats.GetValueOrDefault("female", 0),
+                        OtherFinishers = genderStats.GetValueOrDefault("other", 0)
+                    };
+                    response.Status = "Completed";
+                    response.Message = $"Successfully calculated results for {finishReadings.Count} finishers";
+
+                    var endTime = DateTime.UtcNow;
+                    response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
+
+                    _logger.LogInformation(
+                        "Race results calculated. Finishers: {Finishers}, Created: {Created}, Updated: {Updated}, Time: {Time}ms",
+                        finishReadings.Count, resultsToAdd.Count, resultsToUpdate.Count, response.ProcessingTimeMs);
+
+                    return response;
+                }
+                catch
+                {
+                    await _repository.RollbackTransactionAsync();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error calculating race results: {ex.Message}";
+                _logger.LogError(ex, "Error calculating race results for Race {RaceId}", decryptedRaceId);
+                response.Status = "Failed";
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Calculate gender-based rankings for all results in a race
+        /// </summary>
+        private async Task CalculateGenderRankingsAsync(int eventId, int raceId, int? userId)
+        {
+            var resultsRepo = _repository.GetRepository<Results>();
+
+            var results = await resultsRepo.GetQuery(r =>
+                r.EventId == eventId &&
+                r.RaceId == raceId &&
+                r.Status == "Finished")
+                .Include(r => r.Participant)
+                .OrderBy(r => r.GunTime ?? long.MaxValue)
+                .ToListAsync();
+
+            // Group by gender and assign rankings
+            var genderGroups = results
+                .GroupBy(r => r.Participant?.Gender?.ToLower() ?? "other")
+                .ToList();
+
+            foreach (var group in genderGroups)
+            {
+                var genderRank = 1;
+                foreach (var result in group.OrderBy(r => r.GunTime ?? long.MaxValue))
+                {
+                    result.GenderRank = genderRank++;
+                    result.AuditProperties.UpdatedBy = userId;
+                    result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                }
+            }
+
+            _logger.LogInformation("Gender rankings calculated for {Count} results", results.Count);
+        }
+
+        /// <summary>
+        /// Calculate category-based rankings for all results in a race
+        /// </summary>
+        private async Task<int> CalculateCategoryRankingsAsync(int eventId, int raceId, int? userId)
+        {
+            var resultsRepo = _repository.GetRepository<Results>();
+
+            var results = await resultsRepo.GetQuery(r =>
+                r.EventId == eventId &&
+                r.RaceId == raceId &&
+                r.Status == "Finished")
+                .Include(r => r.Participant)
+                .OrderBy(r => r.GunTime ?? long.MaxValue)
+                .ToListAsync();
+
+            // Group by age category and assign rankings
+            var categoryGroups = results
+                .GroupBy(r => r.Participant?.AgeCategory ?? "Unknown")
+                .ToList();
+
+            foreach (var group in categoryGroups)
+            {
+                var categoryRank = 1;
+                foreach (var result in group.OrderBy(r => r.GunTime ?? long.MaxValue))
+                {
+                    result.CategoryRank = categoryRank++;
+                    result.AuditProperties.UpdatedBy = userId;
+                    result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                }
+            }
+
+            _logger.LogInformation("Category rankings calculated for {Count} results across {Categories} categories",
+                results.Count, categoryGroups.Count);
+
+            return categoryGroups.Count;
         }
     }
 }

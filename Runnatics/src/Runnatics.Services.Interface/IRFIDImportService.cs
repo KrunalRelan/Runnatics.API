@@ -15,6 +15,19 @@ namespace Runnatics.Services.Interface
         Task<RFIDImportResponse> UploadRFIDFileAutoAsync(RFIDImportRequest request);
 
         Task<ProcessRFIDImportResponse> ProcessRFIDStagingDataAsync(ProcessRFIDImportRequest request);
+
+        /// <summary>
+        /// Process ALL pending RFID batches for an event/race with a single call.
+        /// Useful for bulk processing after multiple file uploads.
+        /// </summary>
+        Task<BulkProcessRFIDImportResponse> ProcessAllRFIDDataAsync(string eventId, string raceId);
+
         Task<DeduplicationResponse> DeduplicateAndNormalizeAsync(string eventId, string raceId);
+
+        /// <summary>
+        /// Calculate race results from normalized readings and insert into Results table.
+        /// Calculates overall, gender, and category rankings.
+        /// </summary>
+        Task<CalculateResultsResponse> CalculateRaceResultsAsync(string eventId, string raceId);
     }
 }

@@ -8,6 +8,8 @@ namespace Runnatics.Models.Data.Entities
         [Key]
         public int Id { get; set; }
 
+        public string DeviceId { get; set; } = string.Empty;
+
         [Required]
         [MaxLength(100)]
         public string Name { get; set; } = string.Empty;

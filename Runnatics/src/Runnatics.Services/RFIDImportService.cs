@@ -61,19 +61,7 @@ namespace Runnatics.Services
                     _logger.LogWarning("Upload failed: {Error}", ErrorMessage);
                     response.Status = "Failed";
                     return response;
-                }
-
-                // Validate Excel file
-                var isExcel = request.File.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ||
-                             request.File.FileName.EndsWith(".xls", StringComparison.OrdinalIgnoreCase);
-
-                if (!isExcel)
-                {
-                    ErrorMessage = "Only Excel files (.xlsx, .xls) are supported";
-                    _logger.LogWarning("Upload failed: {Error}", ErrorMessage);
-                    response.Status = "Failed";
-                    return response;
-                }
+                }                
 
                 // Validate event exists
                 var eventRepo = _repository.GetRepository<Event>();

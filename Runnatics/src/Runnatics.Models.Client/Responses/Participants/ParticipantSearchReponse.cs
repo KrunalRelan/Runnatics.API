@@ -20,5 +20,31 @@
         /// Values are formatted times (HH:mm:ss) or null if not crossed
         /// </summary>
         public Dictionary<string, string?>? CheckpointTimes { get; set; }
+
+        // Results data - populated from Results table
+        /// <summary>
+        /// Gun Time - total race time from gun start (formatted as HH:mm:ss or mm:ss)
+        /// </summary>
+        public string? GunTime { get; set; }
+
+        /// <summary>
+        /// Net/Chip Time - time from participant crossing start line (formatted as HH:mm:ss or mm:ss)
+        /// </summary>
+        public string? NetTime { get; set; }
+
+        /// <summary>
+        /// Overall rank among all finishers
+        /// </summary>
+        public int? OverallRank { get; set; }
+
+        /// <summary>
+        /// Rank within gender category
+        /// </summary>
+        public int? GenderRank { get; set; }
+
+        /// <summary>
+        /// Rank within age category
+        /// </summary>
+        public int? CategoryRank { get; set; }
     }
 }

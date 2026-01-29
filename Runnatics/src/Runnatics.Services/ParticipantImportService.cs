@@ -360,7 +360,7 @@ namespace Runnatics.Services
         }
 
         /// <summary>
-        /// Populates checkpoint times and chip IDs for each participant in the list.
+        /// Populates checkpoint times, chip IDs, and results data for each participant in the list.
         /// Merges child checkpoint times by parent checkpoint, returning the best (earliest) time.
         /// Returns null values gracefully when no checkpoint data exists.
         /// </summary>
@@ -397,7 +397,7 @@ namespace Runnatics.Services
                     .ToDictionary(g => g.Key, g => g.First().Chip?.EPC);
 
                 // ========== CHECKPOINT LOGIC ==========
-                
+
                 // Get ALL checkpoints for this race
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 var allCheckpoints = await checkpointRepo.GetQuery(c => 
@@ -432,7 +432,20 @@ namespace Runnatics.Services
                     .GroupBy(r => r.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.ToList());
 
-                // Populate checkpoint times and chip IDs for each participant
+                // ========== RESULTS DATA ==========
+                var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                var results = await resultsRepo.GetQuery(r =>
+                    r.EventId == eventId &&
+                    r.RaceId == raceId &&
+                    participantIds.Contains(r.ParticipantId))
+                    .AsNoTracking()
+                    .ToDictionaryAsync(r => r.ParticipantId, r => r);
+
+                _logger.LogDebug(
+                    "Found {TotalResults} results for {TotalParticipants} participants",
+                    results.Count, participantIds.Count);
+
+                // Populate checkpoint times, chip IDs, and results for each participant
                 foreach (var participant in participants)
                 {
                     participant.CheckpointTimes = new Dictionary<string, string?>();
@@ -445,7 +458,50 @@ namespace Runnatics.Services
                     // Set chip ID
                     participant.ChipId = chipLookup.TryGetValue(participantId, out var chipEpc) ? chipEpc : null;
 
-                    // If no checkpoints exist, skip
+                    // ========== POPULATE RESULTS DATA ==========
+                    if (results.TryGetValue(participantId, out var result))
+                    {
+                        // Status from results
+                        participant.Status = result.Status;
+
+                        // Gun Time (total time from race start)
+                        if (result.GunTime.HasValue)
+                        {
+                            participant.GunTime = FormatDuration(result.GunTime.Value);
+                        }
+
+                        // Net/Chip Time (time minus start delay)
+                        if (result.NetTime.HasValue)
+                        {
+                            participant.NetTime = FormatDuration(result.NetTime.Value);
+                        }
+                        else if (result.GunTime.HasValue)
+                        {
+                            // Fallback: if no net time, use gun time
+                            participant.NetTime = FormatDuration(result.GunTime.Value);
+                        }
+
+                        // Rankings
+                        participant.OverallRank = result.OverallRank;
+                        participant.GenderRank = result.GenderRank;
+                        participant.CategoryRank = result.CategoryRank;
+                    }
+                    else
+                    {
+                        // No results yet - participant hasn't finished or data not processed
+                        // Keep existing status if set, otherwise mark as Registered
+                        if (string.IsNullOrEmpty(participant.Status))
+                        {
+                            participant.Status = "Registered";
+                        }
+                        participant.GunTime = null;
+                        participant.NetTime = null;
+                        participant.OverallRank = null;
+                        participant.GenderRank = null;
+                        participant.CategoryRank = null;
+                    }
+
+                    // If no checkpoints exist, skip checkpoint times
                     if (checkpoints.Count == 0)
                         continue;
 
@@ -478,7 +534,7 @@ namespace Runnatics.Services
                 }
 
                 _logger.LogInformation(
-                    "Populated checkpoint times for {Count} participants with {CheckpointCount} checkpoints",
+                    "Populated checkpoint times and results for {Count} participants with {CheckpointCount} checkpoints",
                     participants.Count(), checkpoints.Count);
             }
             catch (Exception ex)
@@ -491,6 +547,21 @@ namespace Runnatics.Services
                     participant.CheckpointTimes ??= new Dictionary<string, string?>();
                 }
             }
+        }
+
+        /// <summary>
+        /// Formats milliseconds duration to HH:mm:ss or mm:ss format
+        /// </summary>
+        private static string FormatDuration(long milliseconds)
+        {
+            var timeSpan = TimeSpan.FromMilliseconds(milliseconds);
+
+            // If over 1 hour: HH:mm:ss
+            if (timeSpan.TotalHours >= 1)
+                return $"{(int)timeSpan.TotalHours}:{timeSpan.Minutes:D2}:{timeSpan.Seconds:D2}";
+
+            // If under 1 hour: mm:ss
+            return $"{timeSpan.Minutes}:{timeSpan.Seconds:D2}";
         }
 
         public async Task AddParticipant(string eventId, string raceId, ParticipantRequest addParticipant)

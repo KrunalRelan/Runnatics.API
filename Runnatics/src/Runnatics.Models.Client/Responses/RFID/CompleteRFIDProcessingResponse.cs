@@ -15,11 +15,19 @@ namespace Runnatics.Models.Client.Responses.RFID
         public int FailedBatches { get; set; }
         public int TotalRawReadingsProcessed { get; set; }
 
+        // Phase 1.5: Checkpoint Assignment Stats (Loop Races)
+        public long Phase15AssignmentMs { get; set; }
+        public int CheckpointsAssigned { get; set; }
+
         // Phase 2: Deduplication Stats
         public int TotalNormalizedReadings { get; set; }
         public int DuplicatesRemoved { get; set; }
         public int CheckpointsProcessed { get; set; }
         public int ParticipantsProcessed { get; set; }
+
+        // Phase 2.5: Split Times Stats
+        public long Phase25SplitTimesMs { get; set; }
+        public int SplitTimesCreated { get; set; }
 
         // Phase 3: Results Calculation Stats
         public int TotalFinishers { get; set; }

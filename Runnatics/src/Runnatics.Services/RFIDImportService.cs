@@ -60,7 +60,7 @@ namespace Runnatics.Services
                     _logger.LogWarning("Upload failed: {Error}", ErrorMessage);
                     response.Status = "Failed";
                     return response;
-                }                
+                }
 
                 // Validate event exists
                 var eventRepo = _repository.GetRepository<Event>();
@@ -632,8 +632,9 @@ namespace Runnatics.Services
 
         /// <summary>
         /// Extracts device name from filename.
-        /// Expected format: 2026-01-25_00162512dbb0.db (date_devicename)
-        /// Device name is extracted from the part AFTER the first underscore.
+        /// Expected format: 2025-12-25_001625122652_.db (date_devicename_)
+        /// OR: 2026-01-25_00162512dbb0_(box15).db (date_devicename_(suffix))
+        /// Device name is extracted from the part AFTER the first underscore and BEFORE any additional underscores or parentheses.
         /// </summary>
         private static string ExtractDeviceNameFromFilename(string filename)
         {
@@ -645,14 +646,25 @@ namespace Runnatics.Services
             if (string.IsNullOrEmpty(nameWithoutExtension))
                 return string.Empty;
 
-            // Expected format: 2026-01-25_00162512dbb0 (date_devicename)
-            // Device name comes AFTER the first underscore
+            // Expected format: 2025-12-25_001625122652_ or 2026-01-25_00162512dbb0_(box15)
+            // Device name comes AFTER the first underscore and BEFORE any additional underscores or parentheses
             var underscoreParts = nameWithoutExtension.Split('_');
             if (underscoreParts.Length >= 2)
             {
-                // Return the part after the underscore (device name)
-                // If multiple underscores, join everything after the first one
-                return string.Join("_", underscoreParts.Skip(1)).Trim();
+                // Get the second part (index 1) - this should be the device name
+                var devicePart = underscoreParts[1];
+
+                // Remove any trailing underscores or whitespace
+                devicePart = devicePart.TrimEnd('_', ' ');
+
+                // Remove any parenthetical suffixes like (box15)
+                var parenIndex = devicePart.IndexOf('(');
+                if (parenIndex > 0)
+                {
+                    devicePart = devicePart.Substring(0, parenIndex).Trim();
+                }
+
+                return devicePart;
             }
 
             // Fallback: Try splitting by hyphen if underscore pattern not found
@@ -810,7 +822,7 @@ namespace Runnatics.Services
                     // **LOOP RACE HANDLING**: Check if device has multiple checkpoints
                     bool isLoopRace = false;
                     List<Checkpoint> deviceCheckpoints = new List<Checkpoint>();
-                    
+
                     if (!importBatch.ExpectedCheckpointId.HasValue)
                     {
                         // Get device and check for multiple checkpoints
@@ -860,7 +872,7 @@ namespace Runnatics.Services
                     {
                         // Get EPC->Participant mapping first
                         var epcToParticipantMap = participants.ToDictionary(
-                            kvp => kvp.Key, 
+                            kvp => kvp.Key,
                             kvp => kvp.Value.Id
                         );
 
@@ -914,7 +926,7 @@ namespace Runnatics.Services
                                     // **LOOP RACE MODE**: Assign based on reading sequence
                                     var participantReadings = readingsByParticipant[participant.Id];
                                     int readingIndex = participantReadings.IndexOf(reading);
-                                    
+
                                     if (readingIndex >= 0 && readingIndex < deviceCheckpoints.Count)
                                     {
                                         assignedCheckpointId = deviceCheckpoints[readingIndex].Id;
@@ -1324,7 +1336,7 @@ namespace Runnatics.Services
                     .Select(n => n.RawReadId!.Value)
                     .ToListAsync();
 
-                _logger.LogInformation("Found {Count} existing normalized readings for event {EventId}", 
+                _logger.LogInformation("Found {Count} existing normalized readings for event {EventId}",
                     existingNormalizedReadIds.Count, decryptedEventId);
 
                 // Get active chip assignments for this race with their EPCs
@@ -1337,7 +1349,7 @@ namespace Runnatics.Services
                     .Select(ca => new { ca.ParticipantId, EPC = ca.Chip.EPC })
                     .ToListAsync();
 
-                _logger.LogInformation("Found {Count} active chip assignments for race {RaceId}", 
+                _logger.LogInformation("Found {Count} active chip assignments for race {RaceId}",
                     chipAssignmentsWithEpc.Count, decryptedRaceId);
 
                 // Create a lookup from EPC to ParticipantId
@@ -1398,8 +1410,8 @@ namespace Runnatics.Services
                 {
                     r.Reading,
                     // If this checkpoint is a child, use the parent checkpoint ID instead
-                    CheckpointId = childToParentCheckpointMap.TryGetValue(r.CheckpointId, out var parentId) 
-                        ? parentId 
+                    CheckpointId = childToParentCheckpointMap.TryGetValue(r.CheckpointId, out var parentId)
+                        ? parentId
                         : r.CheckpointId,
                     OriginalCheckpointId = r.CheckpointId,
                     r.ParticipantId,
@@ -1456,8 +1468,8 @@ namespace Runnatics.Services
 
                         // Check if readings came from different checkpoints (parent-child merge)
                         var distinctOriginalCheckpoints = group.Select(r => r.OriginalCheckpointId).Distinct().Count();
-                        var mergeInfo = distinctOriginalCheckpoints > 1 
-                            ? $"(merged from {distinctOriginalCheckpoints} devices) " 
+                        var mergeInfo = distinctOriginalCheckpoints > 1
+                            ? $"(merged from {distinctOriginalCheckpoints} devices) "
                             : "";
 
                         _logger.LogDebug(
@@ -1883,6 +1895,25 @@ namespace Runnatics.Services
                     processAllResponse.TotalBatches,
                     processAllResponse.TotalProcessedReadings);
 
+                // ========== PHASE 1.5: Assign Checkpoints (Loop Races) ==========
+                var phase15Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 1.5: Assigning checkpoints for loop races...");
+
+                var assignResponse = await AssignCheckpointsForLoopRaceAsync(eventId, raceId);
+
+                response.Phase15AssignmentMs = (long)(DateTime.UtcNow - phase15Start).TotalMilliseconds;
+                response.CheckpointsAssigned = assignResponse.CheckpointsAssigned;
+
+                if (assignResponse.Status == "Failed")
+                {
+                    response.Warnings.Add("Phase 1.5 failed: Checkpoint assignment error (may affect loop races)");
+                }
+
+                _logger.LogInformation(
+                    "Phase 1.5 completed in {Time}ms. Assigned: {Count}",
+                    response.Phase15AssignmentMs,
+                    assignResponse.CheckpointsAssigned);
+
                 // ========== PHASE 2: Deduplicate and Normalize ==========
                 var phase2Start = DateTime.UtcNow;
                 _logger.LogInformation("Phase 2: Deduplicating and normalizing readings...");
@@ -1912,6 +1943,25 @@ namespace Runnatics.Services
                     response.Phase2DeduplicationMs,
                     dedupeResponse.NormalizedReadings,
                     dedupeResponse.DuplicatesRemoved);
+
+                // ========== PHASE 2.5: Create Split Times ==========
+                var phase25Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 2.5: Creating split times...");
+
+                var splitTimeResponse = await CreateSplitTimesFromNormalizedReadingsAsync(eventId, raceId);
+
+                response.Phase25SplitTimesMs = (long)(DateTime.UtcNow - phase25Start).TotalMilliseconds;
+                response.SplitTimesCreated = splitTimeResponse.SplitTimesCreated;
+
+                if (splitTimeResponse.Status == "Failed")
+                {
+                    response.Warnings.Add("Phase 2.5 failed: Split time creation error (non-critical)");
+                }
+
+                _logger.LogInformation(
+                    "Phase 2.5 completed in {Time}ms. Split times created: {Count}",
+                    response.Phase25SplitTimesMs,
+                    splitTimeResponse.SplitTimesCreated);
 
                 // ========== PHASE 3: Calculate Results ==========
                 var phase3Start = DateTime.UtcNow;
@@ -1985,14 +2035,14 @@ namespace Runnatics.Services
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
             var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-            
+
             var response = new ClearDataResponse
             {
                 Status = "Processing"
             };
 
             await _repository.BeginTransactionAsync();
-            
+
             try
             {
                 _logger.LogInformation(
@@ -2001,63 +2051,63 @@ namespace Runnatics.Services
 
                 // 1. Delete Results
                 var resultsRepo = _repository.GetRepository<Results>();
-                var results = await resultsRepo.GetQuery(r => 
-                    r.EventId == decryptedEventId && 
+                var results = await resultsRepo.GetQuery(r =>
+                    r.EventId == decryptedEventId &&
                     r.RaceId == decryptedRaceId)
                     .ToListAsync();
-                
+
                 if (results.Count > 0)
                 {
                     await resultsRepo.DeleteRangeAsync(results.Select(r => r.Id).ToList());
                     response.ResultsCleared = results.Count;
                     _logger.LogInformation("Cleared {Count} results", results.Count);
                 }
-                
+
                 // 2. Delete ReadNormalized
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-                var normalized = await normalizedRepo.GetQuery(rn => 
+                var normalized = await normalizedRepo.GetQuery(rn =>
                     rn.EventId == decryptedEventId &&
                     rn.Participant.RaceId == decryptedRaceId)
                     .ToListAsync();
-                
+
                 if (normalized.Count > 0)
                 {
                     await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
                     response.NormalizedReadingsCleared = normalized.Count;
                     _logger.LogInformation("Cleared {Count} normalized readings", normalized.Count);
                 }
-                
+
                 // 3. Get batch IDs for this race
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var batches = await batchRepo.GetQuery(b =>
-                    b.EventId == decryptedEventId && 
+                    b.EventId == decryptedEventId &&
                     b.RaceId == decryptedRaceId)
                     .ToListAsync();
 
                 var batchIds = batches.Select(b => b.Id).ToList();
-                
+
                 // 4. Delete ReadingCheckpointAssignment
                 var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
-                
+
                 var readingIds = await readingRepo.GetQuery(r => batchIds.Contains(r.BatchId))
                     .Select(r => r.Id)
                     .ToListAsync();
-                
+
                 var assignments = await assignmentRepo.GetQuery(a => readingIds.Contains(a.ReadingId))
                     .ToListAsync();
-                
+
                 if (assignments.Count > 0)
                 {
                     await assignmentRepo.DeleteRangeAsync(assignments.Select(a => a.Id).ToList());
                     response.AssignmentsCleared = assignments.Count;
                     _logger.LogInformation("Cleared {Count} checkpoint assignments", assignments.Count);
                 }
-                
+
                 // 5. Reset RawRFIDReading status
                 var readings = await readingRepo.GetQuery(r => batchIds.Contains(r.BatchId))
                     .ToListAsync();
-                
+
                 if (readings.Count > 0)
                 {
                     foreach (var reading in readings)
@@ -2071,7 +2121,7 @@ namespace Runnatics.Services
                     response.ReadingsReset = readings.Count;
                     _logger.LogInformation("Reset {Count} raw readings to Pending", readings.Count);
                 }
-                
+
                 // 6. Reset UploadBatch status
                 if (batches.Count > 0)
                 {
@@ -2085,7 +2135,7 @@ namespace Runnatics.Services
                     response.BatchesReset = batches.Count;
                     _logger.LogInformation("Reset {Count} batches to uploaded status", batches.Count);
                 }
-                
+
                 // 7. Optionally delete uploads completely
                 if (!keepUploads)
                 {
@@ -2102,19 +2152,19 @@ namespace Runnatics.Services
                         _logger.LogInformation("Deleted {Count} upload batches", batches.Count);
                     }
                 }
-                
+
                 await _repository.SaveChangesAsync();
                 await _repository.CommitTransactionAsync();
-                
+
                 response.Status = "Success";
                 response.Message = keepUploads
                     ? "Cleared processed data. Upload batches preserved and ready for reprocessing."
                     : "Cleared all data including uploads. Race is now empty.";
-                
+
                 _logger.LogInformation(
                     "Data cleanup completed for Event {EventId}, Race {RaceId}. {Summary}",
                     decryptedEventId, decryptedRaceId, response.Summary);
-                
+
                 return response;
             }
             catch (Exception ex)
@@ -2134,19 +2184,19 @@ namespace Runnatics.Services
         /// Clears their processed data and recalculates from raw readings.
         /// </summary>
         public async Task<ReprocessParticipantsResponse> ReprocessParticipantsAsync(
-            string eventId, 
-            string raceId, 
+            string eventId,
+            string raceId,
             string[] participantIds)
         {
             var startTime = DateTime.UtcNow;
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
             var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-            
+
             var decryptedParticipantIds = participantIds
                 .Select(id => Convert.ToInt32(_encryptionService.Decrypt(id)))
                 .ToList();
-            
+
             var response = new ReprocessParticipantsResponse
             {
                 Status = "Processing",
@@ -2154,7 +2204,7 @@ namespace Runnatics.Services
             };
 
             await _repository.BeginTransactionAsync();
-            
+
             try
             {
                 _logger.LogInformation(
@@ -2170,14 +2220,14 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 response.ParticipantsCleared = participants.Count;
-                
+
                 if (participants.Count < decryptedParticipantIds.Count)
                 {
                     var foundIds = participants.Select(p => p.Id).ToHashSet();
                     var notFound = decryptedParticipantIds.Where(id => !foundIds.Contains(id)).ToList();
-                    response.NotFoundParticipants = notFound.Select(id => 
+                    response.NotFoundParticipants = notFound.Select(id =>
                         _encryptionService.Encrypt(id.ToString())).ToList();
-                    
+
                     _logger.LogWarning("Could not find {Count} requested participants", notFound.Count);
                 }
 
@@ -2195,36 +2245,36 @@ namespace Runnatics.Services
                 var resultsRepo = _repository.GetRepository<Results>();
                 var results = await resultsRepo.GetQuery(r => validParticipantIds.Contains(r.ParticipantId))
                     .ToListAsync();
-                
+
                 if (results.Count > 0)
                 {
                     await resultsRepo.DeleteRangeAsync(results.Select(r => r.Id).ToList());
                     response.ResultsCleared = results.Count;
                 }
-                
+
                 // 2. Delete their ReadNormalized
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-                var normalized = await normalizedRepo.GetQuery(rn => 
+                var normalized = await normalizedRepo.GetQuery(rn =>
                     validParticipantIds.Contains(rn.ParticipantId))
                     .ToListAsync();
-                
+
                 var readingIds = normalized.Where(n => n.RawReadId.HasValue)
                     .Select(n => n.RawReadId!.Value)
                     .ToList();
-                
+
                 if (normalized.Count > 0)
                 {
                     await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
                     response.ReadingsCleared = normalized.Count;
                 }
-                
+
                 // 3. Reset their RawRFIDReading (if we have the IDs)
                 if (readingIds.Count > 0)
                 {
                     var readingRepo = _repository.GetRepository<RawRFIDReading>();
                     var readings = await readingRepo.GetQuery(r => readingIds.Contains(r.Id))
                         .ToListAsync();
-                    
+
                     foreach (var reading in readings)
                     {
                         reading.ProcessResult = "Pending";
@@ -2232,19 +2282,19 @@ namespace Runnatics.Services
                     }
                     await readingRepo.UpdateRangeAsync(readings);
                 }
-                
+
                 await _repository.SaveChangesAsync();
                 await _repository.CommitTransactionAsync();
-                
+
                 // Now reprocess using the complete workflow
                 _logger.LogInformation("Reprocessing {Count} participants...", participants.Count);
-                
+
                 var processResult = await ProcessCompleteWorkflowAsync(eventId, raceId);
-                
+
                 // CRITICAL FIX: After reprocessing, recalculate ALL rankings
                 // This ensures rankings are correct across all participants
                 _logger.LogInformation("Recalculating rankings for all participants after reprocessing...");
-                
+
                 await _repository.BeginTransactionAsync();
                 try
                 {
@@ -2255,7 +2305,7 @@ namespace Runnatics.Services
                         r.Status == "Finished")
                         .OrderBy(r => r.GunTime ?? long.MaxValue)
                         .ToListAsync();
-                    
+
                     var rankUpdates = allResults.Select((result, index) =>
                     {
                         result.OverallRank = index + 1;
@@ -2263,21 +2313,21 @@ namespace Runnatics.Services
                         result.AuditProperties.UpdatedDate = DateTime.UtcNow;
                         return result;
                     }).ToList();
-                    
+
                     if (rankUpdates.Count > 0)
                     {
                         await resultsRepo.BulkUpdateAsync(rankUpdates);
                         _logger.LogInformation("Recalculated overall rankings for {Count} participants", rankUpdates.Count);
                     }
-                    
+
                     // Recalculate gender rankings for entire race
                     await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
-                    
+
                     // Recalculate category rankings for entire race
                     var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
-                    
+
                     _logger.LogInformation("Recalculated rankings across {Categories} categories", categoriesProcessed);
-                    
+
                     await _repository.SaveChangesAsync();
                     await _repository.CommitTransactionAsync();
                 }
@@ -2286,19 +2336,19 @@ namespace Runnatics.Services
                     await _repository.RollbackTransactionAsync();
                     throw;
                 }
-                
+
                 response.Status = processResult.Status;
                 response.ParticipantsReprocessed = participants.Count;
                 response.ReadingsCreated = processResult.TotalNormalizedReadings;
                 response.ResultsCreated = processResult.ResultsCreated + processResult.ResultsUpdated;
                 response.Message = $"Successfully reprocessed {participants.Count} participants and recalculated all rankings";
-                
+
                 response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
-                
+
                 _logger.LogInformation(
                     "Participant reprocessing completed in {Time}ms. Reprocessed: {Count}",
                     response.ProcessingTimeMs, participants.Count);
-                
+
                 return response;
             }
             catch (Exception ex)
@@ -2317,8 +2367,8 @@ namespace Runnatics.Services
         /// Reprocesses a single upload batch after configuration changes.
         /// </summary>
         public async Task<ProcessRFIDImportResponse> ReprocessBatchAsync(
-            string eventId, 
-            string raceId, 
+            string eventId,
+            string raceId,
             string uploadBatchId)
         {
             var userId = _userContext.UserId;
@@ -2375,7 +2425,7 @@ namespace Runnatics.Services
 
                     // 3. Delete normalized readings from these raw reads
                     var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-                    var normalized = await normalizedRepo.GetQuery(rn => 
+                    var normalized = await normalizedRepo.GetQuery(rn =>
                         rn.RawReadId.HasValue && readingIds.Contains(rn.RawReadId.Value))
                         .ToListAsync();
 
@@ -2431,5 +2481,423 @@ namespace Runnatics.Services
                 return response;
             }
         }
+
+        /// <summary>
+        /// Assign checkpoints to readings for loop races where a single device is used at multiple checkpoints.
+        /// Readings are assigned to checkpoints based on their time sequence per participant.
+        /// </summary>
+        public async Task<AssignCheckpointsResponse> AssignCheckpointsForLoopRaceAsync(string eventId, string raceId)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var startTime = DateTime.UtcNow;
+
+            var response = new AssignCheckpointsResponse
+            {
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Assigning checkpoints for loop race {RaceId}", decryptedRaceId);
+
+                // Get race start time
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                    .FirstOrDefaultAsync();
+
+                if (race == null)
+                {
+                    ErrorMessage = "Race not found";
+                    response.Status = "Failed";
+                    response.ErrorMessage = ErrorMessage;
+                    return response;
+                }
+
+                var raceStartTime = race.StartTime ?? DateTime.UtcNow;
+
+                // Get checkpoints ordered by distance
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var checkpoints = await checkpointRepo.GetQuery(cp =>
+                    cp.RaceId == decryptedRaceId &&
+                    cp.EventId == decryptedEventId &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
+                    .OrderBy(cp => cp.DistanceFromStart)
+                    .ToListAsync();
+
+                if (checkpoints.Count == 0)
+                {
+                    ErrorMessage = "No checkpoints found for race";
+                    response.Status = "Failed";
+                    response.ErrorMessage = ErrorMessage;
+                    return response;
+                }
+
+                // Get active chip assignments to map EPC to participant
+                var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+                var chipAssignments = await chipAssignmentRepo.GetQuery(ca =>
+                    ca.Participant.RaceId == decryptedRaceId &&
+                    !ca.UnassignedAt.HasValue &&
+                    ca.AuditProperties.IsActive &&
+                    !ca.AuditProperties.IsDeleted)
+                    .Include(ca => ca.Chip)
+                    .Select(ca => new { ca.ParticipantId, EPC = ca.Chip.EPC })
+                    .ToListAsync();
+
+                var epcToParticipant = chipAssignments.ToDictionary(ca => ca.EPC, ca => ca.ParticipantId);
+
+                // Get readings that need checkpoint assignment
+                var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+
+                // Get existing assignments
+                var existingAssignmentReadingIds = await assignmentRepo.GetQuery(a =>
+                    a.AuditProperties.IsActive &&
+                    !a.AuditProperties.IsDeleted)
+                    .Select(a => a.ReadingId)
+                    .ToListAsync();
+
+                var existingAssignmentSet = new HashSet<long>(existingAssignmentReadingIds);
+
+                // Get batches for this race
+                var batchRepo = _repository.GetRepository<UploadBatch>();
+                var batchIds = await batchRepo.GetQuery(b =>
+                    b.EventId == decryptedEventId &&
+                    b.RaceId == decryptedRaceId)
+                    .Select(b => b.Id)
+                    .ToListAsync();
+
+                var unassignedReadings = await readingRepo.GetQuery(r =>
+                    r.ProcessResult == "Success" &&
+                    batchIds.Contains(r.BatchId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                // Filter to only unassigned readings
+                unassignedReadings = unassignedReadings
+                    .Where(r => !existingAssignmentSet.Contains(r.Id))
+                    .OrderBy(r => r.Epc)
+                    .ThenBy(r => r.ReadTimeUtc)
+                    .ToList();
+
+                _logger.LogInformation("Found {Count} readings needing checkpoint assignment", unassignedReadings.Count);
+
+                // Group by participant (EPC)
+                var readingsByEpc = unassignedReadings
+                    .GroupBy(r => r.Epc)
+                    .ToList();
+
+                var assignmentsToCreate = new List<ReadingCheckpointAssignment>();
+                var flaggedForReview = 0;
+
+                foreach (var epcGroup in readingsByEpc)
+                {
+                    var epc = epcGroup.Key;
+                    var epcReadings = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
+
+                    // Assign readings to checkpoints sequentially
+                    for (int i = 0; i < epcReadings.Count && i < checkpoints.Count; i++)
+                    {
+                        var reading = epcReadings[i];
+                        var checkpoint = checkpoints[i];
+
+                        var elapsedSeconds = (reading.ReadTimeUtc - raceStartTime).TotalSeconds;
+
+                        // Simple validation: just check if reading is after race start
+                        if (elapsedSeconds < 0)
+                        {
+                            _logger.LogWarning("EPC {Epc}: Reading before race start", epc);
+                            flaggedForReview++;
+                            continue;
+                        }
+
+                        var assignment = new ReadingCheckpointAssignment
+                        {
+                            ReadingId = reading.Id,
+                            CheckpointId = checkpoint.Id,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+
+                        assignmentsToCreate.Add(assignment);
+                    }
+
+                    // Flag extra readings beyond checkpoint count
+                    if (epcReadings.Count > checkpoints.Count)
+                    {
+                        _logger.LogWarning("EPC {Epc} has {Extra} extra readings beyond {Max} checkpoints",
+                            epc, epcReadings.Count - checkpoints.Count, checkpoints.Count);
+                        flaggedForReview += epcReadings.Count - checkpoints.Count;
+                    }
+                }
+
+                // Bulk insert assignments
+                if (assignmentsToCreate.Count > 0)
+                {
+                    await assignmentRepo.BulkInsertAsync(assignmentsToCreate);
+                    _logger.LogInformation("Created {Count} checkpoint assignments", assignmentsToCreate.Count);
+                }
+
+                response.CheckpointsAssigned = assignmentsToCreate.Count;
+                response.ReadingsProcessed = unassignedReadings.Count;
+                response.FlaggedForReview = flaggedForReview;
+                response.Status = "Completed";
+                response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error assigning checkpoints: {ex.Message}";
+                _logger.LogError(ex, "Error assigning checkpoints");
+                response.Status = "Failed";
+                response.ErrorMessage = ErrorMessage;
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Create split times from normalized readings.
+        /// Calculates cumulative time from race start and segment time from previous checkpoint.
+        /// </summary>
+        public async Task<CreateSplitTimesResponse> CreateSplitTimesFromNormalizedReadingsAsync(string eventId, string raceId)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var startTime = DateTime.UtcNow;
+
+            var response = new CreateSplitTimesResponse
+            {
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Creating split times for Race {RaceId}", decryptedRaceId);
+
+                // Get race start time
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                    .FirstOrDefaultAsync();
+
+                if (race == null)
+                {
+                    ErrorMessage = "Race not found";
+                    response.Status = "Failed";
+                    response.ErrorMessage = ErrorMessage;
+                    return response;
+                }
+
+                var raceStartTime = race.StartTime;
+
+                // Get checkpoints ordered by distance to determine start checkpoint
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var checkpoints = await checkpointRepo.GetQuery(cp =>
+                    cp.RaceId == decryptedRaceId &&
+                    cp.EventId == decryptedEventId &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
+                    .OrderBy(cp => cp.DistanceFromStart)
+                    .ToListAsync();
+
+                if (checkpoints.Count == 0)
+                {
+                    ErrorMessage = "No checkpoints found for race";
+                    response.Status = "Failed";
+                    response.ErrorMessage = ErrorMessage;
+                    return response;
+                }
+
+                // Get the first checkpoint (start line) to use as FromCheckpointId for first split
+                var startCheckpoint = checkpoints.First();
+
+                _logger.LogInformation("Found {Count} checkpoints for race. Start checkpoint: {Name} (ID: {Id})",
+                    checkpoints.Count, startCheckpoint.Name, startCheckpoint.Id);
+
+                // Get all normalized readings ordered by participant and time
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var normalizedReadings = await normalizedRepo.GetQuery(rn =>
+                    rn.EventId == decryptedEventId &&
+                    rn.AuditProperties.IsActive &&
+                    !rn.AuditProperties.IsDeleted)
+                    .Include(rn => rn.Checkpoint)
+                    .OrderBy(rn => rn.ParticipantId)
+                    .ThenBy(rn => rn.ChipTime)
+                    .ToListAsync();
+
+                if (normalizedReadings.Count == 0)
+                {
+                    _logger.LogInformation("No normalized readings found to create split times");
+                    response.Status = "Completed";
+                    response.SplitTimesCreated = 0;
+                    response.ParticipantsProcessed = 0;
+                    response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
+                    return response;
+                }
+
+                _logger.LogInformation("Found {Count} normalized readings to process", normalizedReadings.Count);
+
+                // Get existing split times to avoid duplicates
+                var splitTimeRepo = _repository.GetRepository<SplitTimes>();
+                var existingSplitTimesList = await splitTimeRepo.GetQuery(st =>
+                    st.EventId == decryptedEventId &&
+                    st.AuditProperties.IsActive &&
+                    !st.AuditProperties.IsDeleted)
+                    .Select(st => new { st.ParticipantId, st.CheckpointId })
+                    .ToListAsync();
+
+                var existingSplitTimes = existingSplitTimesList
+                    .Select(st => $"{st.ParticipantId}_{st.CheckpointId}")
+                    .ToHashSet();
+
+                _logger.LogInformation("Found {Count} existing split times to skip", existingSplitTimes.Count);
+
+                // Group by participant
+                var readingsByParticipant = normalizedReadings
+                    .GroupBy(r => r.ParticipantId)
+                    .ToList();
+
+                var splitTimesToCreate = new List<SplitTimes>();
+
+                foreach (var participantGroup in readingsByParticipant)
+                {
+                    var participantId = participantGroup.Key;
+                    var participantReadings = participantGroup.OrderBy(r => r.ChipTime).ToList();
+
+                    // Track previous checkpoint for segment calculations
+                    int? previousCheckpointId = null;
+                    DateTime? previousCheckpointTime = raceStartTime;
+
+                    foreach (var reading in participantReadings)
+                    {
+                        // Skip if split time already exists
+                        var key = $"{participantId}_{reading.CheckpointId}";
+                        if (existingSplitTimes.Contains(key))
+                        {
+                            _logger.LogDebug("Skipping existing split time for participant {ParticipantId}, checkpoint {CheckpointId}",
+                                participantId, reading.CheckpointId);
+
+                            // Update tracking variables even for existing splits
+                            previousCheckpointId = reading.CheckpointId;
+                            previousCheckpointTime = reading.ChipTime;
+                            continue;
+                        }
+
+                        // Calculate split time (cumulative from race start)
+                        long splitTimeMs = 0;
+                        if (raceStartTime.HasValue)
+                        {
+                            splitTimeMs = (long)(reading.ChipTime - raceStartTime.Value).TotalMilliseconds;
+                        }
+
+                        // Calculate segment time (time since previous checkpoint)
+                        long segmentTimeMs = 0;
+                        if (previousCheckpointTime.HasValue)
+                        {
+                            segmentTimeMs = (long)(reading.ChipTime - previousCheckpointTime.Value).TotalMilliseconds;
+                        }
+
+                        // Determine FromCheckpointId
+                        int fromCheckpointId;
+                        if (previousCheckpointId.HasValue)
+                        {
+                            // Use previous checkpoint
+                            fromCheckpointId = previousCheckpointId.Value;
+                        }
+                        else
+                        {
+                            // First reading for this participant - use start checkpoint
+                            fromCheckpointId = startCheckpoint.Id;
+                        }
+
+                        // Convert milliseconds to TimeSpan for the SplitTime column (legacy TIME column)
+                        var splitTimeSpan = TimeSpan.FromMilliseconds(splitTimeMs);
+
+                        // Ensure TimeSpan doesn't exceed max TIME value (23:59:59.9999999)
+                        if (splitTimeSpan.TotalHours >= 24)
+                        {
+                            _logger.LogWarning(
+                                "Split time for participant {ParticipantId} exceeds 24 hours ({Hours}h). Capping at 23:59:59.",
+                                participantId, splitTimeSpan.TotalHours);
+                            splitTimeSpan = new TimeSpan(23, 59, 59);
+                        }
+
+                        var splitTime = new SplitTimes
+                        {
+                            ParticipantId = participantId,
+                            EventId = decryptedEventId,
+                            CheckpointId = reading.CheckpointId,
+                            ReadNormalizedId = reading.Id,
+
+                            // REQUIRED: Define the segment
+                            FromCheckpointId = fromCheckpointId,
+                            ToCheckpointId = reading.CheckpointId,
+
+                            // REQUIRED: Legacy TIME column
+                            SplitTime = splitTimeSpan,
+
+                            // Modern time columns (milliseconds)
+                            SplitTimeMs = splitTimeMs,      // Cumulative from race start
+                            SegmentTime = segmentTimeMs,    // Time for this segment only
+
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+
+                        splitTimesToCreate.Add(splitTime);
+
+                        // Update tracking variables for next iteration
+                        previousCheckpointId = reading.CheckpointId;
+                        previousCheckpointTime = reading.ChipTime;
+                    }
+                }
+
+                // Bulk insert split times
+                if (splitTimesToCreate.Count > 0)
+                {
+                    _logger.LogInformation("Bulk inserting {Count} split times", splitTimesToCreate.Count);
+                    await splitTimeRepo.BulkInsertAsync(splitTimesToCreate);
+                    _logger.LogInformation("Successfully created {Count} split times", splitTimesToCreate.Count);
+                }
+                else
+                {
+                    _logger.LogInformation("No new split times to create (all already exist)");
+                }
+
+                response.SplitTimesCreated = splitTimesToCreate.Count;
+                response.ParticipantsProcessed = readingsByParticipant.Count;
+                response.Status = "Completed";
+                response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
+
+                _logger.LogInformation(
+                    "Split time creation completed. Created: {Created}, Participants: {Participants}, Time: {Time}ms",
+                    response.SplitTimesCreated, response.ParticipantsProcessed, response.ProcessingTimeMs);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error creating split times: {ex.Message}";
+                _logger.LogError(ex, "Error creating split times for race {RaceId}", decryptedRaceId);
+                response.Status = "Failed";
+                response.ErrorMessage = ErrorMessage;
+                return response;
+            }
+        }
     }
 }
+

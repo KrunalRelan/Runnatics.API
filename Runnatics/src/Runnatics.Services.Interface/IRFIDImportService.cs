@@ -25,6 +25,18 @@ namespace Runnatics.Services.Interface
         Task<DeduplicationResponse> DeduplicateAndNormalizeAsync(string eventId, string raceId);
 
         /// <summary>
+        /// Assign checkpoints to readings for loop races where a single device is used at multiple checkpoints.
+        /// Readings are assigned to checkpoints based on their time sequence per participant.
+        /// </summary>
+        Task<AssignCheckpointsResponse> AssignCheckpointsForLoopRaceAsync(string eventId, string raceId);
+
+        /// <summary>
+        /// Create split times from normalized readings.
+        /// Calculates cumulative time from race start and segment time from previous checkpoint.
+        /// </summary>
+        Task<CreateSplitTimesResponse> CreateSplitTimesFromNormalizedReadingsAsync(string eventId, string raceId);
+
+        /// <summary>
         /// Calculate race results from normalized readings and insert into Results table.
         /// Calculates overall, gender, and category rankings.
         /// </summary>

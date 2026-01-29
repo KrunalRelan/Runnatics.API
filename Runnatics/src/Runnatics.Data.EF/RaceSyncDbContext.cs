@@ -25,7 +25,7 @@ namespace Runnatics.Data.EF
         public DbSet<ReaderAssignment> ReaderAssignments { get; set; }
         public DbSet<ReadRaw> ReadRaws { get; set; }
         public DbSet<ReadNormalized> ReadNormalizeds { get; set; }
-        public DbSet<SplitTime> SplitTimes { get; set; }
+        public DbSet<SplitTimes> SplitTimes { get; set; }
         public DbSet<Results> Results { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<EventOrganizer> EventOrganizers { get; set; }

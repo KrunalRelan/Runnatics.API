@@ -4,9 +4,9 @@ namespace Runnatics.Data.EF.Config
     using Microsoft.EntityFrameworkCore.Metadata.Builders;
     using Runnatics.Models.Data.Entities;
 
-    public class SplitTimeConfiguration : IEntityTypeConfiguration<SplitTime>
+    public class SplitTimeConfiguration : IEntityTypeConfiguration<SplitTimes>
     {
-        public virtual void Configure(EntityTypeBuilder<SplitTime> builder)
+        public virtual void Configure(EntityTypeBuilder<SplitTimes> builder)
         {
             builder.ToTable("SplitTimes");
 
@@ -40,25 +40,46 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.CategoryRank);
 
+            // Time measurements in milliseconds
+            builder.Property(e => e.SplitTimeMs);  // Nullable
+
+            builder.Property(e => e.SegmentTime);  // Nullable
+
+            // REQUIRED: Segment definition columns
+            builder.Property(e => e.FromCheckpointId)
+                .IsRequired();
+
+            builder.Property(e => e.ToCheckpointId)
+                .IsRequired();
+
+            builder.Property(e => e.CheckpointId);  // Nullable (optional, usually same as ToCheckpointId)
+
+            builder.Property(e => e.ReadNormalizedId);
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.IsDeleted)
+                .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
+                  .HasColumnName("CreatedAt")
+                  .HasDefaultValueSql("GETUTCDATE()")
+                  .IsRequired();
 
                 ap.Property(p => p.CreatedBy)
+                  .HasColumnName("CreatedBy")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedBy)
+                .HasColumnName("UpdatedBy");
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.UpdatedDate)
+                .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsActive)
+                .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });

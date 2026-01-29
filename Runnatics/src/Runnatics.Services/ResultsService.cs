@@ -82,7 +82,7 @@ namespace Runnatics.Services
 
                 // Get normalized readings grouped by participant
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-                var splitTimeRepo = _repository.GetRepository<SplitTime>();
+                var splitTimeRepo = _repository.GetRepository<SplitTimes>();
 
                 // Delete existing split times if force recalculation
                 if (request.ForceRecalculation)
@@ -124,7 +124,7 @@ namespace Runnatics.Services
 
                 response.TotalParticipants = participantReadings.Count;
 
-                var splitTimes = new List<SplitTime>();
+                var splitTimes = new List<SplitTimes>();
                 var checkpointSummaries = new Dictionary<int, CheckpointSummary>();
 
                 await _repository.BeginTransactionAsync();
@@ -157,7 +157,7 @@ namespace Runnatics.Services
                                 pace = timeInMinutes / checkpoint.DistanceFromStart;
                             }
 
-                            var splitTime = new SplitTime
+                            var splitTime = new SplitTimes
                             {
                                 EventId = decryptedEventId,
                                 ParticipantId = participantData.ParticipantId,
@@ -299,7 +299,7 @@ namespace Runnatics.Services
                 response.TotalParticipants = allParticipants.Count;
 
                 // Get split times at finish checkpoint
-                var splitTimeRepo = _repository.GetRepository<SplitTime>();
+                var splitTimeRepo = _repository.GetRepository<SplitTimes>();
                 var finishSplits = await splitTimeRepo.GetQuery(st =>
                     st.EventId == decryptedEventId &&
                     st.CheckpointId == finishCheckpoint.Id &&
@@ -663,7 +663,7 @@ namespace Runnatics.Services
 
         private async Task<List<SplitTimeInfo>> GetParticipantSplitsAsync(int participantId, int eventId)
         {
-            var splitTimeRepo = _repository.GetRepository<SplitTime>();
+            var splitTimeRepo = _repository.GetRepository<SplitTimes>();
             var splits = await splitTimeRepo.GetQuery(st =>
                 st.ParticipantId == participantId &&
                 st.EventId == eventId &&
@@ -678,9 +678,9 @@ namespace Runnatics.Services
                 CheckpointId = _encryptionService.Encrypt(s.CheckpointId.ToString()),
                 CheckpointName = s.Checkpoint.Name ?? $"CP{s.Checkpoint.DistanceFromStart}km",
                 DistanceKm = s.Checkpoint.DistanceFromStart,
-                SplitTimeMs = s.SplitTimeMs,
+                SplitTimeMs = s.SplitTimeMs ?? 0,
                 SegmentTimeMs = s.SegmentTime,
-                SplitTime = FormatTime(s.SplitTimeMs),
+                SplitTime = FormatTime(s.SplitTimeMs ?? 0),
                 SegmentTime = s.SegmentTime.HasValue ? FormatTime(s.SegmentTime.Value) : null,
                 Pace = s.Pace,
                 PaceFormatted = s.Pace.HasValue ? FormatPace(s.Pace.Value) : null,
@@ -692,7 +692,7 @@ namespace Runnatics.Services
 
         private async Task CalculateSplitTimeRankingsAsync(int eventId, int raceId, int userId)
         {
-            var splitTimeRepo = _repository.GetRepository<SplitTime>();
+            var splitTimeRepo = _repository.GetRepository<SplitTimes>();
             var checkpointRepo = _repository.GetRepository<Checkpoint>();
 
             var checkpoints = await checkpointRepo.GetQuery(c =>

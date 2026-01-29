@@ -160,60 +160,6 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Process uploaded RFID readings and link to participants
-        /// </summary>
-        [HttpPost("{eventId}/{raceId}/import/{uploadBatchId}/process")]
-        [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<ProcessRFIDImportResponse>), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> ProcessImport([FromBody] ProcessRFIDImportRequest request)
-        {
-            if (string.IsNullOrEmpty(request.EventId) || 
-                string.IsNullOrEmpty(request.RaceId) || 
-                string.IsNullOrEmpty(request.UploadBatchId))  // Changed from ImportBatchId
-            {
-                return BadRequest(new { error = "Invalid input provided. Event ID, Race ID, and Upload Batch ID are required." });
-            }
-
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(new
-                {
-                    error = "Validation failed",
-                    details = ModelState.Values
-                        .SelectMany(v => v.Errors)
-                        .Select(e => e.ErrorMessage)
-                        .ToList()
-                });
-            }
-
-            var response = new ResponseBase<ProcessRFIDImportResponse>();
-            var result = await _service.ProcessRFIDStagingDataAsync(request);
-
-            if (_service.HasError)
-            {
-                response.Error = new ResponseBase<ProcessRFIDImportResponse>.ErrorData
-                {
-                    Message = _service.ErrorMessage
-                };
-
-                if (_service.ErrorMessage.Contains("not found"))
-                {
-                    return NotFound(response);
-                }
-
-                return StatusCode((int)HttpStatusCode.InternalServerError, response);
-            }
-
-            response.Message = result;
-            return Ok(response);
-        }
-
-        /// <summary>
         /// Complete RFID processing workflow: Process all pending batches, deduplicate readings, and calculate results.
         /// This is a convenience endpoint that runs all three phases in sequence for maximum efficiency.
         /// </summary>
@@ -267,79 +213,12 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Deduplicate RFID readings and populate normalized reading table
-        /// </summary>
-        [HttpPost("{eventId}/{raceId}/deduplicate")]
-        [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<DeduplicationResponse>), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Deduplicate(string eventId, string raceId)
-        {
-            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
-            {
-                return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
-            }
-
-            var response = new ResponseBase<DeduplicationResponse>();
-            var result = await _service.DeduplicateAndNormalizeAsync(eventId, raceId);
-
-            if (_service.HasError)
-            {
-                response.Error = new ResponseBase<DeduplicationResponse>.ErrorData
-                {
-                    Message = _service.ErrorMessage
-                };
-                return StatusCode((int)HttpStatusCode.InternalServerError, response);
-            }
-
-            response.Message = result;
-            return Ok(response);
-        }
-
-        /// <summary>
-        /// Calculate race results from normalized readings and insert into Results table.
-        /// Calculates overall, gender, and category rankings.
-        /// </summary>
-        [HttpPost("{eventId}/{raceId}/calculate-results")]
-        [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<CalculateResultsResponse>), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> CalculateResults(string eventId, string raceId)
-        {
-            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
-            {
-                return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
-            }
-
-            var response = new ResponseBase<CalculateResultsResponse>();
-            var result = await _service.CalculateRaceResultsAsync(eventId, raceId);
-
-            if (_service.HasError)
-            {
-                response.Error = new ResponseBase<CalculateResultsResponse>.ErrorData
-                {
-                    Message = _service.ErrorMessage
-                };
-                return StatusCode((int)HttpStatusCode.InternalServerError, response);
-            }
-
-            response.Message = result;
-            return Ok(response);
-        }
-
-        /// <summary>
         /// Clears all processed RFID data (results, normalized readings, assignments) for a race.
         /// Optionally preserves raw uploads for reprocessing.
         /// WARNING: This cannot be undone. Use with caution.
         /// </summary>
         /// <param name="keepUploads">If true (default), preserves raw upload batches. If false, deletes everything.</param>
-        [HttpDelete("{eventId}/{raceId}/processed-data")]
+        [HttpDelete("{eventId}/{raceId}/clear-processed-data")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<ClearDataResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -373,39 +252,31 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Reprocesses specific participants after manual data corrections.
-        /// Clears their processed data and recalculates results from raw readings.
+        /// Assign checkpoints to readings for loop races where a single device is used at multiple checkpoints.
+        /// Readings are assigned to checkpoints based on their time sequence per participant.
         /// </summary>
-        [HttpPost("{eventId}/{raceId}/participants/reprocess")]
+        [HttpPost("{eventId}/{raceId}/assign-checkpoints")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<ReprocessParticipantsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ResponseBase<AssignCheckpointsResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> ReprocessParticipants(
-            string eventId,
-            string raceId,
-            [FromBody] string[] participantIds)
+        public async Task<IActionResult> AssignCheckpoints(string eventId, string raceId)
         {
             if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
             {
-                return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
+                return BadRequest(new { error = "Event ID and Race ID are required" });
             }
 
-            if (participantIds == null || participantIds.Length == 0)
-            {
-                return BadRequest(new { error = "At least one participant ID is required." });
-            }
-
-            var response = new ResponseBase<ReprocessParticipantsResponse>();
-            var result = await _service.ReprocessParticipantsAsync(eventId, raceId, participantIds);
+            var response = new ResponseBase<AssignCheckpointsResponse>();
+            var result = await _service.AssignCheckpointsForLoopRaceAsync(eventId, raceId);
 
             if (_service.HasError || result.Status == "Failed")
             {
-                response.Error = new ResponseBase<ReprocessParticipantsResponse>.ErrorData
+                response.Error = new ResponseBase<AssignCheckpointsResponse>.ErrorData
                 {
-                    Message = _service.ErrorMessage ?? result.Message
+                    Message = _service.ErrorMessage ?? result.ErrorMessage
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
@@ -415,34 +286,31 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Reprocesses a single upload batch after fixing device-to-checkpoint mappings.
-        /// Clears processed data for this batch only, then reprocesses it.
+        /// Create split times from normalized readings.
+        /// Calculates cumulative time from race start and segment time from previous checkpoint.
         /// </summary>
-        [HttpPost("{eventId}/{raceId}/batches/{uploadBatchId}/reprocess")]
+        [HttpPost("{eventId}/{raceId}/create-split-times")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<ProcessRFIDImportResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ResponseBase<CreateSplitTimesResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> ReprocessBatch(
-            string eventId,
-            string raceId,
-            string uploadBatchId)
+        public async Task<IActionResult> CreateSplitTimes(string eventId, string raceId)
         {
-            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(uploadBatchId))
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
             {
-                return BadRequest(new { error = "Invalid input provided. Event ID, Race ID, and Batch ID are required." });
+                return BadRequest(new { error = "Event ID and Race ID are required" });
             }
 
-            var response = new ResponseBase<ProcessRFIDImportResponse>();
-            var result = await _service.ReprocessBatchAsync(eventId, raceId, uploadBatchId);
+            var response = new ResponseBase<CreateSplitTimesResponse>();
+            var result = await _service.CreateSplitTimesFromNormalizedReadingsAsync(eventId, raceId);
 
             if (_service.HasError || result.Status == "Failed")
             {
-                response.Error = new ResponseBase<ProcessRFIDImportResponse>.ErrorData
+                response.Error = new ResponseBase<CreateSplitTimesResponse>.ErrorData
                 {
-                    Message = _service.ErrorMessage ?? "Batch reprocessing failed"
+                    Message = _service.ErrorMessage ?? result.ErrorMessage
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }

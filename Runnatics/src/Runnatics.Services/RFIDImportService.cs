@@ -1967,8 +1967,8 @@ namespace Runnatics.Services
                 {
                     if (readings.Count > 0)
                     {
-                        // RawRFIDReading.Id is long, not int
-                        var readingIdsToDelete = readings.Select(r => (int)r.Id).ToList();
+                        // Use long overload for RawRFIDReading.Id
+                        var readingIdsToDelete = readings.Select(r => r.Id).ToList();
                         await readingRepo.DeleteRangeAsync(readingIdsToDelete);
                     }
                     if (batches.Count > 0)

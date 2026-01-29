@@ -20,6 +20,7 @@ public interface IGenericRepository<T> where T : class
     Task<List<T>> AddRangeAsync(List<T> entities);
     Task<List<T>> UpdateRangeAsync(List<T> entities);
     Task DeleteRangeAsync(List<int> ids);
+    Task DeleteRangeAsync(List<long> ids);
 
     IQueryable<T> GetQuery(Expression<Func<T, bool>>? filter = null,
                         bool ignoreQueryFilters = false,

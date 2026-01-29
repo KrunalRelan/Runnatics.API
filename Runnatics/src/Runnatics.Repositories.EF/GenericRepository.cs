@@ -44,12 +44,15 @@ namespace Runnatics.Repositories.EF
 
         public async Task DeleteRangeAsync(List<int> ids)
         {
-            var keyProperty = context.Model.FindEntityType(typeof(T))?.FindPrimaryKey()?.Properties.FirstOrDefault();
-            if (keyProperty == null)
-                throw new InvalidOperationException("No primary key defined for entity.");
+            // Use EF.Property to avoid reflection in LINQ queries
+            var entities = await _dbSet.Where(e => ids.Contains(EF.Property<int>(e, "Id"))).ToListAsync();
+            _dbSet.RemoveRange(entities);
+        }
 
-            var entities = await _dbSet.Where(e =>
-                ids.Contains((int)typeof(T).GetProperty(keyProperty.Name)!.GetValue(e)!)).ToListAsync();
+        public async Task DeleteRangeAsync(List<long> ids)
+        {
+            // Overload for entities with long IDs (like RawRFIDReading)
+            var entities = await _dbSet.Where(e => ids.Contains(EF.Property<long>(e, "Id"))).ToListAsync();
             _dbSet.RemoveRange(entities);
         }
 

@@ -1263,45 +1263,160 @@ namespace Runnatics.Services
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
                 var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
 
-                // First, get already normalized reading IDs to filter them out early
-                var existingNormalizedReadIds = await normalizedRepo.GetQuery()
+                // **PARENT-CHILD CHECKPOINT MERGING**: Load all checkpoints to build parent-child mapping
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var allCheckpoints = await checkpointRepo.GetQuery(cp =>
+                    cp.RaceId == decryptedRaceId &&
+                    cp.EventId == decryptedEventId &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
                     .AsNoTracking()
-                    .Select(n => n.RawReadId)
                     .ToListAsync();
 
-                // Optimized query: AsNoTracking for read-only, removed unnecessary Includes, filter early
-                var rawReadings = await readingRepo.GetQuery(r =>
+                // Build mapping: Child DeviceId -> Parent CheckpointId
+                // If a checkpoint has ParentDeviceId > 0, it's a child device and readings should be merged to parent
+                var deviceRepo = _repository.GetRepository<Device>();
+                var allDevices = await deviceRepo.GetQuery(d =>
+                    d.AuditProperties.IsActive &&
+                    !d.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Create Device.Id -> Device mapping for lookup
+                var deviceById = allDevices.ToDictionary(d => d.Id, d => d);
+
+                // Build child checkpoint -> parent checkpoint mapping
+                // Key: Child Checkpoint ID, Value: Parent Checkpoint ID
+                var childToParentCheckpointMap = new Dictionary<int, int>();
+
+                foreach (var checkpoint in allCheckpoints)
+                {
+                    // If ParentDeviceId is set and > 0, this checkpoint uses a child device
+                    if (checkpoint.ParentDeviceId.HasValue && checkpoint.ParentDeviceId.Value > 0)
+                    {
+                        // Find the parent checkpoint that has DeviceId == this checkpoint's ParentDeviceId
+                        var parentCheckpoint = allCheckpoints.FirstOrDefault(cp =>
+                            cp.DeviceId == checkpoint.ParentDeviceId.Value &&
+                            Math.Abs(cp.DistanceFromStart - checkpoint.DistanceFromStart) < 0.001m); // Same distance
+
+                        if (parentCheckpoint != null)
+                        {
+                            childToParentCheckpointMap[checkpoint.Id] = parentCheckpoint.Id;
+                            _logger.LogInformation(
+                                "Mapping child checkpoint {ChildId} (Device {ChildDevice}) to parent checkpoint {ParentId} '{ParentName}' (Device {ParentDevice}) at {Distance} KM",
+                                checkpoint.Id, checkpoint.DeviceId, parentCheckpoint.Id, parentCheckpoint.Name,
+                                parentCheckpoint.DeviceId, parentCheckpoint.DistanceFromStart);
+                        }
+                    }
+                }
+
+                _logger.LogInformation("Built parent-child checkpoint mapping: {Count} child checkpoints mapped to parents",
+                    childToParentCheckpointMap.Count);
+
+                // First, get already normalized reading IDs for THIS race to filter them out early
+                // Only filter by non-null RawReadId values (manual entries have null RawReadId)
+                var existingNormalizedReadIds = await normalizedRepo.GetQuery(n =>
+                        n.EventId == decryptedEventId &&
+                        n.RawReadId.HasValue &&
+                        n.AuditProperties.IsActive &&
+                        !n.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(n => n.RawReadId!.Value)
+                    .ToListAsync();
+
+                _logger.LogInformation("Found {Count} existing normalized readings for event {EventId}", 
+                    existingNormalizedReadIds.Count, decryptedEventId);
+
+                // Get active chip assignments for this race with their EPCs
+                var chipAssignmentsWithEpc = await chipAssignmentRepo.GetQuery(ca =>
+                        ca.Participant.RaceId == decryptedRaceId &&
+                        !ca.UnassignedAt.HasValue &&
+                        ca.AuditProperties.IsActive &&
+                        !ca.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(ca => new { ca.ParticipantId, EPC = ca.Chip.EPC })
+                    .ToListAsync();
+
+                _logger.LogInformation("Found {Count} active chip assignments for race {RaceId}", 
+                    chipAssignmentsWithEpc.Count, decryptedRaceId);
+
+                // Create a lookup from EPC to ParticipantId
+                var epcToParticipant = chipAssignmentsWithEpc
+                    .GroupBy(ca => ca.EPC)
+                    .ToDictionary(g => g.Key, g => g.First().ParticipantId);
+
+                // Get reading checkpoint assignments that are active
+                var activeAssignments = await assignmentRepo.GetQuery(a =>
+                        a.AuditProperties.IsActive &&
+                        !a.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(a => new { a.ReadingId, a.CheckpointId })
+                    .ToListAsync();
+
+                _logger.LogInformation("Found {Count} active checkpoint assignments", activeAssignments.Count);
+
+                // Create a lookup from ReadingId to CheckpointId
+                var readingToCheckpoint = activeAssignments.ToDictionary(a => a.ReadingId, a => a.CheckpointId);
+
+                // Get all active EPCs to filter raw readings
+                var activeEpcs = epcToParticipant.Keys.ToHashSet();
+
+                // Get raw readings that haven't been normalized yet
+                var rawReadingsQuery = await readingRepo.GetQuery(r =>
                         r.ProcessResult == "Success" &&
                         r.AuditProperties.IsActive &&
                         !r.AuditProperties.IsDeleted &&
-                        !existingNormalizedReadIds.Contains(r.Id)) // Filter early
+                        activeEpcs.Contains(r.Epc)) // Only readings for assigned chips
                     .AsNoTracking()
-                    .Join(
-                        assignmentRepo.GetQuery().AsNoTracking(),
-                        r => r.Id,
-                        a => a.ReadingId,
-                        (r, a) => new { Reading = r, CheckpointId = a.CheckpointId })
-                    .Join(
-                        chipAssignmentRepo.GetQuery(ca =>
-                            ca.Participant.RaceId == decryptedRaceId &&
-                            !ca.UnassignedAt.HasValue)
-                            .AsNoTracking()
-                            .Select(ca => new { ca.ParticipantId, ca.Chip.EPC }), // Project only needed fields
-                        ra => ra.Reading.Epc,
-                        ca => ca.EPC,
-                        (ra, ca) => new
-                        {
-                            Reading = ra.Reading,
-                            CheckpointId = ra.CheckpointId,
-                            ParticipantId = ca.ParticipantId,
-                            RawReadId = ra.Reading.Id
-                        })
                     .ToListAsync();
+
+                _logger.LogInformation("Found {Count} raw readings with matching EPCs", rawReadingsQuery.Count);
+
+                // Filter and join in memory for better control
+                var rawReadings = rawReadingsQuery
+                    .Where(r => !existingNormalizedReadIds.Contains(r.Id)) // Exclude already normalized
+                    .Where(r => readingToCheckpoint.ContainsKey(r.Id)) // Must have checkpoint assignment
+                    .Select(r => new
+                    {
+                        Reading = r,
+                        CheckpointId = readingToCheckpoint[r.Id],
+                        ParticipantId = epcToParticipant[r.Epc],
+                        RawReadId = r.Id
+                    })
+                    .ToList();
+
+                _logger.LogInformation("After filtering: {Count} raw readings to process (excluded {Excluded} already normalized, {NoCheckpoint} without checkpoint assignment)",
+                    rawReadings.Count,
+                    rawReadingsQuery.Count(r => existingNormalizedReadIds.Contains(r.Id)),
+                    rawReadingsQuery.Count(r => !readingToCheckpoint.ContainsKey(r.Id)));
 
                 response.TotalRawReadings = rawReadings.Count;
 
-                // Group by Participant + Checkpoint
-                var grouped = rawReadings
+                // **MERGE CHILD TO PARENT**: Map child checkpoint readings to parent checkpoint
+                // This ensures readings from child devices are grouped with parent device readings
+                var readingsWithMergedCheckpoints = rawReadings.Select(r => new
+                {
+                    r.Reading,
+                    // If this checkpoint is a child, use the parent checkpoint ID instead
+                    CheckpointId = childToParentCheckpointMap.TryGetValue(r.CheckpointId, out var parentId) 
+                        ? parentId 
+                        : r.CheckpointId,
+                    OriginalCheckpointId = r.CheckpointId,
+                    r.ParticipantId,
+                    r.RawReadId
+                }).ToList();
+
+                // Log how many readings were remapped
+                var remappedCount = readingsWithMergedCheckpoints.Count(r => r.CheckpointId != r.OriginalCheckpointId);
+                if (remappedCount > 0)
+                {
+                    _logger.LogInformation(
+                        "Remapped {Count} readings from child checkpoints to parent checkpoints for merging",
+                        remappedCount);
+                }
+
+                // Group by Participant + (Merged) Checkpoint - this now merges parent and child device readings
+                var grouped = readingsWithMergedCheckpoints
                     .GroupBy(r => new { r.ParticipantId, r.CheckpointId })
                     .ToList();
 
@@ -1327,20 +1442,28 @@ namespace Runnatics.Services
                 var normalizedReadings = grouped.Select(group =>
                 {
                     // Get the best reading (earliest timestamp, strongest RSSI)
+                    // This now includes readings from both parent and child devices merged together
                     var bestReading = group
                         .OrderBy(r => r.Reading.TimestampMs)
                         .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
                         .First();
 
-                    // Log if there are multiple readings for same participant/checkpoint (duplicates)
+                    // Log if there are multiple readings for same participant/checkpoint (duplicates or parent-child merged)
                     if (group.Count() > 1)
                     {
                         var timeSpread = group.Max(r => r.Reading.TimestampMs) - group.Min(r => r.Reading.TimestampMs);
                         var timeSpreadSeconds = timeSpread / 1000.0;
+
+                        // Check if readings came from different checkpoints (parent-child merge)
+                        var distinctOriginalCheckpoints = group.Select(r => r.OriginalCheckpointId).Distinct().Count();
+                        var mergeInfo = distinctOriginalCheckpoints > 1 
+                            ? $"(merged from {distinctOriginalCheckpoints} devices) " 
+                            : "";
+
                         _logger.LogDebug(
-                            "Participant {ParticipantId} at Checkpoint {CheckpointId}: {Count} duplicate readings over {Seconds:F1}s. " +
+                            "Participant {ParticipantId} at Checkpoint {CheckpointId}: {Count} readings {MergeInfo}over {Seconds:F1}s. " +
                             "Using earliest reading at {Time}",
-                            group.Key.ParticipantId, group.Key.CheckpointId, group.Count(), timeSpreadSeconds,
+                            group.Key.ParticipantId, group.Key.CheckpointId, group.Count(), mergeInfo, timeSpreadSeconds,
                             bestReading.Reading.ReadTimeUtc.ToString("HH:mm:ss"));
                     }
 
@@ -1351,12 +1474,13 @@ namespace Runnatics.Services
                         gunTime = (long)(bestReading.Reading.ReadTimeUtc - raceStartTime.Value).TotalMilliseconds;
                     }
 
-                    // Create normalized reading
+                    // Create normalized reading - use group.Key.CheckpointId which is the parent checkpoint
+                    // (after merging child to parent), not bestReading.CheckpointId
                     return new ReadNormalized
                     {
                         EventId = decryptedEventId,
                         ParticipantId = bestReading.ParticipantId,
-                        CheckpointId = bestReading.CheckpointId,
+                        CheckpointId = group.Key.CheckpointId, // Use merged (parent) checkpoint ID
                         RawReadId = bestReading.Reading.Id,
                         ChipTime = bestReading.Reading.ReadTimeUtc,
                         GunTime = gunTime,

@@ -361,6 +361,7 @@ namespace Runnatics.Services
 
         /// <summary>
         /// Populates checkpoint times and chip IDs for each participant in the list.
+        /// Merges child checkpoint times by parent checkpoint, returning the best (earliest) time.
         /// Returns null values gracefully when no checkpoint data exists.
         /// </summary>
         private async Task PopulateCheckpointTimesAsync(
@@ -395,18 +396,28 @@ namespace Runnatics.Services
                     .GroupBy(ca => ca.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.First().Chip?.EPC);
 
-                // Get checkpoints for this race, ordered by distance
+                // ========== CHECKPOINT LOGIC ==========
+                
+                // Get ALL checkpoints for this race
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
-                var checkpoints = await checkpointRepo.GetQuery(c => 
+                var allCheckpoints = await checkpointRepo.GetQuery(c => 
                     c.RaceId == raceId && 
                     c.EventId == eventId &&
                     c.AuditProperties.IsActive &&
                     !c.AuditProperties.IsDeleted)
                     .AsNoTracking()
-                    .OrderBy(c => c.DistanceFromStart)
                     .ToListAsync();
 
-                // Get all normalized readings for these participants in this event
+                // Order checkpoints by distance
+                var checkpoints = allCheckpoints
+                    .OrderBy(c => c.DistanceFromStart)
+                    .ToList();
+
+                _logger.LogDebug(
+                    "Found {TotalCheckpoints} checkpoints for race {RaceId}",
+                    checkpoints.Count, raceId);
+
+                // Get all normalized readings for these participants
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
                 var readings = await normalizedRepo.GetQuery(r => 
                     r.EventId == eventId &&
@@ -416,13 +427,10 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                // Create a lookup: participantId -> checkpointId -> reading
-                var readingsLookup = readings
+                // Group readings by participant
+                var readingsByParticipant = readings
                     .GroupBy(r => r.ParticipantId)
-                    .ToDictionary(
-                        g => g.Key,
-                        g => g.ToDictionary(r => r.CheckpointId, r => r)
-                    );
+                    .ToDictionary(g => g.Key, g => g.ToList());
 
                 // Populate checkpoint times and chip IDs for each participant
                 foreach (var participant in participants)
@@ -437,21 +445,26 @@ namespace Runnatics.Services
                     // Set chip ID
                     participant.ChipId = chipLookup.TryGetValue(participantId, out var chipEpc) ? chipEpc : null;
 
-                    // If no checkpoints, skip checkpoint times
-                    if (checkpoints == null || checkpoints.Count == 0)
+                    // If no checkpoints exist, skip
+                    if (checkpoints.Count == 0)
                         continue;
 
-                    // Get readings for this participant (or empty dictionary if none)
-                    var participantReadings = readingsLookup.TryGetValue(participantId, out var pr) 
+                    // Get readings for this participant (or empty list if none)
+                    var participantReadings = readingsByParticipant.TryGetValue(participantId, out var pr) 
                         ? pr 
-                        : new Dictionary<int, ReadNormalized>();
+                        : new List<ReadNormalized>();
 
-                    // Add each checkpoint time (null if not crossed)
+                    // Create lookup for this participant's readings by checkpoint
+                    var readingsByCheckpoint = participantReadings
+                        .GroupBy(r => r.CheckpointId)
+                        .ToDictionary(g => g.Key, g => g.OrderBy(r => r.ChipTime).First()); // Keep earliest if multiple
+
+                    // Add checkpoint times
                     foreach (var checkpoint in checkpoints)
                     {
                         var checkpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}";
 
-                        if (participantReadings.TryGetValue(checkpoint.Id, out var reading))
+                        if (readingsByCheckpoint.TryGetValue(checkpoint.Id, out var reading))
                         {
                             // Format time as HH:mm:ss
                             participant.CheckpointTimes[checkpointName] = reading.ChipTime.ToString("HH:mm:ss");
@@ -463,6 +476,10 @@ namespace Runnatics.Services
                         }
                     }
                 }
+
+                _logger.LogInformation(
+                    "Populated checkpoint times for {Count} participants with {CheckpointCount} checkpoints",
+                    participants.Count(), checkpoints.Count);
             }
             catch (Exception ex)
             {

@@ -2117,11 +2117,57 @@ namespace Runnatics.Services
                 
                 var processResult = await ProcessCompleteWorkflowAsync(eventId, raceId);
                 
+                // CRITICAL FIX: After reprocessing, recalculate ALL rankings
+                // This ensures rankings are correct across all participants
+                _logger.LogInformation("Recalculating rankings for all participants after reprocessing...");
+                
+                await _repository.BeginTransactionAsync();
+                try
+                {
+                    // Recalculate overall rankings for entire race
+                    var allResults = await resultsRepo.GetQuery(r =>
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == "Finished")
+                        .OrderBy(r => r.GunTime ?? long.MaxValue)
+                        .ToListAsync();
+                    
+                    var rankUpdates = allResults.Select((result, index) =>
+                    {
+                        result.OverallRank = index + 1;
+                        result.AuditProperties.UpdatedBy = userId;
+                        result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        return result;
+                    }).ToList();
+                    
+                    if (rankUpdates.Count > 0)
+                    {
+                        await resultsRepo.BulkUpdateAsync(rankUpdates);
+                        _logger.LogInformation("Recalculated overall rankings for {Count} participants", rankUpdates.Count);
+                    }
+                    
+                    // Recalculate gender rankings for entire race
+                    await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+                    
+                    // Recalculate category rankings for entire race
+                    var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+                    
+                    _logger.LogInformation("Recalculated rankings across {Categories} categories", categoriesProcessed);
+                    
+                    await _repository.SaveChangesAsync();
+                    await _repository.CommitTransactionAsync();
+                }
+                catch
+                {
+                    await _repository.RollbackTransactionAsync();
+                    throw;
+                }
+                
                 response.Status = processResult.Status;
                 response.ParticipantsReprocessed = participants.Count;
                 response.ReadingsCreated = processResult.TotalNormalizedReadings;
                 response.ResultsCreated = processResult.ResultsCreated + processResult.ResultsUpdated;
-                response.Message = $"Successfully reprocessed {participants.Count} participants";
+                response.Message = $"Successfully reprocessed {participants.Count} participants and recalculated all rankings";
                 
                 response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
                 

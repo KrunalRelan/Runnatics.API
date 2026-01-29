@@ -371,12 +371,71 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                // Get device ID
-                var deviceId = request.DeviceId ?? "Unknown";
-                int? checkpointId = null;
-                if (!string.IsNullOrEmpty(request.ExpectedCheckpointId))
+                // Extract device serial from filename (e.g., "0016251292ae" from "2026-01-25_0016251292ae_(box15).db")
+                var deviceSerial = ExtractDeviceNameFromFilename(request.File.FileName);
+                if (string.IsNullOrEmpty(deviceSerial))
                 {
-                    checkpointId = Convert.ToInt32(_encryptionService.Decrypt(request.ExpectedCheckpointId));
+                    deviceSerial = request.DeviceId ?? "Unknown";
+                }
+
+                // Look up the Device record by serial number to find associated checkpoint(s)
+                var deviceRepo = _repository.GetRepository<Device>();
+                var device = await deviceRepo.GetQuery(d =>
+                    d.DeviceId == deviceSerial &&
+                    d.AuditProperties.IsActive &&
+                    !d.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                int? checkpointId = null;
+                bool isLoopRace = false;
+                if (device != null)
+                {
+                    // Find ALL checkpoints mapped to this device (for loop/lap races)
+                    var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                    var checkpoints = await checkpointRepo.GetQuery(cp =>
+                        cp.DeviceId == device.Id &&
+                        cp.RaceId == decryptedRaceId &&
+                        cp.EventId == decryptedEventId &&
+                        cp.AuditProperties.IsActive &&
+                        !cp.AuditProperties.IsDeleted)
+                        .OrderBy(cp => cp.DistanceFromStart)
+                        .AsNoTracking()
+                        .ToListAsync();
+
+                    if (checkpoints.Count == 0)
+                    {
+                        _logger.LogWarning(
+                            "Device '{DeviceSerial}' found but no checkpoint assigned for Race {RaceId}. " +
+                            "Readings will be uploaded but not assigned to a checkpoint.",
+                            deviceSerial, decryptedRaceId);
+                    }
+                    else if (checkpoints.Count == 1)
+                    {
+                        // Simple case: Single checkpoint per device
+                        checkpointId = checkpoints[0].Id;
+                        _logger.LogInformation(
+                            "Mapped device '{DeviceSerial}' to checkpoint '{CheckpointName}' (ID: {CheckpointId}) at {Distance} KM",
+                            deviceSerial, checkpoints[0].Name, checkpoints[0].Id, checkpoints[0].DistanceFromStart);
+                    }
+                    else
+                    {
+                        // Loop/Lap race: Multiple checkpoints use the same device
+                        isLoopRace = true;
+                        checkpointId = null; // Will be assigned during processing based on timing
+                        _logger.LogInformation(
+                            "Device '{DeviceSerial}' mapped to {Count} checkpoints (LOOP RACE detected): {Checkpoints}. " +
+                            "Readings will be assigned based on participant timing sequence.",
+                            deviceSerial, checkpoints.Count,
+                            string.Join(", ", checkpoints.Select(cp => $"{cp.Name} ({cp.DistanceFromStart}KM)")));
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Device with serial '{DeviceSerial}' not found in database. " +
+                        "Readings will be uploaded but device-to-checkpoint mapping cannot be applied.",
+                        deviceSerial);
                 }
 
                 // Create batch record
@@ -384,7 +443,7 @@ namespace Runnatics.Services
                 {
                     RaceId = decryptedRaceId,
                     EventId = decryptedEventId,
-                    DeviceId = deviceId,
+                    DeviceId = deviceSerial,
                     ExpectedCheckpointId = checkpointId,
                     OriginalFileName = request.File.FileName,
                     StoredFilePath = tempFilePath,
@@ -412,7 +471,7 @@ namespace Runnatics.Services
                 var readings = await ParseSqliteFileAsync(
                     tempFilePath,
                     batch.Id,
-                    deviceId,
+                    deviceSerial,
                     request.TimeZoneId,
                     false // Default: timestamps from reader are in local time
                 );
@@ -642,6 +701,65 @@ namespace Runnatics.Services
                     return response;
                 }
 
+                // Log device and checkpoint mapping for this batch
+                if (importBatch.ExpectedCheckpointId.HasValue)
+                {
+                    _logger.LogInformation(
+                        "Processing batch {BatchId} from device '{DeviceId}' mapped to checkpoint {CheckpointId}",
+                        importBatch.Id, importBatch.DeviceId, importBatch.ExpectedCheckpointId.Value);
+                }
+                else
+                {
+                    // Check if this is a loop race scenario (device mapped to multiple checkpoints)
+                    var deviceRepo = _repository.GetRepository<Device>();
+                    var device = await deviceRepo.GetQuery(d =>
+                        d.DeviceId == importBatch.DeviceId &&
+                        d.AuditProperties.IsActive &&
+                        !d.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+
+                    if (device != null)
+                    {
+                        var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                        var checkpoints = await checkpointRepo.GetQuery(cp =>
+                            cp.DeviceId == device.Id &&
+                            cp.RaceId == decryptedRaceId &&
+                            cp.EventId == decryptedEventId &&
+                            cp.AuditProperties.IsActive &&
+                            !cp.AuditProperties.IsDeleted)
+                            .OrderBy(cp => cp.DistanceFromStart)
+                            .AsNoTracking()
+                            .ToListAsync();
+
+                        if (checkpoints.Count > 1)
+                        {
+                            _logger.LogInformation(
+                                "Processing batch {BatchId} from device '{DeviceId}' in LOOP RACE mode. " +
+                                "Device mapped to {Count} checkpoints: {Checkpoints}. " +
+                                "Will assign readings based on participant timing sequence.",
+                                importBatch.Id, importBatch.DeviceId ?? "Unknown", checkpoints.Count,
+                                string.Join(", ", checkpoints.Select(cp => $"{cp.Name} ({cp.DistanceFromStart}KM)")));
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "Processing batch {BatchId} from device '{DeviceId}' with NO checkpoint mapping. " +
+                                "Readings will be processed but not assigned to a checkpoint. " +
+                                "Please configure Device.DeviceId to Checkpoint.DeviceId mapping in database.",
+                                importBatch.Id, importBatch.DeviceId ?? "Unknown");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Processing batch {BatchId} from device '{DeviceId}' with NO checkpoint mapping. " +
+                            "Readings will be processed but not assigned to a checkpoint. " +
+                            "Please configure Device.DeviceId to Checkpoint.DeviceId mapping in database.",
+                            importBatch.Id, importBatch.DeviceId ?? "Unknown");
+                    }
+                }
+
                 // Get pending readings
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
                 var readings = await readingRepo.GetQuery(r =>
@@ -689,7 +807,39 @@ namespace Runnatics.Services
 
                 try
                 {
-                    // Check existing assignments in bulk if checkpoint is specified
+                    // **LOOP RACE HANDLING**: Check if device has multiple checkpoints
+                    bool isLoopRace = false;
+                    List<Checkpoint> deviceCheckpoints = new List<Checkpoint>();
+                    
+                    if (!importBatch.ExpectedCheckpointId.HasValue)
+                    {
+                        // Get device and check for multiple checkpoints
+                        var deviceRepo = _repository.GetRepository<Device>();
+                        var device = await deviceRepo.GetQuery(d =>
+                            d.DeviceId == importBatch.DeviceId &&
+                            d.AuditProperties.IsActive &&
+                            !d.AuditProperties.IsDeleted)
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync();
+
+                        if (device != null)
+                        {
+                            var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                            deviceCheckpoints = await checkpointRepo.GetQuery(cp =>
+                                cp.DeviceId == device.Id &&
+                                cp.RaceId == decryptedRaceId &&
+                                cp.EventId == decryptedEventId &&
+                                cp.AuditProperties.IsActive &&
+                                !cp.AuditProperties.IsDeleted)
+                                .OrderBy(cp => cp.DistanceFromStart)
+                                .AsNoTracking()
+                                .ToListAsync();
+
+                            isLoopRace = deviceCheckpoints.Count > 1;
+                        }
+                    }
+
+                    // Check existing assignments in bulk
                     HashSet<long> existingAssignmentIds = new HashSet<long>();
                     if (importBatch.ExpectedCheckpointId.HasValue)
                     {
@@ -702,6 +852,40 @@ namespace Runnatics.Services
                             .ToListAsync();
 
                         existingAssignmentIds = new HashSet<long>(existing);
+                    }
+
+                    // **GROUP READINGS BY PARTICIPANT** for loop race processing
+                    Dictionary<int, List<RawRFIDReading>> readingsByParticipant = new Dictionary<int, List<RawRFIDReading>>();
+                    if (isLoopRace)
+                    {
+                        // Get EPC->Participant mapping first
+                        var epcToParticipantMap = participants.ToDictionary(
+                            kvp => kvp.Key, 
+                            kvp => kvp.Value.Id
+                        );
+
+                        // Group readings by participant
+                        foreach (var reading in readings)
+                        {
+                            if (epcToParticipantMap.TryGetValue(reading.Epc, out var participantId))
+                            {
+                                if (!readingsByParticipant.ContainsKey(participantId))
+                                {
+                                    readingsByParticipant[participantId] = new List<RawRFIDReading>();
+                                }
+                                readingsByParticipant[participantId].Add(reading);
+                            }
+                        }
+
+                        // Sort each participant's readings by timestamp
+                        foreach (var participantReadings in readingsByParticipant.Values)
+                        {
+                            participantReadings.Sort((a, b) => a.TimestampMs.CompareTo(b.TimestampMs));
+                        }
+
+                        _logger.LogInformation(
+                            "Loop race mode: Grouped {TotalReadings} readings into {ParticipantCount} participants",
+                            readings.Count, readingsByParticipant.Count);
                     }
 
                     // Process all readings in one pass - no nested queries
@@ -722,14 +906,43 @@ namespace Runnatics.Services
                                 reading.ProcessResult = "Success";
                                 successCount++;
 
-                                // If checkpoint is specified in batch, create assignment if it doesn't exist
-                                if (importBatch.ExpectedCheckpointId.HasValue && 
-                                    !existingAssignmentIds.Contains(reading.Id))
+                                // **DETERMINE CHECKPOINT ASSIGNMENT**
+                                int? assignedCheckpointId = null;
+
+                                if (isLoopRace && deviceCheckpoints.Count > 0)
+                                {
+                                    // **LOOP RACE MODE**: Assign based on reading sequence
+                                    var participantReadings = readingsByParticipant[participant.Id];
+                                    int readingIndex = participantReadings.IndexOf(reading);
+                                    
+                                    if (readingIndex >= 0 && readingIndex < deviceCheckpoints.Count)
+                                    {
+                                        assignedCheckpointId = deviceCheckpoints[readingIndex].Id;
+                                        _logger.LogDebug(
+                                            "Loop race: Participant {ParticipantId} reading #{Index} at {Time} assigned to checkpoint '{CheckpointName}' ({Distance}KM)",
+                                            participant.Id, readingIndex + 1, reading.ReadTimeUtc.ToString("HH:mm:ss"),
+                                            deviceCheckpoints[readingIndex].Name, deviceCheckpoints[readingIndex].DistanceFromStart);
+                                    }
+                                    else
+                                    {
+                                        _logger.LogWarning(
+                                            "Loop race: Participant {ParticipantId} has extra reading #{Index} beyond {MaxCheckpoints} checkpoints - skipping assignment",
+                                            participant.Id, readingIndex + 1, deviceCheckpoints.Count);
+                                    }
+                                }
+                                else if (importBatch.ExpectedCheckpointId.HasValue)
+                                {
+                                    // **SIMPLE MODE**: Single checkpoint assignment from batch
+                                    assignedCheckpointId = importBatch.ExpectedCheckpointId.Value;
+                                }
+
+                                // Create checkpoint assignment if determined
+                                if (assignedCheckpointId.HasValue && !existingAssignmentIds.Contains(reading.Id))
                                 {
                                     assignmentsToAdd.Add(new ReadingCheckpointAssignment
                                     {
                                         ReadingId = reading.Id,
-                                        CheckpointId = importBatch.ExpectedCheckpointId.Value,
+                                        CheckpointId = assignedCheckpointId.Value,
                                         AuditProperties = new Models.Data.Common.AuditProperties
                                         {
                                             CreatedBy = userId,
@@ -738,7 +951,14 @@ namespace Runnatics.Services
                                             IsDeleted = false
                                         }
                                     });
-                                    reading.AssignmentMethod = "Batch";
+                                    reading.AssignmentMethod = isLoopRace ? "LoopRaceSequence" : "DeviceMapping";
+                                }
+                                else if (!assignedCheckpointId.HasValue)
+                                {
+                                    _logger.LogWarning(
+                                        "Reading {ReadingId} processed successfully but no checkpoint assigned. " +
+                                        "Device '{DeviceId}' may not be mapped to a checkpoint in the database.",
+                                        reading.Id, importBatch.DeviceId);
                                 }
                             }
 
@@ -1088,6 +1308,21 @@ namespace Runnatics.Services
                 response.CheckpointsProcessed = grouped.Select(g => g.Key.CheckpointId).Distinct().Count();
                 response.ParticipantsProcessed = grouped.Select(g => g.Key.ParticipantId).Distinct().Count();
 
+                // Log checkpoint processing summary
+                var checkpointStats = grouped
+                    .GroupBy(g => g.Key.CheckpointId)
+                    .Select(g => new { CheckpointId = g.Key, ReadingCount = g.Sum(x => x.Count()) })
+                    .ToList();
+
+                foreach (var stat in checkpointStats)
+                {
+                    _logger.LogInformation(
+                        "Checkpoint {CheckpointId}: {Count} readings from {Participants} participants",
+                        stat.CheckpointId, stat.ReadingCount,
+                        grouped.Where(g => g.Key.CheckpointId == stat.CheckpointId)
+                               .Select(g => g.Key.ParticipantId).Distinct().Count());
+                }
+
                 // Process all groups in parallel using LINQ - no for loop needed
                 var normalizedReadings = grouped.Select(group =>
                 {
@@ -1096,6 +1331,18 @@ namespace Runnatics.Services
                         .OrderBy(r => r.Reading.TimestampMs)
                         .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
                         .First();
+
+                    // Log if there are multiple readings for same participant/checkpoint (duplicates)
+                    if (group.Count() > 1)
+                    {
+                        var timeSpread = group.Max(r => r.Reading.TimestampMs) - group.Min(r => r.Reading.TimestampMs);
+                        var timeSpreadSeconds = timeSpread / 1000.0;
+                        _logger.LogDebug(
+                            "Participant {ParticipantId} at Checkpoint {CheckpointId}: {Count} duplicate readings over {Seconds:F1}s. " +
+                            "Using earliest reading at {Time}",
+                            group.Key.ParticipantId, group.Key.CheckpointId, group.Count(), timeSpreadSeconds,
+                            bestReading.Reading.ReadTimeUtc.ToString("HH:mm:ss"));
+                    }
 
                     // Calculate GunTime (milliseconds from race start)
                     long? gunTime = null;
@@ -1601,6 +1848,416 @@ namespace Runnatics.Services
                 response.Status = "Failed";
                 response.Errors.Add($"Unexpected error: {ex.Message}");
                 response.TotalProcessingTimeMs = (long)(DateTime.UtcNow - overallStartTime).TotalMilliseconds;
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Clears all processed data for a race, optionally keeping raw uploads.
+        /// This is useful when checkpoint mappings change or data needs complete recalculation.
+        /// </summary>
+        public async Task<ClearDataResponse> ClearProcessedDataAsync(string eventId, string raceId, bool keepUploads = true)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            
+            var response = new ClearDataResponse
+            {
+                Status = "Processing"
+            };
+
+            await _repository.BeginTransactionAsync();
+            
+            try
+            {
+                _logger.LogInformation(
+                    "Starting data cleanup for Event {EventId}, Race {RaceId}. KeepUploads: {KeepUploads}",
+                    decryptedEventId, decryptedRaceId, keepUploads);
+
+                // 1. Delete Results
+                var resultsRepo = _repository.GetRepository<Results>();
+                var results = await resultsRepo.GetQuery(r => 
+                    r.EventId == decryptedEventId && 
+                    r.RaceId == decryptedRaceId)
+                    .ToListAsync();
+                
+                if (results.Count > 0)
+                {
+                    await resultsRepo.DeleteRangeAsync(results.Select(r => r.Id).ToList());
+                    response.ResultsCleared = results.Count;
+                    _logger.LogInformation("Cleared {Count} results", results.Count);
+                }
+                
+                // 2. Delete ReadNormalized
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var normalized = await normalizedRepo.GetQuery(rn => 
+                    rn.EventId == decryptedEventId &&
+                    rn.Participant.RaceId == decryptedRaceId)
+                    .ToListAsync();
+                
+                if (normalized.Count > 0)
+                {
+                    await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
+                    response.NormalizedReadingsCleared = normalized.Count;
+                    _logger.LogInformation("Cleared {Count} normalized readings", normalized.Count);
+                }
+                
+                // 3. Get batch IDs for this race
+                var batchRepo = _repository.GetRepository<UploadBatch>();
+                var batches = await batchRepo.GetQuery(b =>
+                    b.EventId == decryptedEventId && 
+                    b.RaceId == decryptedRaceId)
+                    .ToListAsync();
+
+                var batchIds = batches.Select(b => b.Id).ToList();
+                
+                // 4. Delete ReadingCheckpointAssignment
+                var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+                var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                
+                var readingIds = await readingRepo.GetQuery(r => batchIds.Contains(r.BatchId))
+                    .Select(r => r.Id)
+                    .ToListAsync();
+                
+                var assignments = await assignmentRepo.GetQuery(a => readingIds.Contains(a.ReadingId))
+                    .ToListAsync();
+                
+                if (assignments.Count > 0)
+                {
+                    await assignmentRepo.DeleteRangeAsync(assignments.Select(a => a.Id).ToList());
+                    response.AssignmentsCleared = assignments.Count;
+                    _logger.LogInformation("Cleared {Count} checkpoint assignments", assignments.Count);
+                }
+                
+                // 5. Reset RawRFIDReading status
+                var readings = await readingRepo.GetQuery(r => batchIds.Contains(r.BatchId))
+                    .ToListAsync();
+                
+                if (readings.Count > 0)
+                {
+                    foreach (var reading in readings)
+                    {
+                        reading.ProcessResult = "Pending";
+                        reading.ProcessedAt = null;
+                        reading.AssignmentMethod = null;
+                        reading.Notes = null;
+                    }
+                    await readingRepo.UpdateRangeAsync(readings);
+                    response.ReadingsReset = readings.Count;
+                    _logger.LogInformation("Reset {Count} raw readings to Pending", readings.Count);
+                }
+                
+                // 6. Reset UploadBatch status
+                if (batches.Count > 0)
+                {
+                    foreach (var batch in batches)
+                    {
+                        batch.Status = "uploaded";
+                        batch.ProcessingStartedAt = null;
+                        batch.ProcessingCompletedAt = null;
+                    }
+                    await batchRepo.UpdateRangeAsync(batches);
+                    response.BatchesReset = batches.Count;
+                    _logger.LogInformation("Reset {Count} batches to uploaded status", batches.Count);
+                }
+                
+                // 7. Optionally delete uploads completely
+                if (!keepUploads)
+                {
+                    if (readings.Count > 0)
+                    {
+                        // RawRFIDReading.Id is long, not int
+                        var readingIdsToDelete = readings.Select(r => (int)r.Id).ToList();
+                        await readingRepo.DeleteRangeAsync(readingIdsToDelete);
+                    }
+                    if (batches.Count > 0)
+                    {
+                        await batchRepo.DeleteRangeAsync(batches.Select(b => b.Id).ToList());
+                        response.UploadsDeleted = batches.Count;
+                        _logger.LogInformation("Deleted {Count} upload batches", batches.Count);
+                    }
+                }
+                
+                await _repository.SaveChangesAsync();
+                await _repository.CommitTransactionAsync();
+                
+                response.Status = "Success";
+                response.Message = keepUploads
+                    ? "Cleared processed data. Upload batches preserved and ready for reprocessing."
+                    : "Cleared all data including uploads. Race is now empty.";
+                
+                _logger.LogInformation(
+                    "Data cleanup completed for Event {EventId}, Race {RaceId}. {Summary}",
+                    decryptedEventId, decryptedRaceId, response.Summary);
+                
+                return response;
+            }
+            catch (Exception ex)
+            {
+                await _repository.RollbackTransactionAsync();
+                ErrorMessage = $"Error clearing data: {ex.Message}";
+                _logger.LogError(ex, "Error clearing processed data for Event {EventId}, Race {RaceId}",
+                    decryptedEventId, decryptedRaceId);
+                response.Status = "Failed";
+                response.Message = ErrorMessage;
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Reprocesses specific participants after manual corrections.
+        /// Clears their processed data and recalculates from raw readings.
+        /// </summary>
+        public async Task<ReprocessParticipantsResponse> ReprocessParticipantsAsync(
+            string eventId, 
+            string raceId, 
+            string[] participantIds)
+        {
+            var startTime = DateTime.UtcNow;
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            
+            var decryptedParticipantIds = participantIds
+                .Select(id => Convert.ToInt32(_encryptionService.Decrypt(id)))
+                .ToList();
+            
+            var response = new ReprocessParticipantsResponse
+            {
+                Status = "Processing",
+                TotalParticipantsRequested = decryptedParticipantIds.Count
+            };
+
+            await _repository.BeginTransactionAsync();
+            
+            try
+            {
+                _logger.LogInformation(
+                    "Starting participant reprocessing for {Count} participants in Race {RaceId}",
+                    decryptedParticipantIds.Count, decryptedRaceId);
+
+                // Verify participants exist
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var participants = await participantRepo.GetQuery(p =>
+                    decryptedParticipantIds.Contains(p.Id) &&
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId)
+                    .ToListAsync();
+
+                response.ParticipantsCleared = participants.Count;
+                
+                if (participants.Count < decryptedParticipantIds.Count)
+                {
+                    var foundIds = participants.Select(p => p.Id).ToHashSet();
+                    var notFound = decryptedParticipantIds.Where(id => !foundIds.Contains(id)).ToList();
+                    response.NotFoundParticipants = notFound.Select(id => 
+                        _encryptionService.Encrypt(id.ToString())).ToList();
+                    
+                    _logger.LogWarning("Could not find {Count} requested participants", notFound.Count);
+                }
+
+                if (participants.Count == 0)
+                {
+                    response.Status = "Failed";
+                    response.Message = "No valid participants found to reprocess";
+                    await _repository.RollbackTransactionAsync();
+                    return response;
+                }
+
+                var validParticipantIds = participants.Select(p => p.Id).ToList();
+
+                // 1. Delete their Results
+                var resultsRepo = _repository.GetRepository<Results>();
+                var results = await resultsRepo.GetQuery(r => validParticipantIds.Contains(r.ParticipantId))
+                    .ToListAsync();
+                
+                if (results.Count > 0)
+                {
+                    await resultsRepo.DeleteRangeAsync(results.Select(r => r.Id).ToList());
+                    response.ResultsCleared = results.Count;
+                }
+                
+                // 2. Delete their ReadNormalized
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var normalized = await normalizedRepo.GetQuery(rn => 
+                    validParticipantIds.Contains(rn.ParticipantId))
+                    .ToListAsync();
+                
+                var readingIds = normalized.Where(n => n.RawReadId.HasValue)
+                    .Select(n => n.RawReadId!.Value)
+                    .ToList();
+                
+                if (normalized.Count > 0)
+                {
+                    await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
+                    response.ReadingsCleared = normalized.Count;
+                }
+                
+                // 3. Reset their RawRFIDReading (if we have the IDs)
+                if (readingIds.Count > 0)
+                {
+                    var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                    var readings = await readingRepo.GetQuery(r => readingIds.Contains(r.Id))
+                        .ToListAsync();
+                    
+                    foreach (var reading in readings)
+                    {
+                        reading.ProcessResult = "Pending";
+                        reading.ProcessedAt = null;
+                    }
+                    await readingRepo.UpdateRangeAsync(readings);
+                }
+                
+                await _repository.SaveChangesAsync();
+                await _repository.CommitTransactionAsync();
+                
+                // Now reprocess using the complete workflow
+                _logger.LogInformation("Reprocessing {Count} participants...", participants.Count);
+                
+                var processResult = await ProcessCompleteWorkflowAsync(eventId, raceId);
+                
+                response.Status = processResult.Status;
+                response.ParticipantsReprocessed = participants.Count;
+                response.ReadingsCreated = processResult.TotalNormalizedReadings;
+                response.ResultsCreated = processResult.ResultsCreated + processResult.ResultsUpdated;
+                response.Message = $"Successfully reprocessed {participants.Count} participants";
+                
+                response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
+                
+                _logger.LogInformation(
+                    "Participant reprocessing completed in {Time}ms. Reprocessed: {Count}",
+                    response.ProcessingTimeMs, participants.Count);
+                
+                return response;
+            }
+            catch (Exception ex)
+            {
+                await _repository.RollbackTransactionAsync();
+                ErrorMessage = $"Error reprocessing participants: {ex.Message}";
+                _logger.LogError(ex, "Error reprocessing participants");
+                response.Status = "Failed";
+                response.Message = ErrorMessage;
+                response.Errors.Add(ex.Message);
+                return response;
+            }
+        }
+
+        /// <summary>
+        /// Reprocesses a single upload batch after configuration changes.
+        /// </summary>
+        public async Task<ProcessRFIDImportResponse> ReprocessBatchAsync(
+            string eventId, 
+            string raceId, 
+            string uploadBatchId)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var decryptedBatchId = Convert.ToInt32(_encryptionService.Decrypt(uploadBatchId));
+
+            var response = new ProcessRFIDImportResponse
+            {
+                ImportBatchId = decryptedBatchId,
+                ProcessedAt = DateTime.UtcNow,
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Reprocessing batch {BatchId}", decryptedBatchId);
+
+                // Verify batch exists
+                var batchRepo = _repository.GetRepository<UploadBatch>();
+                var batch = await batchRepo.GetQuery(b =>
+                    b.Id == decryptedBatchId &&
+                    b.EventId == decryptedEventId &&
+                    b.RaceId == decryptedRaceId)
+                    .FirstOrDefaultAsync();
+
+                if (batch == null)
+                {
+                    ErrorMessage = "Upload batch not found";
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                await _repository.BeginTransactionAsync();
+
+                try
+                {
+                    // 1. Get readings for this batch
+                    var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                    var readings = await readingRepo.GetQuery(r => r.BatchId == decryptedBatchId)
+                        .ToListAsync();
+
+                    var readingIds = readings.Select(r => r.Id).ToList();
+
+                    // 2. Delete checkpoint assignments for these readings
+                    var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+                    var assignments = await assignmentRepo.GetQuery(a => readingIds.Contains(a.ReadingId))
+                        .ToListAsync();
+
+                    if (assignments.Count > 0)
+                    {
+                        await assignmentRepo.DeleteRangeAsync(assignments.Select(a => a.Id).ToList());
+                    }
+
+                    // 3. Delete normalized readings from these raw reads
+                    var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                    var normalized = await normalizedRepo.GetQuery(rn => 
+                        rn.RawReadId.HasValue && readingIds.Contains(rn.RawReadId.Value))
+                        .ToListAsync();
+
+                    if (normalized.Count > 0)
+                    {
+                        await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
+                    }
+
+                    // 4. Reset readings to Pending
+                    foreach (var reading in readings)
+                    {
+                        reading.ProcessResult = "Pending";
+                        reading.ProcessedAt = null;
+                        reading.AssignmentMethod = null;
+                        reading.Notes = null;
+                    }
+                    await readingRepo.UpdateRangeAsync(readings);
+
+                    // 5. Reset batch status
+                    batch.Status = "uploaded";
+                    batch.ProcessingStartedAt = null;
+                    batch.ProcessingCompletedAt = null;
+                    await batchRepo.UpdateAsync(batch);
+
+                    await _repository.SaveChangesAsync();
+                    await _repository.CommitTransactionAsync();
+
+                    _logger.LogInformation(
+                        "Cleared data for batch {BatchId}. Readings reset: {Count}",
+                        decryptedBatchId, readings.Count);
+
+                    // 6. Now reprocess using existing method
+                    var processRequest = new ProcessRFIDImportRequest
+                    {
+                        EventId = eventId,
+                        RaceId = raceId,
+                        UploadBatchId = uploadBatchId
+                    };
+
+                    return await ProcessRFIDStagingDataAsync(processRequest);
+                }
+                catch
+                {
+                    await _repository.RollbackTransactionAsync();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error reprocessing batch: {ex.Message}";
+                _logger.LogError(ex, "Error reprocessing batch {BatchId}", decryptedBatchId);
+                response.Status = "Failed";
                 return response;
             }
         }

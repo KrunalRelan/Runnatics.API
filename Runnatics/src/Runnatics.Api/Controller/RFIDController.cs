@@ -214,29 +214,48 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Process ALL pending RFID batches for an event/race with a single call.
-        /// Useful when multiple files have been uploaded and you want to process them all at once.
+        /// Complete RFID processing workflow: Process all pending batches, deduplicate readings, and calculate results.
+        /// This is a convenience endpoint that runs all three phases in sequence for maximum efficiency.
         /// </summary>
+        /// <param name="forceReprocess">If true, clears all processed data before reprocessing. Use after checkpoint mapping changes.</param>
         [HttpPost("{eventId}/{raceId}/process-all")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<BulkProcessRFIDImportResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ResponseBase<CompleteRFIDProcessingResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> ProcessAllBatches(string eventId, string raceId)
+        public async Task<IActionResult> ProcessAllBatches(
+            string eventId,
+            string raceId,
+            [FromQuery] bool forceReprocess = false)
         {
             if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
             {
                 return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
             }
 
-            var response = new ResponseBase<BulkProcessRFIDImportResponse>();
-            var result = await _service.ProcessAllRFIDDataAsync(eventId, raceId);
+            var response = new ResponseBase<CompleteRFIDProcessingResponse>();
+
+            // If force reprocess requested, clear existing data first
+            if (forceReprocess)
+            {
+                var clearResult = await _service.ClearProcessedDataAsync(eventId, raceId, keepUploads: true);
+                if (clearResult.Status != "Success")
+                {
+                    response.Error = new ResponseBase<CompleteRFIDProcessingResponse>.ErrorData
+                    {
+                        Message = $"Failed to clear data before reprocessing: {clearResult.Message}"
+                    };
+                    return StatusCode((int)HttpStatusCode.InternalServerError, response);
+                }
+            }
+
+            var result = await _service.ProcessCompleteWorkflowAsync(eventId, raceId);
 
             if (_service.HasError)
             {
-                response.Error = new ResponseBase<BulkProcessRFIDImportResponse>.ErrorData
+                response.Error = new ResponseBase<CompleteRFIDProcessingResponse>.ErrorData
                 {
                     Message = _service.ErrorMessage
                 };
@@ -315,31 +334,115 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Complete RFID processing workflow: Process all pending batches, deduplicate readings, and calculate results.
-        /// This is a convenience endpoint that runs all three phases in sequence for maximum efficiency.
+        /// Clears all processed RFID data (results, normalized readings, assignments) for a race.
+        /// Optionally preserves raw uploads for reprocessing.
+        /// WARNING: This cannot be undone. Use with caution.
         /// </summary>
-        [HttpPost("{eventId}/{raceId}/process-complete")]
+        /// <param name="keepUploads">If true (default), preserves raw upload batches. If false, deletes everything.</param>
+        [HttpDelete("{eventId}/{raceId}/processed-data")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<CompleteRFIDProcessingResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ResponseBase<ClearDataResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> ProcessCompleteWorkflow(string eventId, string raceId)
+        public async Task<IActionResult> ClearProcessedData(
+            string eventId,
+            string raceId,
+            [FromQuery] bool keepUploads = true)
         {
             if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
             {
                 return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
             }
 
-            var response = new ResponseBase<CompleteRFIDProcessingResponse>();
-            var result = await _service.ProcessCompleteWorkflowAsync(eventId, raceId);
+            var response = new ResponseBase<ClearDataResponse>();
+            var result = await _service.ClearProcessedDataAsync(eventId, raceId, keepUploads);
 
-            if (_service.HasError)
+            if (_service.HasError || result.Status == "Failed")
             {
-                response.Error = new ResponseBase<CompleteRFIDProcessingResponse>.ErrorData
+                response.Error = new ResponseBase<ClearDataResponse>.ErrorData
                 {
-                    Message = _service.ErrorMessage
+                    Message = _service.ErrorMessage ?? result.Message
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Reprocesses specific participants after manual data corrections.
+        /// Clears their processed data and recalculates results from raw readings.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/participants/reprocess")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<ReprocessParticipantsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ReprocessParticipants(
+            string eventId,
+            string raceId,
+            [FromBody] string[] participantIds)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
+            }
+
+            if (participantIds == null || participantIds.Length == 0)
+            {
+                return BadRequest(new { error = "At least one participant ID is required." });
+            }
+
+            var response = new ResponseBase<ReprocessParticipantsResponse>();
+            var result = await _service.ReprocessParticipantsAsync(eventId, raceId, participantIds);
+
+            if (_service.HasError || result.Status == "Failed")
+            {
+                response.Error = new ResponseBase<ReprocessParticipantsResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage ?? result.Message
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Reprocesses a single upload batch after fixing device-to-checkpoint mappings.
+        /// Clears processed data for this batch only, then reprocesses it.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/batches/{uploadBatchId}/reprocess")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<ProcessRFIDImportResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ReprocessBatch(
+            string eventId,
+            string raceId,
+            string uploadBatchId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(uploadBatchId))
+            {
+                return BadRequest(new { error = "Invalid input provided. Event ID, Race ID, and Batch ID are required." });
+            }
+
+            var response = new ResponseBase<ProcessRFIDImportResponse>();
+            var result = await _service.ReprocessBatchAsync(eventId, raceId, uploadBatchId);
+
+            if (_service.HasError || result.Status == "Failed")
+            {
+                response.Error = new ResponseBase<ProcessRFIDImportResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage ?? "Batch reprocessing failed"
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }

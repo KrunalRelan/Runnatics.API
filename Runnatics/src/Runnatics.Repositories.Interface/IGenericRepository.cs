@@ -1,5 +1,4 @@
 using EFCore.BulkExtensions;
-using Microsoft.EntityFrameworkCore;
 using Runnatics.Models.Data.Common;
 using System.Linq.Expressions;
 

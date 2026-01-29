@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Results;
+using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Services.Interface;
 using System.Net;
 

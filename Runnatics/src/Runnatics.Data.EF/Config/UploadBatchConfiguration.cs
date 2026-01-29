@@ -49,11 +49,16 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.IsLiveSync)
                 .HasDefaultValue(false);
 
-            // Indexes
+            // Indexes - Individual indexes for foreign keys
             builder.HasIndex(e => e.RaceId);
             builder.HasIndex(e => e.EventId);
             builder.HasIndex(e => e.FileHash);
             builder.HasIndex(e => e.Status);
+
+            // Composite index for pending batch queries (EventId + RaceId + Status)
+            // This optimizes the common query pattern: WHERE EventId = X AND RaceId = Y AND Status IN ('uploaded', 'uploading')
+            builder.HasIndex(e => new { e.EventId, e.RaceId, e.Status })
+                .HasDatabaseName("IX_UploadBatches_EventId_RaceId_Status");
 
             // Relationships
             builder.HasOne(e => e.Race)

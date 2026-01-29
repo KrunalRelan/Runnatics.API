@@ -1,5 +1,6 @@
 namespace Runnatics.Repositories.EF
 {
+    using EFCore.BulkExtensions;
     using Microsoft.Data.SqlClient;
     using Microsoft.EntityFrameworkCore;
     using Runnatics.Models.Data.Common;
@@ -346,6 +347,50 @@ namespace Runnatics.Repositories.EF
             }
 
             return await query.CountAsync();
+        }
+
+        /// <summary>
+        /// Bulk insert entities using high-performance bulk operations (10-50x faster than AddRangeAsync)
+        /// </summary>
+        public async Task BulkInsertAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkInsertAsync(entities, bulkConfig);
+        }
+
+        /// <summary>
+        /// Bulk update entities using high-performance bulk operations (10-50x faster than UpdateRangeAsync)
+        /// </summary>
+        public async Task BulkUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkUpdateAsync(entities, bulkConfig);
+        }
+
+        /// <summary>
+        /// Bulk delete entities using high-performance bulk operations
+        /// </summary>
+        public async Task BulkDeleteAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkDeleteAsync(entities, bulkConfig);
+        }
+
+        /// <summary>
+        /// Bulk insert or update entities (upsert operation)
+        /// </summary>
+        public async Task BulkInsertOrUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkInsertOrUpdateAsync(entities, bulkConfig);
         }
     }
 }

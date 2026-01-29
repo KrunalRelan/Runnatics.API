@@ -29,5 +29,11 @@ namespace Runnatics.Services.Interface
         /// Calculates overall, gender, and category rankings.
         /// </summary>
         Task<CalculateResultsResponse> CalculateRaceResultsAsync(string eventId, string raceId);
+
+        /// <summary>
+        /// Complete RFID processing workflow: Process all pending batches, deduplicate readings, and calculate results.
+        /// Optimized with bulk operations for best performance.
+        /// </summary>
+        Task<CompleteRFIDProcessingResponse> ProcessCompleteWorkflowAsync(string eventId, string raceId);
     }
 }

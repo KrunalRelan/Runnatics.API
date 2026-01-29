@@ -313,5 +313,39 @@ namespace Runnatics.Api.Controller
             response.Message = result;
             return Ok(response);
         }
+
+        /// <summary>
+        /// Complete RFID processing workflow: Process all pending batches, deduplicate readings, and calculate results.
+        /// This is a convenience endpoint that runs all three phases in sequence for maximum efficiency.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/process-complete")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<CompleteRFIDProcessingResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ProcessCompleteWorkflow(string eventId, string raceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Invalid input provided. Event ID and Race ID are required." });
+            }
+
+            var response = new ResponseBase<CompleteRFIDProcessingResponse>();
+            var result = await _service.ProcessCompleteWorkflowAsync(eventId, raceId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<CompleteRFIDProcessingResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
     }
 }

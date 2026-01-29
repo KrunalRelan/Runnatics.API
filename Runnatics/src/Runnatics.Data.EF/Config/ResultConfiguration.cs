@@ -29,13 +29,16 @@ namespace Runnatics.Data.EF.Config
                 .IsRequired();
 
             builder.Property(e => e.FinishTime)
-                .HasColumnName("FinishTime");
+                .HasColumnName("FinishTime")
+                .HasColumnType("bigint");
 
             builder.Property(e => e.GunTime)
-                .HasColumnName("GunTime");
+                .HasColumnName("GunTime")
+                .HasColumnType("bigint");
 
             builder.Property(e => e.NetTime)
-                .HasColumnName("NetTime");
+                .HasColumnName("NetTime")
+                .HasColumnType("bigint");
 
             builder.Property(e => e.OverallRank)
                 .HasColumnName("OverallRank");

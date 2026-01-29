@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Requests.RFID;
-using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
@@ -682,10 +681,30 @@ namespace Runnatics.Services
                 var errorCount = 0;
                 var unlinkedEPCs = new List<string>();
 
+                // Prepare lists for bulk operations
+                var readingsToUpdate = new List<RawRFIDReading>();
+                var assignmentsToAdd = new List<ReadingCheckpointAssignment>();
+
                 await _repository.BeginTransactionAsync();
 
                 try
                 {
+                    // Check existing assignments in bulk if checkpoint is specified
+                    HashSet<long> existingAssignmentIds = new HashSet<long>();
+                    if (importBatch.ExpectedCheckpointId.HasValue)
+                    {
+                        var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+                        var readingIds = readings.Select(r => r.Id).ToList();
+                        var existing = await assignmentRepo.GetQuery(a =>
+                            readingIds.Contains(a.ReadingId) &&
+                            a.CheckpointId == importBatch.ExpectedCheckpointId.Value)
+                            .Select(a => a.ReadingId)
+                            .ToListAsync();
+
+                        existingAssignmentIds = new HashSet<long>(existing);
+                    }
+
+                    // Process all readings in one pass - no nested queries
                     foreach (var reading in readings)
                     {
                         // Try to link to participant
@@ -703,11 +722,11 @@ namespace Runnatics.Services
                                 reading.ProcessResult = "Success";
                                 successCount++;
 
-                                // If checkpoint is specified in batch, create assignment
-                                if (importBatch.ExpectedCheckpointId.HasValue)
+                                // If checkpoint is specified in batch, create assignment if it doesn't exist
+                                if (importBatch.ExpectedCheckpointId.HasValue && 
+                                    !existingAssignmentIds.Contains(reading.Id))
                                 {
-                                    var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
-                                    var assignment = new ReadingCheckpointAssignment
+                                    assignmentsToAdd.Add(new ReadingCheckpointAssignment
                                     {
                                         ReadingId = reading.Id,
                                         CheckpointId = importBatch.ExpectedCheckpointId.Value,
@@ -718,14 +737,13 @@ namespace Runnatics.Services
                                             IsActive = true,
                                             IsDeleted = false
                                         }
-                                    };
-                                    await assignmentRepo.AddAsync(assignment);
+                                    });
                                     reading.AssignmentMethod = "Batch";
                                 }
                             }
 
                             reading.ProcessedAt = DateTime.UtcNow;
-                            await readingRepo.UpdateAsync(reading);
+                            readingsToUpdate.Add(reading);
                         }
                         else
                         {
@@ -736,9 +754,24 @@ namespace Runnatics.Services
                             reading.ProcessResult = "Invalid";
                             reading.Notes = "No participant found with this RFID tag";
                             reading.ProcessedAt = DateTime.UtcNow;
-                            await readingRepo.UpdateAsync(reading);
+                            readingsToUpdate.Add(reading);
                             errorCount++;
                         }
+                    }
+
+                    // TRUE BULK OPERATIONS - Single DB roundtrip each
+                    if (assignmentsToAdd.Count > 0)
+                    {
+                        var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+                        await assignmentRepo.BulkInsertAsync(assignmentsToAdd);
+                        _logger.LogInformation("Bulk inserted {Count} checkpoint assignments", assignmentsToAdd.Count);
+                    }
+
+                    if (readingsToUpdate.Count > 0)
+                    {
+                        var readingRepoForUpdate = _repository.GetRepository<RawRFIDReading>();
+                        await readingRepoForUpdate.BulkUpdateAsync(readingsToUpdate);
+                        _logger.LogInformation("Bulk updated {Count} raw readings", readingsToUpdate.Count);
                     }
 
                     // Update batch status
@@ -804,6 +837,7 @@ namespace Runnatics.Services
                     (b.Status == "uploaded" || b.Status == "uploading") &&
                     b.AuditProperties.IsActive &&
                     !b.AuditProperties.IsDeleted)
+                    .AsNoTracking() // Read-only query, no need to track
                     .OrderBy(b => b.AuditProperties.CreatedDate)
                     .ToListAsync();
 
@@ -1054,60 +1088,57 @@ namespace Runnatics.Services
                 response.CheckpointsProcessed = grouped.Select(g => g.Key.CheckpointId).Distinct().Count();
                 response.ParticipantsProcessed = grouped.Select(g => g.Key.ParticipantId).Distinct().Count();
 
-                var normalizedReadings = new List<ReadNormalized>();
-                var duplicateCount = 0;
+                // Process all groups in parallel using LINQ - no for loop needed
+                var normalizedReadings = grouped.Select(group =>
+                {
+                    // Get the best reading (earliest timestamp, strongest RSSI)
+                    var bestReading = group
+                        .OrderBy(r => r.Reading.TimestampMs)
+                        .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
+                        .First();
+
+                    // Calculate GunTime (milliseconds from race start)
+                    long? gunTime = null;
+                    if (raceStartTime.HasValue)
+                    {
+                        gunTime = (long)(bestReading.Reading.ReadTimeUtc - raceStartTime.Value).TotalMilliseconds;
+                    }
+
+                    // Create normalized reading
+                    return new ReadNormalized
+                    {
+                        EventId = decryptedEventId,
+                        ParticipantId = bestReading.ParticipantId,
+                        CheckpointId = bestReading.CheckpointId,
+                        RawReadId = bestReading.Reading.Id,
+                        ChipTime = bestReading.Reading.ReadTimeUtc,
+                        GunTime = gunTime,
+                        NetTime = null, // TODO: Calculate net time (from participant start)
+                        IsManualEntry = false,
+                        CreatedByUserId = userId,
+                        AuditProperties = new Models.Data.Common.AuditProperties
+                        {
+                            CreatedBy = userId,
+                            CreatedDate = DateTime.UtcNow,
+                            IsActive = true,
+                            IsDeleted = false
+                        }
+                    };
+                }).ToList();
+
+                var duplicateCount = rawReadings.Count - normalizedReadings.Count;
 
                 await _repository.BeginTransactionAsync();
 
                 try
                 {
-                    foreach (var group in grouped)
+                    // TRUE BULK INSERT - Single DB roundtrip
+                    if (normalizedReadings.Count > 0)
                     {
-                        // Sort by timestamp (earliest first), then by RSSI (strongest first)
-                        var orderedReadings = group
-                            .OrderBy(r => r.Reading.TimestampMs)
-                            .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
-                            .ToList();
-
-                        // Keep only the first reading (earliest with strongest RSSI)
-                        var bestReading = orderedReadings.First();
-                        duplicateCount += orderedReadings.Count - 1;
-
-                        // Calculate GunTime (milliseconds from race start)
-                        long? gunTime = null;
-                        if (raceStartTime.HasValue)
-                        {
-                            var readTime = bestReading.Reading.ReadTimeUtc;
-                            gunTime = (long)(readTime - raceStartTime.Value).TotalMilliseconds;
-                        }
-
-                        // Create normalized reading
-                        var normalized = new ReadNormalized
-                        {
-                            EventId = decryptedEventId,
-                            ParticipantId = bestReading.ParticipantId,
-                            CheckpointId = bestReading.CheckpointId,
-                            RawReadId = bestReading.Reading.Id,
-                            ChipTime = bestReading.Reading.ReadTimeUtc,
-                            GunTime = gunTime,
-                            NetTime = null, // TODO: Calculate net time (from participant start)
-                            IsManualEntry = false,
-                            CreatedByUserId = userId,
-                            AuditProperties = new Models.Data.Common.AuditProperties
-                            {
-                                CreatedBy = userId,
-                                CreatedDate = DateTime.UtcNow,
-                                IsActive = true,
-                                IsDeleted = false
-                            }
-                        };
-
-                        normalizedReadings.Add(normalized);
+                        await normalizedRepo.BulkInsertAsync(normalizedReadings);
+                        _logger.LogInformation("Bulk inserted {Count} normalized readings", normalizedReadings.Count);
                     }
 
-                    // Bulk insert normalized readings
-                    await normalizedRepo.AddRangeAsync(normalizedReadings);
-                    await _repository.SaveChangesAsync();
                     await _repository.CommitTransactionAsync();
 
                     response.NormalizedReadings = normalizedReadings.Count;
@@ -1238,10 +1269,11 @@ namespace Runnatics.Services
                     var resultsToAdd = new List<Results>();
                     var resultsToUpdate = new List<Results>();
 
-                    // Calculate overall rankings (already sorted by GunTime)
-                    var overallRank = 1;
-                    foreach (var reading in finishReadings)
+                    // Process all readings using LINQ with index - no for loop needed
+                    var processedResults = finishReadings.Select((reading, index) =>
                     {
+                        var overallRank = index + 1;
+
                         if (existingResults.TryGetValue(reading.ParticipantId, out var existingResult))
                         {
                             // Update existing result
@@ -1252,7 +1284,7 @@ namespace Runnatics.Services
                             existingResult.Status = "Finished";
                             existingResult.AuditProperties.UpdatedBy = userId;
                             existingResult.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            resultsToUpdate.Add(existingResult);
+                            return (result: existingResult, isNew: false);
                         }
                         else
                         {
@@ -1277,21 +1309,25 @@ namespace Runnatics.Services
                                     IsDeleted = false
                                 }
                             };
-                            resultsToAdd.Add(result);
+                            return (result: result, isNew: true);
                         }
-                        overallRank++;
-                    }
+                    }).ToList();
 
-                    // Bulk insert new results
+                    resultsToAdd = processedResults.Where(r => r.isNew).Select(r => r.result).ToList();
+                    resultsToUpdate = processedResults.Where(r => !r.isNew).Select(r => r.result).ToList();
+
+                    // TRUE BULK INSERT - Single DB roundtrip
                     if (resultsToAdd.Count > 0)
                     {
-                        await resultsRepo.AddRangeAsync(resultsToAdd);
+                        await resultsRepo.BulkInsertAsync(resultsToAdd);
+                        _logger.LogInformation("Bulk inserted {Count} new results", resultsToAdd.Count);
                     }
 
-                    // Update existing results
-                    foreach (var result in resultsToUpdate)
+                    // TRUE BULK UPDATE - Single DB roundtrip
+                    if (resultsToUpdate.Count > 0)
                     {
-                        await resultsRepo.UpdateAsync(result);
+                        await resultsRepo.BulkUpdateAsync(resultsToUpdate);
+                        _logger.LogInformation("Bulk updated {Count} existing results", resultsToUpdate.Count);
                     }
 
                     await _repository.SaveChangesAsync();
@@ -1349,7 +1385,7 @@ namespace Runnatics.Services
         }
 
         /// <summary>
-        /// Calculate gender-based rankings for all results in a race
+        /// Calculate gender-based rankings for all results in a race - Optimized with LINQ (no for loops)
         /// </summary>
         private async Task CalculateGenderRankingsAsync(int eventId, int raceId, int? userId)
         {
@@ -1363,27 +1399,30 @@ namespace Runnatics.Services
                 .OrderBy(r => r.GunTime ?? long.MaxValue)
                 .ToListAsync();
 
-            // Group by gender and assign rankings
-            var genderGroups = results
+            // Process all rankings using LINQ - no nested for loops
+            var updatedResults = results
                 .GroupBy(r => r.Participant?.Gender?.ToLower() ?? "other")
+                .SelectMany(group => group
+                    .OrderBy(r => r.GunTime ?? long.MaxValue)
+                    .Select((result, index) =>
+                    {
+                        result.GenderRank = index + 1;
+                        result.AuditProperties.UpdatedBy = userId;
+                        result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        return result;
+                    }))
                 .ToList();
 
-            foreach (var group in genderGroups)
+            // Bulk update - single DB roundtrip
+            if (updatedResults.Count > 0)
             {
-                var genderRank = 1;
-                foreach (var result in group.OrderBy(r => r.GunTime ?? long.MaxValue))
-                {
-                    result.GenderRank = genderRank++;
-                    result.AuditProperties.UpdatedBy = userId;
-                    result.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                }
+                await resultsRepo.BulkUpdateAsync(updatedResults);
+                _logger.LogInformation("Bulk updated gender rankings for {Count} results", updatedResults.Count);
             }
-
-            _logger.LogInformation("Gender rankings calculated for {Count} results", results.Count);
         }
 
         /// <summary>
-        /// Calculate category-based rankings for all results in a race
+        /// Calculate category-based rankings for all results in a race - Optimized with LINQ (no for loops)
         /// </summary>
         private async Task<int> CalculateCategoryRankingsAsync(int eventId, int raceId, int? userId)
         {
@@ -1397,26 +1436,173 @@ namespace Runnatics.Services
                 .OrderBy(r => r.GunTime ?? long.MaxValue)
                 .ToListAsync();
 
-            // Group by age category and assign rankings
+            // Process all rankings using LINQ - no nested for loops
             var categoryGroups = results
                 .GroupBy(r => r.Participant?.AgeCategory ?? "Unknown")
                 .ToList();
 
-            foreach (var group in categoryGroups)
+            var updatedResults = categoryGroups
+                .SelectMany(group => group
+                    .OrderBy(r => r.GunTime ?? long.MaxValue)
+                    .Select((result, index) =>
+                    {
+                        result.CategoryRank = index + 1;
+                        result.AuditProperties.UpdatedBy = userId;
+                        result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        return result;
+                    }))
+                .ToList();
+
+            // Bulk update - single DB roundtrip
+            if (updatedResults.Count > 0)
             {
-                var categoryRank = 1;
-                foreach (var result in group.OrderBy(r => r.GunTime ?? long.MaxValue))
-                {
-                    result.CategoryRank = categoryRank++;
-                    result.AuditProperties.UpdatedBy = userId;
-                    result.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                }
+                await resultsRepo.BulkUpdateAsync(updatedResults);
+                _logger.LogInformation("Bulk updated category rankings for {Count} results across {Categories} categories",
+                    updatedResults.Count, categoryGroups.Count);
             }
 
-            _logger.LogInformation("Category rankings calculated for {Count} results across {Categories} categories",
-                results.Count, categoryGroups.Count);
-
             return categoryGroups.Count;
+        }
+
+        /// <summary>
+        /// Complete RFID processing workflow: Process all pending batches, deduplicate readings, and calculate results.
+        /// Optimized with bulk operations for best performance.
+        /// </summary>
+        public async Task<CompleteRFIDProcessingResponse> ProcessCompleteWorkflowAsync(string eventId, string raceId)
+        {
+            var overallStartTime = DateTime.UtcNow;
+            var response = new CompleteRFIDProcessingResponse
+            {
+                ProcessedAt = overallStartTime,
+                Status = "Processing"
+            };
+
+            try
+            {
+                _logger.LogInformation("Starting complete RFID processing workflow for race {RaceId}", raceId);
+
+                // ========== PHASE 1: Process All Pending Batches ==========
+                var phase1Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 1: Processing pending batches...");
+
+                var processAllResponse = await ProcessAllRFIDDataAsync(eventId, raceId);
+
+                response.Phase1ProcessingMs = (long)(DateTime.UtcNow - phase1Start).TotalMilliseconds;
+                response.TotalBatchesProcessed = processAllResponse.TotalBatches;
+                response.SuccessfulBatches = processAllResponse.SuccessfulBatches;
+                response.FailedBatches = processAllResponse.FailedBatches;
+                response.TotalRawReadingsProcessed = processAllResponse.TotalProcessedReadings;
+
+                if (processAllResponse.Status == "Failed")
+                {
+                    response.Errors.Add("Phase 1 failed: " + processAllResponse.Message);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                if (processAllResponse.Status == "NoDataToProcess")
+                {
+                    response.Warnings.Add("No pending batches found to process");
+                }
+
+                _logger.LogInformation(
+                    "Phase 1 completed in {Time}ms. Batches: {Success}/{Total}, Readings: {Readings}",
+                    response.Phase1ProcessingMs,
+                    processAllResponse.SuccessfulBatches,
+                    processAllResponse.TotalBatches,
+                    processAllResponse.TotalProcessedReadings);
+
+                // ========== PHASE 2: Deduplicate and Normalize ==========
+                var phase2Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 2: Deduplicating and normalizing readings...");
+
+                var dedupeResponse = await DeduplicateAndNormalizeAsync(eventId, raceId);
+
+                response.Phase2DeduplicationMs = (long)(DateTime.UtcNow - phase2Start).TotalMilliseconds;
+                response.TotalNormalizedReadings = dedupeResponse.NormalizedReadings;
+                response.DuplicatesRemoved = dedupeResponse.DuplicatesRemoved;
+                response.CheckpointsProcessed = dedupeResponse.CheckpointsProcessed;
+                response.ParticipantsProcessed = dedupeResponse.ParticipantsProcessed;
+
+                if (dedupeResponse.Status == "Failed")
+                {
+                    response.Errors.Add("Phase 2 failed: Deduplication error");
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                if (dedupeResponse.NormalizedReadings == 0)
+                {
+                    response.Warnings.Add("No new readings to deduplicate");
+                }
+
+                _logger.LogInformation(
+                    "Phase 2 completed in {Time}ms. Normalized: {Normalized}, Duplicates removed: {Duplicates}",
+                    response.Phase2DeduplicationMs,
+                    dedupeResponse.NormalizedReadings,
+                    dedupeResponse.DuplicatesRemoved);
+
+                // ========== PHASE 3: Calculate Results ==========
+                var phase3Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 3: Calculating race results...");
+
+                var calcResponse = await CalculateRaceResultsAsync(eventId, raceId);
+
+                response.Phase3CalculationMs = (long)(DateTime.UtcNow - phase3Start).TotalMilliseconds;
+                response.TotalFinishers = calcResponse.TotalFinishers;
+                response.ResultsCreated = calcResponse.ResultsCreated;
+                response.ResultsUpdated = calcResponse.ResultsUpdated;
+                response.DNFCount = calcResponse.DNFCount;
+                response.CategoriesProcessed = calcResponse.CategoriesProcessed;
+                response.GenderStats = calcResponse.GenderStats;
+
+                if (calcResponse.Status == "Failed")
+                {
+                    response.Errors.Add("Phase 3 failed: Results calculation error");
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                if (calcResponse.TotalFinishers == 0)
+                {
+                    response.Warnings.Add("No finishers found. Ensure checkpoints are properly configured.");
+                }
+
+                _logger.LogInformation(
+                    "Phase 3 completed in {Time}ms. Finishers: {Finishers}, Results created: {Created}, Updated: {Updated}",
+                    response.Phase3CalculationMs,
+                    calcResponse.TotalFinishers,
+                    calcResponse.ResultsCreated,
+                    calcResponse.ResultsUpdated);
+
+                // ========== Final Summary ==========
+                var overallEndTime = DateTime.UtcNow;
+                response.TotalProcessingTimeMs = (long)(overallEndTime - overallStartTime).TotalMilliseconds;
+
+                response.Status = response.Errors.Count > 0 ? "CompletedWithErrors" : "Completed";
+                response.Message = $"Complete workflow finished: {response.TotalFinishers} finishers processed across {response.CheckpointsProcessed} checkpoints";
+
+                _logger.LogInformation(
+                    "Complete RFID workflow finished in {TotalTime}ms. Status: {Status}. " +
+                    "Batches: {Batches}, Readings: {Readings}, Normalized: {Normalized}, Finishers: {Finishers}",
+                    response.TotalProcessingTimeMs,
+                    response.Status,
+                    response.TotalBatchesProcessed,
+                    response.TotalRawReadingsProcessed,
+                    response.TotalNormalizedReadings,
+                    response.TotalFinishers);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error during complete RFID workflow: {ex.Message}";
+                _logger.LogError(ex, "Error during complete RFID processing workflow");
+                response.Status = "Failed";
+                response.Errors.Add($"Unexpected error: {ex.Message}");
+                response.TotalProcessingTimeMs = (long)(DateTime.UtcNow - overallStartTime).TotalMilliseconds;
+                return response;
+            }
         }
     }
 }

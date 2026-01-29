@@ -335,6 +335,12 @@ namespace Runnatics.Services
                 // Ensure TotalCount is preserved
                 toReturn.TotalCount = response.TotalCount;
 
+                // Fetch checkpoint times for the participants in this page
+                if (toReturn.Count > 0)
+                {
+                    await PopulateCheckpointTimesAsync(toReturn, decryptedEventId, decryptedRaceId);
+                }
+
                 return toReturn;
             }
             catch (Exception ex)
@@ -350,6 +356,123 @@ namespace Runnatics.Services
 
                 // Return an empty paging list on error
                 return new PagingList<ParticipantSearchReponse>();
+            }
+        }
+
+        /// <summary>
+        /// Populates checkpoint times and chip IDs for each participant in the list.
+        /// Returns null values gracefully when no checkpoint data exists.
+        /// </summary>
+        private async Task PopulateCheckpointTimesAsync(
+            IEnumerable<ParticipantSearchReponse> participants, 
+            int eventId, 
+            int raceId)
+        {
+            try
+            {
+                // Get participant IDs (decrypt them)
+                var participantIds = participants
+                    .Where(p => !string.IsNullOrEmpty(p.Id))
+                    .Select(p => Convert.ToInt32(_encryptionService.Decrypt(p.Id!)))
+                    .ToList();
+
+                if (participantIds.Count == 0)
+                    return;
+
+                // Fetch chip assignments for these participants
+                var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+                var chipAssignments = await chipAssignmentRepo.GetQuery(ca =>
+                    participantIds.Contains(ca.ParticipantId) &&
+                    ca.UnassignedAt == null &&
+                    ca.AuditProperties.IsActive &&
+                    !ca.AuditProperties.IsDeleted)
+                    .Include(ca => ca.Chip)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Create lookup: participantId -> chipEPC
+                var chipLookup = chipAssignments
+                    .GroupBy(ca => ca.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.First().Chip?.EPC);
+
+                // Get checkpoints for this race, ordered by distance
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var checkpoints = await checkpointRepo.GetQuery(c => 
+                    c.RaceId == raceId && 
+                    c.EventId == eventId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .OrderBy(c => c.DistanceFromStart)
+                    .ToListAsync();
+
+                // Get all normalized readings for these participants in this event
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var readings = await normalizedRepo.GetQuery(r => 
+                    r.EventId == eventId &&
+                    participantIds.Contains(r.ParticipantId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Create a lookup: participantId -> checkpointId -> reading
+                var readingsLookup = readings
+                    .GroupBy(r => r.ParticipantId)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.ToDictionary(r => r.CheckpointId, r => r)
+                    );
+
+                // Populate checkpoint times and chip IDs for each participant
+                foreach (var participant in participants)
+                {
+                    participant.CheckpointTimes = new Dictionary<string, string?>();
+
+                    if (string.IsNullOrEmpty(participant.Id))
+                        continue;
+
+                    var participantId = Convert.ToInt32(_encryptionService.Decrypt(participant.Id));
+
+                    // Set chip ID
+                    participant.ChipId = chipLookup.TryGetValue(participantId, out var chipEpc) ? chipEpc : null;
+
+                    // If no checkpoints, skip checkpoint times
+                    if (checkpoints == null || checkpoints.Count == 0)
+                        continue;
+
+                    // Get readings for this participant (or empty dictionary if none)
+                    var participantReadings = readingsLookup.TryGetValue(participantId, out var pr) 
+                        ? pr 
+                        : new Dictionary<int, ReadNormalized>();
+
+                    // Add each checkpoint time (null if not crossed)
+                    foreach (var checkpoint in checkpoints)
+                    {
+                        var checkpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}";
+
+                        if (participantReadings.TryGetValue(checkpoint.Id, out var reading))
+                        {
+                            // Format time as HH:mm:ss
+                            participant.CheckpointTimes[checkpointName] = reading.ChipTime.ToString("HH:mm:ss");
+                        }
+                        else
+                        {
+                            // No reading for this checkpoint - return null (graceful handling)
+                            participant.CheckpointTimes[checkpointName] = null;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log error but don't fail the search - just leave checkpoint times empty
+                _logger.LogWarning(ex, "Failed to populate checkpoint times for participants. Continuing with null values.");
+
+                foreach (var participant in participants)
+                {
+                    participant.CheckpointTimes ??= new Dictionary<string, string?>();
+                }
             }
         }
 

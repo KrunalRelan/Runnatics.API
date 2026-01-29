@@ -1,3 +1,4 @@
+using EFCore.BulkExtensions;
 using Microsoft.EntityFrameworkCore;
 using Runnatics.Models.Data.Common;
 using System.Linq.Expressions;
@@ -30,4 +31,10 @@ public interface IGenericRepository<T> where T : class
     public Task<List<List<dynamic>>> ExecuteStoredProcedureDataSet<I>(string procedureName, I input);
 
     public Task<int> CountAsync(Expression<Func<T, bool>>? filter = null, bool ignoreQueryFilters = false);
+
+    // Bulk operations
+    Task BulkInsertAsync(List<T> entities, BulkConfig? bulkConfig = null);
+    Task BulkUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null);
+    Task BulkDeleteAsync(List<T> entities, BulkConfig? bulkConfig = null);
+    Task BulkInsertOrUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null);
 }

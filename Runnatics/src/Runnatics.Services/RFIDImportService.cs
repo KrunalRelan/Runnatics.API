@@ -7,6 +7,7 @@ using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
+using Runnatics.Services.RFID;
 using System.Data.SQLite;
 using System.Security.Cryptography;
 using System.IO;
@@ -2484,7 +2485,8 @@ namespace Runnatics.Services
 
         /// <summary>
         /// Assign checkpoints to readings for loop races where a single device is used at multiple checkpoints.
-        /// Readings are assigned to checkpoints based on their time sequence per participant.
+        /// For shared devices (same device at Start and Finish), readings are assigned based on timing gaps.
+        /// For non-shared devices, readings are assigned to the single checkpoint associated with that device.
         /// </summary>
         public async Task<AssignCheckpointsResponse> AssignCheckpointsForLoopRaceAsync(string eventId, string raceId)
         {
@@ -2507,15 +2509,28 @@ namespace Runnatics.Services
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
                     .FirstOrDefaultAsync();
 
-                if (race == null)
+                if (race == null || !race.StartTime.HasValue)
                 {
-                    ErrorMessage = "Race not found";
+                    ErrorMessage = "Race not found or missing start time";
                     response.Status = "Failed";
                     response.ErrorMessage = ErrorMessage;
                     return response;
                 }
 
-                var raceStartTime = race.StartTime ?? DateTime.UtcNow;
+                var raceStartTime = race.StartTime.Value;
+
+                // Get all devices
+                var deviceRepo = _repository.GetRepository<Device>();
+                var devices = await deviceRepo.GetQuery(d =>
+                    d.AuditProperties.IsActive &&
+                    !d.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Create mapping: Device.DeviceId (serial) -> Device.Id (primary key)
+                var deviceSerialToId = devices
+                    .Where(d => !string.IsNullOrEmpty(d.DeviceId))
+                    .ToDictionary(d => d.DeviceId!, d => d.Id);
 
                 // Get checkpoints ordered by distance
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
@@ -2533,6 +2548,30 @@ namespace Runnatics.Services
                     response.Status = "Failed";
                     response.ErrorMessage = ErrorMessage;
                     return response;
+                }
+
+                // Group checkpoints by device to find shared devices (loop race indicators)
+                var checkpointsByDeviceId = checkpoints
+                    .Where(cp => cp.DeviceId > 0)
+                    .GroupBy(cp => cp.DeviceId)
+                    .ToDictionary(g => g.Key, g => g.OrderBy(cp => cp.DistanceFromStart).ToList());
+
+                // Find devices used at multiple checkpoints (shared devices in loop races)
+                var sharedDeviceIds = checkpointsByDeviceId
+                    .Where(kvp => kvp.Value.Count > 1)
+                    .Select(kvp => kvp.Key)
+                    .ToHashSet();
+
+                if (sharedDeviceIds.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Detected {Count} shared devices used at multiple checkpoints (loop race): {Devices}",
+                        sharedDeviceIds.Count,
+                        string.Join(", ", sharedDeviceIds.Select(id =>
+                        {
+                            var cps = checkpointsByDeviceId[id];
+                            return $"Device {id} -> [{string.Join(", ", cps.Select(cp => $"{cp.Name} ({cp.DistanceFromStart}km)"))}]";
+                        })));
                 }
 
                 // Get active chip assignments to map EPC to participant
@@ -2561,13 +2600,16 @@ namespace Runnatics.Services
 
                 var existingAssignmentSet = new HashSet<long>(existingAssignmentReadingIds);
 
-                // Get batches for this race
+                // Get batches for this race with device info
                 var batchRepo = _repository.GetRepository<UploadBatch>();
-                var batchIds = await batchRepo.GetQuery(b =>
+                var batches = await batchRepo.GetQuery(b =>
                     b.EventId == decryptedEventId &&
                     b.RaceId == decryptedRaceId)
-                    .Select(b => b.Id)
+                    .AsNoTracking()
                     .ToListAsync();
+
+                var batchIds = batches.Select(b => b.Id).ToList();
+                var batchToDeviceSerial = batches.ToDictionary(b => b.Id, b => b.DeviceId);
 
                 var unassignedReadings = await readingRepo.GetQuery(r =>
                     r.ProcessResult == "Success" &&
@@ -2579,63 +2621,159 @@ namespace Runnatics.Services
                 // Filter to only unassigned readings
                 unassignedReadings = unassignedReadings
                     .Where(r => !existingAssignmentSet.Contains(r.Id))
-                    .OrderBy(r => r.Epc)
-                    .ThenBy(r => r.ReadTimeUtc)
                     .ToList();
 
                 _logger.LogInformation("Found {Count} readings needing checkpoint assignment", unassignedReadings.Count);
 
-                // Group by participant (EPC)
-                var readingsByEpc = unassignedReadings
-                    .GroupBy(r => r.Epc)
-                    .ToList();
-
                 var assignmentsToCreate = new List<ReadingCheckpointAssignment>();
                 var flaggedForReview = 0;
 
-                foreach (var epcGroup in readingsByEpc)
+                // Get race distance for the generic loop race assigner
+                var raceDistance = race.Distance ?? 10.0m; // Default to 10km if not specified
+
+                // ============================================================================
+                // GENERIC LOOP RACE ASSIGNMENT - Works for any race distance
+                // ============================================================================
+
+                var assigner = new LoopRaceCheckpointAssigner(_logger);
+
+                // First, group ALL readings by device serial (for shared devices, we need all readings to calculate split times)
+                var readingsByDevice = unassignedReadings
+                    .GroupBy(r => batchToDeviceSerial.TryGetValue(r.BatchId, out var serial) ? serial : r.DeviceId)
+                    .ToList();
+
+                foreach (var deviceGroup in readingsByDevice)
                 {
-                    var epc = epcGroup.Key;
-                    var epcReadings = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
+                    var deviceSerial = deviceGroup.Key;
 
-                    // Assign readings to checkpoints sequentially
-                    for (int i = 0; i < epcReadings.Count && i < checkpoints.Count; i++)
+                    // Look up device ID from serial
+                    if (string.IsNullOrEmpty(deviceSerial) || !deviceSerialToId.TryGetValue(deviceSerial, out var deviceId))
                     {
-                        var reading = epcReadings[i];
-                        var checkpoint = checkpoints[i];
-
-                        var elapsedSeconds = (reading.ReadTimeUtc - raceStartTime).TotalSeconds;
-
-                        // Simple validation: just check if reading is after race start
-                        if (elapsedSeconds < 0)
-                        {
-                            _logger.LogWarning("EPC {Epc}: Reading before race start", epc);
-                            flaggedForReview++;
-                            continue;
-                        }
-
-                        var assignment = new ReadingCheckpointAssignment
-                        {
-                            ReadingId = reading.Id,
-                            CheckpointId = checkpoint.Id,
-                            AuditProperties = new Models.Data.Common.AuditProperties
-                            {
-                                CreatedBy = userId,
-                                CreatedDate = DateTime.UtcNow,
-                                IsActive = true,
-                                IsDeleted = false
-                            }
-                        };
-
-                        assignmentsToCreate.Add(assignment);
+                        _logger.LogWarning("Device serial '{DeviceSerial}' not found in database, skipping {Count} readings",
+                            deviceSerial ?? "null", deviceGroup.Count());
+                        flaggedForReview += deviceGroup.Count();
+                        continue;
                     }
 
-                    // Flag extra readings beyond checkpoint count
-                    if (epcReadings.Count > checkpoints.Count)
+                    // Get checkpoints for this device
+                    if (!checkpointsByDeviceId.TryGetValue(deviceId, out var deviceCheckpoints))
                     {
-                        _logger.LogWarning("EPC {Epc} has {Extra} extra readings beyond {Max} checkpoints",
-                            epc, epcReadings.Count - checkpoints.Count, checkpoints.Count);
-                        flaggedForReview += epcReadings.Count - checkpoints.Count;
+                        _logger.LogWarning("No checkpoints found for device {DeviceId} (serial: {Serial}), skipping {Count} readings",
+                            deviceId, deviceSerial, deviceGroup.Count());
+                        flaggedForReview += deviceGroup.Count();
+                        continue;
+                    }
+
+                    // SIMPLE CASE: Device has only one checkpoint - assign all readings to it
+                    if (!sharedDeviceIds.Contains(deviceId))
+                    {
+                        var checkpoint = deviceCheckpoints.First();
+                        foreach (var reading in deviceGroup)
+                        {
+                            var elapsedSeconds = (reading.ReadTimeUtc - raceStartTime).TotalSeconds;
+                            if (elapsedSeconds < -60) // Allow 1 minute grace period before race start
+                            {
+                                _logger.LogDebug("Reading {ReadingId}: {Seconds}s before race start, flagging for review",
+                                    reading.Id, -elapsedSeconds);
+                                flaggedForReview++;
+                                continue;
+                            }
+
+                            assignmentsToCreate.Add(new ReadingCheckpointAssignment
+                            {
+                                ReadingId = reading.Id,
+                                CheckpointId = checkpoint.Id,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            });
+                        }
+                        continue;
+                    }
+
+                    // LOOP RACE CASE: Device is shared across multiple checkpoints (e.g., Start AND Finish)
+                    _logger.LogInformation(
+                        "Processing loop race device {DeviceSerial} with {CheckpointCount} checkpoints",
+                        deviceSerial, deviceCheckpoints.Count);
+
+                    // Collect ALL readings from this device to calculate split times
+                    var allDeviceReadings = deviceGroup
+                        .Select(r => r.ReadTimeUtc)
+                        .ToList();
+
+                    try
+                    {
+                        // Calculate split times using generic algorithm
+                        var splitTimes = assigner.CalculateSplitTimes(
+                            allDeviceReadings,
+                            deviceCheckpoints,
+                            raceStartTime,
+                            raceDistance);
+
+                        // Now assign each participant's readings using the calculated splits
+                        var readingsByEpc = deviceGroup.GroupBy(r => r.Epc);
+
+                        foreach (var epcGroup in readingsByEpc)
+                        {
+                            var epc = epcGroup.Key;
+                            var participantReadings = epcGroup.Select(r => r.ReadTimeUtc).ToList();
+
+                            // Assign readings to checkpoints
+                            var assignments = assigner.AssignParticipantReadings(
+                                participantReadings,
+                                splitTimes,
+                                raceStartTime);
+
+                            // Create assignment records - match readings back to original records by timestamp
+                            var originalReadings = epcGroup.ToDictionary(r => r.ReadTimeUtc, r => r);
+
+                            foreach (var (readingTime, checkpointIndex) in assignments)
+                            {
+                                if (!originalReadings.TryGetValue(readingTime, out var matchingReading))
+                                {
+                                    _logger.LogWarning(
+                                        "EPC {Epc}: Could not match reading time {Time} back to original record",
+                                        epc, readingTime);
+                                    flaggedForReview++;
+                                    continue;
+                                }
+
+                                if (checkpointIndex >= deviceCheckpoints.Count)
+                                {
+                                    _logger.LogWarning(
+                                        "EPC {Epc}: Reading assigned to checkpoint index {Index} but only {Count} checkpoints available",
+                                        epc, checkpointIndex, deviceCheckpoints.Count);
+                                    flaggedForReview++;
+                                    continue;
+                                }
+
+                                var checkpoint = deviceCheckpoints[checkpointIndex];
+
+                                assignmentsToCreate.Add(new ReadingCheckpointAssignment
+                                {
+                                    ReadingId = matchingReading.Id,
+                                    CheckpointId = checkpoint.Id,
+                                    AuditProperties = new Models.Data.Common.AuditProperties
+                                    {
+                                        CreatedBy = userId,
+                                        CreatedDate = DateTime.UtcNow,
+                                        IsActive = true,
+                                        IsDeleted = false
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "Failed to assign checkpoints for device {DeviceSerial}. Flagging {Count} readings for review.",
+                            deviceSerial, deviceGroup.Count());
+                        flaggedForReview += deviceGroup.Count();
                     }
                 }
 
@@ -2806,6 +2944,34 @@ namespace Runnatics.Services
                             segmentTimeMs = (long)(reading.ChipTime - previousCheckpointTime.Value).TotalMilliseconds;
                         }
 
+                        // Validate: Skip readings that occurred before race start (invalid data)
+                        if (splitTimeMs < 0)
+                        {
+                            _logger.LogWarning(
+                                "Skipping split time for participant {ParticipantId} at checkpoint {CheckpointId}: " +
+                                "Reading time {ReadTime} is before race start time {RaceStart} (splitTimeMs: {SplitTimeMs}ms)",
+                                participantId, reading.CheckpointId, reading.ChipTime, raceStartTime, splitTimeMs);
+
+                            // Still update previous checkpoint tracking to maintain sequence
+                            previousCheckpointId = reading.CheckpointId;
+                            previousCheckpointTime = reading.ChipTime;
+                            continue;
+                        }
+
+                        // Validate: Skip if segment time is negative (out of order readings)
+                        if (segmentTimeMs < 0)
+                        {
+                            _logger.LogWarning(
+                                "Skipping split time for participant {ParticipantId} at checkpoint {CheckpointId}: " +
+                                "Negative segment time detected (segmentTimeMs: {SegmentTimeMs}ms). Reading may be out of order.",
+                                participantId, reading.CheckpointId, segmentTimeMs);
+
+                            // Still update previous checkpoint tracking to maintain sequence
+                            previousCheckpointId = reading.CheckpointId;
+                            previousCheckpointTime = reading.ChipTime;
+                            continue;
+                        }
+
                         // Determine FromCheckpointId
                         int fromCheckpointId;
                         if (previousCheckpointId.HasValue)
@@ -2822,8 +2988,16 @@ namespace Runnatics.Services
                         // Convert milliseconds to TimeSpan for the SplitTime column (legacy TIME column)
                         var splitTimeSpan = TimeSpan.FromMilliseconds(splitTimeMs);
 
-                        // Ensure TimeSpan doesn't exceed max TIME value (23:59:59.9999999)
-                        if (splitTimeSpan.TotalHours >= 24)
+                        // Ensure TimeSpan is within valid SQL TIME range (00:00:00 to 23:59:59.9999999)
+                        // TIME column cannot handle negative values or values >= 24 hours
+                        if (splitTimeSpan < TimeSpan.Zero)
+                        {
+                            _logger.LogWarning(
+                                "Split time for participant {ParticipantId} is negative ({Time}). Setting to 00:00:00.",
+                                participantId, splitTimeSpan);
+                            splitTimeSpan = TimeSpan.Zero;
+                        }
+                        else if (splitTimeSpan.TotalHours >= 24)
                         {
                             _logger.LogWarning(
                                 "Split time for participant {ParticipantId} exceeds 24 hours ({Hours}h). Capping at 23:59:59.",

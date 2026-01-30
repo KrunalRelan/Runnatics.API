@@ -515,15 +515,17 @@ namespace Runnatics.Services
                         .GroupBy(r => r.CheckpointId)
                         .ToDictionary(g => g.Key, g => g.OrderBy(r => r.ChipTime).First()); // Keep earliest if multiple
 
-                    // Add checkpoint times
+                    // Add checkpoint times (converted to IST)
+                    var istTimeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
                     foreach (var checkpoint in checkpoints)
                     {
                         var checkpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}";
 
                         if (readingsByCheckpoint.TryGetValue(checkpoint.Id, out var reading))
                         {
-                            // Format time as HH:mm:ss
-                            participant.CheckpointTimes[checkpointName] = reading.ChipTime.ToString("HH:mm:ss");
+                            // Convert UTC to IST and format time as HH:mm:ss
+                            var istTime = TimeZoneInfo.ConvertTimeFromUtc(reading.ChipTime, istTimeZone);
+                            participant.CheckpointTimes[checkpointName] = istTime.ToString("HH:mm:ss");
                         }
                         else
                         {

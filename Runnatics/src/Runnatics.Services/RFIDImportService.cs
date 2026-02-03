@@ -1379,6 +1379,17 @@ namespace Runnatics.Services
 
                 var raceStartTime = race.StartTime;
 
+                // =====================================================================
+                // FIX #3: Validate Race.StartTime before processing
+                // =====================================================================
+                if (!raceStartTime.HasValue)
+                {
+                    ErrorMessage = "Race.StartTime is not set. Please configure the race start time before processing.";
+                    _logger.LogError("Race {RaceId} has no StartTime configured", decryptedRaceId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
                 // Get all successfully processed readings with checkpoint assignments
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
                 var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
@@ -1529,6 +1540,36 @@ namespace Runnatics.Services
 
                 response.TotalRawReadings = rawReadings.Count;
 
+                // =====================================================================
+                // FIX #3 (EXTENDED): Validate Race.StartTime against actual reading times
+                // =====================================================================
+                if (rawReadings.Count > 0)
+                {
+                    var earliestReading = rawReadings.Min(r => r.Reading.ReadTimeUtc);
+                    var daysDiff = Math.Abs((raceStartTime.Value - earliestReading).TotalDays);
+                    
+                    if (daysDiff > 1)
+                    {
+                        ErrorMessage = $"Race.StartTime ({raceStartTime.Value:yyyy-MM-dd HH:mm:ss}) differs from earliest reading ({earliestReading:yyyy-MM-dd HH:mm:ss}) by {daysDiff:F1} days. Please fix Race.StartTime in database.";
+                        _logger.LogError(
+                            "Race.StartTime validation failed for Race {RaceId}. StartTime: {StartTime}, Earliest reading: {EarliestReading}, Diff: {Diff} days",
+                            decryptedRaceId, raceStartTime.Value, earliestReading, daysDiff);
+                        response.Status = "Failed";
+                        return response;
+                    }
+                    
+                    var minutesDiff = (earliestReading - raceStartTime.Value).TotalMinutes;
+                    if (minutesDiff < -60)
+                    {
+                        ErrorMessage = $"Race.StartTime ({raceStartTime.Value:yyyy-MM-dd HH:mm:ss}) is more than 1 hour AFTER the earliest reading ({earliestReading:yyyy-MM-dd HH:mm:ss}). This would result in negative times. Please fix Race.StartTime.";
+                        _logger.LogError(
+                            "Race.StartTime appears to be in the future for Race {RaceId}. StartTime: {StartTime}, Earliest reading: {EarliestReading}",
+                            decryptedRaceId, raceStartTime.Value, earliestReading);
+                        response.Status = "Failed";
+                        return response;
+                    }
+                }
+
                 // **MERGE CHILD TO PARENT**: Map child checkpoint readings to parent checkpoint
                 // This ensures readings from child devices are grouped with parent device readings
                 var readingsWithMergedCheckpoints = rawReadings.Select(r => new
@@ -1574,6 +1615,31 @@ namespace Runnatics.Services
                         grouped.Where(g => g.Key.CheckpointId == stat.CheckpointId)
                                .Select(g => g.Key.ParticipantId).Distinct().Count());
                 }
+
+                // =====================================================================
+                // FIX #2: Build participant start times dictionary for NetTime calculation
+                // =====================================================================
+                var participantStartTimes = new Dictionary<int, DateTime>();
+                
+                // Collect all start checkpoint readings (use LATEST time at start mat per participant)
+                var startCheckpointReadings = readingsWithMergedCheckpoints
+                    .Where(r => r.CheckpointId == startCheckpointId)
+                    .GroupBy(r => r.ParticipantId)
+                    .Select(g => new
+                    {
+                        ParticipantId = g.Key,
+                        StartTime = g.Max(r => r.Reading.ReadTimeUtc) // LATEST reading at start mat
+                    })
+                    .ToList();
+                
+                foreach (var startReading in startCheckpointReadings)
+                {
+                    participantStartTimes[startReading.ParticipantId] = startReading.StartTime;
+                }
+                
+                _logger.LogInformation(
+                    "Built participant start times dictionary: {Count} participants have start checkpoint readings",
+                    participantStartTimes.Count);
 
                 // Process all groups in parallel using LINQ - no for loop needed
                 var normalizedReadings = grouped.Select(group =>
@@ -1631,6 +1697,42 @@ namespace Runnatics.Services
                         gunTime = (long)(bestReading.Reading.ReadTimeUtc - raceStartTime.Value).TotalMilliseconds;
                     }
 
+                    // =====================================================================
+                    // FIX #2: Calculate NetTime (milliseconds from participant start)
+                    // =====================================================================
+                    long? netTime = null;
+                    
+                    if (isStartCheckpoint)
+                    {
+                        // Special case: At start checkpoint, NetTime equals GunTime
+                        // (participant's start time is their first chip crossing)
+                        netTime = gunTime;
+                    }
+                    else if (participantStartTimes.TryGetValue(bestReading.ParticipantId, out var participantStart))
+                    {
+                        // Calculate NetTime from participant's start crossing
+                        netTime = (long)(bestReading.Reading.ReadTimeUtc - participantStart).TotalMilliseconds;
+                        
+                        // Validate NetTime is not negative (would indicate start assignment error)
+                        if (netTime < 0)
+                        {
+                            _logger.LogWarning(
+                                "Participant {ParticipantId} has negative NetTime ({NetTime}ms) at checkpoint {CheckpointId}. " +
+                                "Reading time {ReadTime} is before participant start {StartTime}. Setting NetTime to null.",
+                                bestReading.ParticipantId, netTime, group.Key.CheckpointId,
+                                bestReading.Reading.ReadTimeUtc.ToString("HH:mm:ss"),
+                                participantStart.ToString("HH:mm:ss"));
+                            netTime = null;
+                        }
+                    }
+                    else
+                    {
+                        // Participant has no start reading - log warning
+                        _logger.LogWarning(
+                            "Participant {ParticipantId} has no start checkpoint reading. NetTime will be null for checkpoint {CheckpointId}.",
+                            bestReading.ParticipantId, group.Key.CheckpointId);
+                    }
+
                     // Create normalized reading - use group.Key.CheckpointId which is the parent checkpoint
                     // (after merging child to parent), not bestReading.CheckpointId
                     return new ReadNormalized
@@ -1641,7 +1743,7 @@ namespace Runnatics.Services
                         RawReadId = bestReading.Reading.Id,
                         ChipTime = bestReading.Reading.ReadTimeUtc,
                         GunTime = gunTime,
-                        NetTime = null, // TODO: Calculate net time (from participant start)
+                        NetTime = netTime, // Now properly calculated!
                         IsManualEntry = false,
                         CreatedByUserId = userId,
                         AuditProperties = new Models.Data.Common.AuditProperties
@@ -1832,6 +1934,48 @@ namespace Runnatics.Services
                     response.Status = "Completed";
                     response.Message = "No finish line readings found. Run deduplication first.";
                     return response;
+                }
+
+                // =====================================================================
+                // FIX #4: Validate result times before processing
+                // =====================================================================
+                var negativeGunTimes = finishReadings.Where(r => r.GunTime.HasValue && r.GunTime.Value < 0).ToList();
+                if (negativeGunTimes.Any())
+                {
+                    ErrorMessage = $"Found {negativeGunTimes.Count} finish readings with negative GunTime. " +
+                        "Race.StartTime is incorrectly configured. Please check Race.StartTime in database.";
+                    _logger.LogError(
+                        "Validation failed: {Count} participants have negative GunTime. Race.StartTime may be wrong. " +
+                        "First few examples: {Examples}",
+                        negativeGunTimes.Count,
+                        string.Join(", ", negativeGunTimes.Take(5).Select(r => 
+                            $"Participant {r.ParticipantId}: {r.GunTime}ms")));
+                    response.Status = "Failed";
+                    return response;
+                }
+                
+                var negativeNetTimes = finishReadings.Where(r => r.NetTime.HasValue && r.NetTime.Value < 0).ToList();
+                if (negativeNetTimes.Any())
+                {
+                    _logger.LogWarning(
+                        "Found {Count} finish readings with negative NetTime. " +
+                        "This indicates participant start time assignment errors. " +
+                        "Results will be calculated but NetTime may be incorrect for these participants: {Examples}",
+                        negativeNetTimes.Count,
+                        string.Join(", ", negativeNetTimes.Take(5).Select(r => 
+                            $"Participant {r.ParticipantId}: {r.NetTime}ms")));
+                }
+                
+                var veryLongTimes = finishReadings.Where(r => 
+                    r.GunTime.HasValue && r.GunTime.Value > 24 * 60 * 60 * 1000).ToList(); // > 24 hours
+                if (veryLongTimes.Any())
+                {
+                    _logger.LogWarning(
+                        "Found {Count} finish readings with GunTime > 24 hours. " +
+                        "This may indicate timing errors: {Examples}",
+                        veryLongTimes.Count,
+                        string.Join(", ", veryLongTimes.Take(5).Select(r => 
+                            $"Participant {r.ParticipantId}: {TimeSpan.FromMilliseconds(r.GunTime.Value):hh\\:mm\\:ss}")));
                 }
 
                 // Get existing results to check for updates vs inserts

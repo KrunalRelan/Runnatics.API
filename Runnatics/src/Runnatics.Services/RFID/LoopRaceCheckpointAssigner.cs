@@ -36,8 +36,37 @@ namespace Runnatics.Services.RFID
                 throw new ArgumentException("Need at least 2 checkpoints for loop race assignment");
             }
 
+            // =================================================================
+            // FIX: Deduplicate readings within time window before analysis
+            // This prevents duplicate reads from skewing the clustering
+            // =================================================================
+            var dedupWindowSeconds = 30.0;
+            var sortedReadings = allReadings.OrderBy(r => r).ToList();
+            var deduplicatedReadings = new List<DateTime>();
+
+            if (sortedReadings.Count > 0)
+            {
+                deduplicatedReadings.Add(sortedReadings[0]);
+                for (int i = 1; i < sortedReadings.Count; i++)
+                {
+                    var gap = (sortedReadings[i] - deduplicatedReadings.Last()).TotalSeconds;
+                    if (gap > dedupWindowSeconds)
+                    {
+                        deduplicatedReadings.Add(sortedReadings[i]);
+                    }
+                }
+            }
+
+            if (deduplicatedReadings.Count != allReadings.Count)
+            {
+                _logger.LogInformation(
+                    "Split time analysis: Deduplicated {Original} readings to {Deduped} unique passes",
+                    allReadings.Count, deduplicatedReadings.Count);
+            }
+
+            // Use deduplicated readings for the rest of the analysis
             // Convert readings to elapsed seconds from race start
-            var elapsedTimes = allReadings
+            var elapsedTimes = deduplicatedReadings
                 .Select(r => (r - raceStartTime).TotalSeconds)
                 .Where(t => t >= -60) // Allow 1 minute pre-race grace period
                 .OrderBy(t => t)
@@ -49,8 +78,8 @@ namespace Runnatics.Services.RFID
             }
 
             _logger.LogInformation(
-                "Analyzing {Count} readings for {CheckpointCount} checkpoints over {Distance}km race",
-                elapsedTimes.Count, checkpoints.Count, raceDistance);
+                "Analyzing {Count} readings ({DeduplicatedCount} after dedup) for {CheckpointCount} checkpoints over {Distance}km race",
+                allReadings.Count, elapsedTimes.Count, checkpoints.Count, raceDistance);
 
             // Strategy 1: Detect natural gaps in the timeline (most reliable)
             var splitsByGapDetection = DetectTimingGaps(elapsedTimes, checkpoints.Count);

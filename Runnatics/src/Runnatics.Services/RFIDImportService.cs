@@ -22,6 +22,13 @@ namespace Runnatics.Services
         private readonly IUserContextService _userContext;
         private readonly IEncryptionService _encryptionService;
 
+        /// <summary>
+        /// Default deduplication window in seconds.
+        /// Readings from the same EPC within this window are treated as a single pass.
+        /// TODO: Make this configurable per race/event (discuss with client).
+        /// </summary>
+        private const double DEFAULT_DEDUP_WINDOW_SECONDS = 30.0;
+
         public RFIDImportService(
             IUnitOfWork<RaceSyncDbContext> repository,
             IMapper mapper,
@@ -34,6 +41,65 @@ namespace Runnatics.Services
             _logger = logger;
             _userContext = userContext;
             _encryptionService = encryptionService;
+        }
+
+        // =====================================================================
+        // FIX: Deduplication helper methods for loop race support
+        // =====================================================================
+
+        /// <summary>
+        /// Deduplicates readings within a time window. Readings from the same EPC
+        /// within dedupWindowSeconds are treated as a single pass.
+        /// Returns one representative reading per pass (strongest RSSI signal).
+        /// </summary>
+        private List<RawRFIDReading> DeduplicateReadingsPerPass(
+            List<RawRFIDReading> readings,
+            double dedupWindowSeconds = DEFAULT_DEDUP_WINDOW_SECONDS)
+        {
+            if (readings.Count <= 1) return new List<RawRFIDReading>(readings);
+
+            var sorted = readings.OrderBy(r => r.TimestampMs).ToList();
+            var result = new List<RawRFIDReading>();
+            var currentGroup = new List<RawRFIDReading> { sorted[0] };
+
+            for (int i = 1; i < sorted.Count; i++)
+            {
+                var timeDiffMs = sorted[i].TimestampMs - currentGroup[0].TimestampMs;
+                var timeDiffSeconds = timeDiffMs / 1000.0;
+
+                if (timeDiffSeconds <= dedupWindowSeconds)
+                {
+                    // Same pass — add to current group
+                    currentGroup.Add(sorted[i]);
+                }
+                else
+                {
+                    // New pass detected (gap > dedup window)
+                    // Pick the best reading from the current group
+                    result.Add(PickBestReadingFromGroup(currentGroup));
+                    currentGroup = new List<RawRFIDReading> { sorted[i] };
+                }
+            }
+
+            // Don't forget the last group
+            result.Add(PickBestReadingFromGroup(currentGroup));
+
+            return result;
+        }
+
+        /// <summary>
+        /// From a group of duplicate readings (same pass), pick the one with strongest RSSI.
+        /// If RSSI is not available, pick the earliest reading.
+        /// </summary>
+        private RawRFIDReading PickBestReadingFromGroup(List<RawRFIDReading> group)
+        {
+            if (group.Count == 1) return group[0];
+
+            // Pick strongest RSSI (closest to 0, i.e., maximum value since RSSI is negative)
+            return group
+                .OrderByDescending(r => r.RssiDbm ?? decimal.MinValue)
+                .ThenBy(r => r.TimestampMs)
+                .First();
         }
 
         public async Task<EPCMappingImportResponse> UploadEPCMappingAsync(string eventId, string raceId, EPCMappingImportRequest request)
@@ -867,8 +933,13 @@ namespace Runnatics.Services
                         existingAssignmentIds = new HashSet<long>(existing);
                     }
 
-                    // **GROUP READINGS BY PARTICIPANT** for loop race processing
+                    // =================================================================
+                    // FIX: GROUP AND DEDUPLICATE READINGS BY PARTICIPANT for loop race
+                    // =================================================================
                     Dictionary<int, List<RawRFIDReading>> readingsByParticipant = new Dictionary<int, List<RawRFIDReading>>();
+                    // Also keep deduplicated version for correct index-based checkpoint assignment
+                    Dictionary<int, List<RawRFIDReading>> deduplicatedReadingsByParticipant = new Dictionary<int, List<RawRFIDReading>>();
+
                     if (isLoopRace)
                     {
                         // Get EPC->Participant mapping first
@@ -890,15 +961,29 @@ namespace Runnatics.Services
                             }
                         }
 
-                        // Sort each participant's readings by timestamp
-                        foreach (var participantReadings in readingsByParticipant.Values)
+                        // Sort and DEDUPLICATE each participant's readings
+                        foreach (var kvp in readingsByParticipant)
                         {
-                            participantReadings.Sort((a, b) => a.TimestampMs.CompareTo(b.TimestampMs));
+                            kvp.Value.Sort((a, b) => a.TimestampMs.CompareTo(b.TimestampMs));
+
+                            // Deduplicate: readings within dedup window = same pass
+                            var deduplicated = DeduplicateReadingsPerPass(kvp.Value, DEFAULT_DEDUP_WINDOW_SECONDS);
+                            deduplicatedReadingsByParticipant[kvp.Key] = deduplicated;
+
+                            if (kvp.Value.Count != deduplicated.Count)
+                            {
+                                _logger.LogInformation(
+                                    "Loop race dedup: Participant {ParticipantId} had {Original} readings, " +
+                                    "deduplicated to {Deduped} unique passes",
+                                    kvp.Key, kvp.Value.Count, deduplicated.Count);
+                            }
                         }
 
                         _logger.LogInformation(
-                            "Loop race mode: Grouped {TotalReadings} readings into {ParticipantCount} participants",
-                            readings.Count, readingsByParticipant.Count);
+                            "Loop race mode: Grouped {TotalReadings} readings into {ParticipantCount} participants, " +
+                            "deduplicated to {TotalDeduped} unique passes",
+                            readings.Count, readingsByParticipant.Count,
+                            deduplicatedReadingsByParticipant.Values.Sum(v => v.Count));
                     }
 
                     // Process all readings in one pass - no nested queries
@@ -924,23 +1009,47 @@ namespace Runnatics.Services
 
                                 if (isLoopRace && deviceCheckpoints.Count > 0)
                                 {
-                                    // **LOOP RACE MODE**: Assign based on reading sequence
-                                    var participantReadings = readingsByParticipant[participant.Id];
-                                    int readingIndex = participantReadings.IndexOf(reading);
+                                    // ==========================================================
+                                    // FIX: LOOP RACE MODE — Assign based on DEDUPLICATED passes
+                                    // ==========================================================
+                                    if (deduplicatedReadingsByParticipant.TryGetValue(participant.Id, out var dedupedReadings))
+                                    {
+                                        // Find the deduplicated pass this reading belongs to
+                                        // A reading belongs to a pass if it's within the dedup window of the pass's representative reading
+                                        int passIndex = -1;
+                                        for (int pi = 0; pi < dedupedReadings.Count; pi++)
+                                        {
+                                            var passReading = dedupedReadings[pi];
+                                            var timeDiffMs = Math.Abs(reading.TimestampMs - passReading.TimestampMs);
+                                            if (timeDiffMs <= (long)(DEFAULT_DEDUP_WINDOW_SECONDS * 1000))
+                                            {
+                                                passIndex = pi;
+                                                break;
+                                            }
+                                        }
 
-                                    if (readingIndex >= 0 && readingIndex < deviceCheckpoints.Count)
-                                    {
-                                        assignedCheckpointId = deviceCheckpoints[readingIndex].Id;
-                                        _logger.LogDebug(
-                                            "Loop race: Participant {ParticipantId} reading #{Index} at {Time} assigned to checkpoint '{CheckpointName}' ({Distance}KM)",
-                                            participant.Id, readingIndex + 1, reading.ReadTimeUtc.ToString("HH:mm:ss"),
-                                            deviceCheckpoints[readingIndex].Name, deviceCheckpoints[readingIndex].DistanceFromStart);
-                                    }
-                                    else
-                                    {
-                                        _logger.LogWarning(
-                                            "Loop race: Participant {ParticipantId} has extra reading #{Index} beyond {MaxCheckpoints} checkpoints - skipping assignment",
-                                            participant.Id, readingIndex + 1, deviceCheckpoints.Count);
+                                        if (passIndex >= 0 && passIndex < deviceCheckpoints.Count)
+                                        {
+                                            assignedCheckpointId = deviceCheckpoints[passIndex].Id;
+                                            _logger.LogDebug(
+                                                "Loop race: Participant {ParticipantId} reading at {Time} belongs to pass #{Pass}, " +
+                                                "assigned to checkpoint '{CheckpointName}' ({Distance}KM)",
+                                                participant.Id, reading.ReadTimeUtc.ToString("HH:mm:ss"),
+                                                passIndex + 1, deviceCheckpoints[passIndex].Name,
+                                                deviceCheckpoints[passIndex].DistanceFromStart);
+                                        }
+                                        else if (passIndex >= deviceCheckpoints.Count)
+                                        {
+                                            _logger.LogWarning(
+                                                "Loop race: Participant {ParticipantId} has extra pass #{Pass} beyond {MaxCheckpoints} checkpoints - skipping",
+                                                participant.Id, passIndex + 1, deviceCheckpoints.Count);
+                                        }
+                                        else
+                                        {
+                                            _logger.LogWarning(
+                                                "Loop race: Participant {ParticipantId} reading at {Time} could not be matched to any pass",
+                                                participant.Id, reading.ReadTimeUtc.ToString("HH:mm:ss"));
+                                        }
                                     }
                                 }
                                 else if (importBatch.ExpectedCheckpointId.HasValue)
@@ -1326,6 +1435,21 @@ namespace Runnatics.Services
                 _logger.LogInformation("Built parent-child checkpoint mapping: {Count} child checkpoints mapped to parents",
                     childToParentCheckpointMap.Count);
 
+                // =====================================================================
+                // FIX: Identify start checkpoint for special handling (pick LAST entry)
+                // =====================================================================
+                var startCheckpointId = allCheckpoints
+                    .OrderBy(cp => cp.DistanceFromStart)
+                    .FirstOrDefault()?.Id ?? 0;
+
+                var finishCheckpointId = allCheckpoints
+                    .OrderByDescending(cp => cp.DistanceFromStart)
+                    .FirstOrDefault()?.Id ?? 0;
+
+                _logger.LogInformation(
+                    "Start checkpoint ID: {StartId}, Finish checkpoint ID: {FinishId}",
+                    startCheckpointId, finishCheckpointId);
+
                 // First, get already normalized reading IDs for THIS race to filter them out early
                 // Only filter by non-null RawReadId values (manual entries have null RawReadId)
                 var existingNormalizedReadIds = await normalizedRepo.GetQuery(n =>
@@ -1454,12 +1578,31 @@ namespace Runnatics.Services
                 // Process all groups in parallel using LINQ - no for loop needed
                 var normalizedReadings = grouped.Select(group =>
                 {
-                    // Get the best reading (earliest timestamp, strongest RSSI)
-                    // This now includes readings from both parent and child devices merged together
-                    var bestReading = group
-                        .OrderBy(r => r.Reading.TimestampMs)
-                        .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
-                        .First();
+                    // ==========================================================
+                    // FIX: For START checkpoint, pick LAST entry (runner leaving mat).
+                    //      For all other checkpoints, pick EARLIEST entry.
+                    // ==========================================================
+                    var isStartCheckpoint = group.Key.CheckpointId == startCheckpointId;
+
+                    var bestReading = isStartCheckpoint
+                        ? group
+                            .OrderByDescending(r => r.Reading.TimestampMs)  // LAST entry for start
+                            .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
+                            .First()
+                        : group
+                            .OrderBy(r => r.Reading.TimestampMs)             // EARLIEST entry for others
+                            .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
+                            .First();
+
+                    if (isStartCheckpoint && group.Count() > 1)
+                    {
+                        _logger.LogDebug(
+                            "Start checkpoint: Participant {ParticipantId} had {Count} readings, picked LAST at {Time} " +
+                            "(earliest was {EarliestTime})",
+                            group.Key.ParticipantId, group.Count(),
+                            bestReading.Reading.ReadTimeUtc.ToString("HH:mm:ss.fff"),
+                            group.OrderBy(r => r.Reading.TimestampMs).First().Reading.ReadTimeUtc.ToString("HH:mm:ss.fff"));
+                    }
 
                     // Log if there are multiple readings for same participant/checkpoint (duplicates or parent-child merged)
                     if (group.Count() > 1)
@@ -1475,8 +1618,9 @@ namespace Runnatics.Services
 
                         _logger.LogDebug(
                             "Participant {ParticipantId} at Checkpoint {CheckpointId}: {Count} readings {MergeInfo}over {Seconds:F1}s. " +
-                            "Using earliest reading at {Time}",
+                            "Using {Strategy} reading at {Time}",
                             group.Key.ParticipantId, group.Key.CheckpointId, group.Count(), mergeInfo, timeSpreadSeconds,
+                            isStartCheckpoint ? "latest" : "earliest",
                             bestReading.Reading.ReadTimeUtc.ToString("HH:mm:ss"));
                     }
 
@@ -1512,6 +1656,65 @@ namespace Runnatics.Services
 
                 var duplicateCount = rawReadings.Count - normalizedReadings.Count;
 
+                // =====================================================================
+                // FIX: Validate monotonically increasing checkpoint times per participant
+                // =====================================================================
+                var checkpointOrder = allCheckpoints
+                    .OrderBy(cp => cp.DistanceFromStart)
+                    .Select((cp, idx) => new { cp.Id, Order = idx, cp.DistanceFromStart })
+                    .ToDictionary(x => x.Id, x => x);
+
+                // Group normalized readings by participant and validate ordering
+                var readingsByParticipantForValidation = normalizedReadings
+                    .GroupBy(nr => nr.ParticipantId)
+                    .ToList();
+
+                var invalidReadings = new List<ReadNormalized>();
+
+                foreach (var participantGroup in readingsByParticipantForValidation)
+                {
+                    var orderedReadings = participantGroup
+                        .Where(nr => checkpointOrder.ContainsKey(nr.CheckpointId))
+                        .OrderBy(nr => checkpointOrder[nr.CheckpointId].Order)
+                        .ToList();
+
+                    // Check each consecutive pair
+                    for (int i = 1; i < orderedReadings.Count; i++)
+                    {
+                        var prev = orderedReadings[i - 1];
+                        var curr = orderedReadings[i];
+
+                        if (curr.ChipTime <= prev.ChipTime)
+                        {
+                            _logger.LogWarning(
+                                "MONOTONIC VIOLATION: Participant {ParticipantId} - " +
+                                "Checkpoint {PrevCp} ({PrevDist}km) at {PrevTime} >= " +
+                                "Checkpoint {CurrCp} ({CurrDist}km) at {CurrTime}. " +
+                                "Flagging reading for review.",
+                                participantGroup.Key,
+                                prev.CheckpointId,
+                                checkpointOrder[prev.CheckpointId].DistanceFromStart,
+                                prev.ChipTime.ToString("HH:mm:ss"),
+                                curr.CheckpointId,
+                                checkpointOrder[curr.CheckpointId].DistanceFromStart,
+                                curr.ChipTime.ToString("HH:mm:ss"));
+
+                            // Remove the invalid reading (the one that violates monotonic order)
+                            invalidReadings.Add(curr);
+                        }
+                    }
+                }
+
+                if (invalidReadings.Count > 0)
+                {
+                    _logger.LogWarning(
+                        "Removed {Count} normalized readings that violated monotonic time ordering",
+                        invalidReadings.Count);
+                    normalizedReadings = normalizedReadings
+                        .Except(invalidReadings)
+                        .ToList();
+                }
+
                 await _repository.BeginTransactionAsync();
 
                 try
@@ -1533,8 +1736,9 @@ namespace Runnatics.Services
                     response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
 
                     _logger.LogInformation(
-                        "Deduplication completed. Normalized: {Normalized}, Duplicates: {Duplicates}, Time: {Time}ms",
-                        normalizedReadings.Count, duplicateCount, response.ProcessingTimeMs);
+                        "Deduplication completed. Normalized: {Normalized}, Duplicates: {Duplicates}, " +
+                        "Monotonic violations removed: {Violations}, Time: {Time}ms",
+                        normalizedReadings.Count, duplicateCount, invalidReadings.Count, response.ProcessingTimeMs);
 
                     return response;
                 }
@@ -2720,24 +2924,58 @@ namespace Runnatics.Services
                         foreach (var epcGroup in readingsByEpc)
                         {
                             var epc = epcGroup.Key;
-                            var participantReadings = epcGroup.Select(r => r.ReadTimeUtc).ToList();
 
-                            // Assign readings to checkpoints
+                            // ==========================================================
+                            // FIX: Deduplicate readings per EPC before assignment
+                            // Readings within the dedup window are the same pass
+                            // ==========================================================
+                            var allEpcReadings = epcGroup.OrderBy(r => r.TimestampMs).ToList();
+                            var deduplicatedReadings = DeduplicateReadingsPerPass(allEpcReadings, DEFAULT_DEDUP_WINDOW_SECONDS);
+
+                            if (allEpcReadings.Count != deduplicatedReadings.Count)
+                            {
+                                _logger.LogInformation(
+                                    "EPC {Epc}: Deduplicated {Original} readings to {Deduped} unique passes " +
+                                    "(dedup window: {Window}s)",
+                                    epc, allEpcReadings.Count, deduplicatedReadings.Count, DEFAULT_DEDUP_WINDOW_SECONDS);
+                            }
+
+                            // Use deduplicated readings for checkpoint assignment
+                            var participantReadings = deduplicatedReadings.Select(r => r.ReadTimeUtc).ToList();
+
+                            // Assign readings to checkpoints using clustering-based split times
                             var assignments = assigner.AssignParticipantReadings(
                                 participantReadings,
                                 splitTimes,
                                 raceStartTime);
 
-                            // Create assignment records - match readings back to original records by timestamp
-                            var originalReadings = epcGroup.ToDictionary(r => r.ReadTimeUtc, r => r);
-
-                            foreach (var (readingTime, checkpointIndex) in assignments)
+                            // Build lookup from deduplicated reading index to checkpoint index
+                            var passToCheckpoint = new Dictionary<int, int>(); // passIndex -> checkpointIndex
+                            for (int ai = 0; ai < assignments.Count; ai++)
                             {
-                                if (!originalReadings.TryGetValue(readingTime, out var matchingReading))
+                                passToCheckpoint[ai] = assignments[ai].checkpointIndex;
+                            }
+
+                            // Assign ALL original readings (including duplicates) to the correct checkpoint
+                            foreach (var originalReading in allEpcReadings)
+                            {
+                                // Find which deduplicated pass this reading belongs to
+                                int passIndex = -1;
+                                for (int pi = 0; pi < deduplicatedReadings.Count; pi++)
+                                {
+                                    var timeDiffMs = Math.Abs(originalReading.TimestampMs - deduplicatedReadings[pi].TimestampMs);
+                                    if (timeDiffMs <= (long)(DEFAULT_DEDUP_WINDOW_SECONDS * 1000))
+                                    {
+                                        passIndex = pi;
+                                        break;
+                                    }
+                                }
+
+                                if (passIndex < 0 || !passToCheckpoint.TryGetValue(passIndex, out var checkpointIndex))
                                 {
                                     _logger.LogWarning(
-                                        "EPC {Epc}: Could not match reading time {Time} back to original record",
-                                        epc, readingTime);
+                                        "EPC {Epc}: Reading at {Time} could not be matched to any pass",
+                                        epc, originalReading.ReadTimeUtc.ToString("HH:mm:ss"));
                                     flaggedForReview++;
                                     continue;
                                 }
@@ -2745,18 +2983,18 @@ namespace Runnatics.Services
                                 if (checkpointIndex >= deviceCheckpoints.Count)
                                 {
                                     _logger.LogWarning(
-                                        "EPC {Epc}: Reading assigned to checkpoint index {Index} but only {Count} checkpoints available",
+                                        "EPC {Epc}: Reading assigned to checkpoint index {Index} but only {Count} available",
                                         epc, checkpointIndex, deviceCheckpoints.Count);
                                     flaggedForReview++;
                                     continue;
                                 }
 
-                                var checkpoint = deviceCheckpoints[checkpointIndex];
+                                var assignedCheckpoint = deviceCheckpoints[checkpointIndex];
 
                                 assignmentsToCreate.Add(new ReadingCheckpointAssignment
                                 {
-                                    ReadingId = matchingReading.Id,
-                                    CheckpointId = checkpoint.Id,
+                                    ReadingId = originalReading.Id,
+                                    CheckpointId = assignedCheckpoint.Id,
                                     AuditProperties = new Models.Data.Common.AuditProperties
                                     {
                                         CreatedBy = userId,
@@ -3074,4 +3312,3 @@ namespace Runnatics.Services
         }
     }
 }
-

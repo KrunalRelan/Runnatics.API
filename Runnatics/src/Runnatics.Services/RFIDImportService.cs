@@ -50,11 +50,14 @@ namespace Runnatics.Services
         /// <summary>
         /// Deduplicates readings within a time window. Readings from the same EPC
         /// within dedupWindowSeconds are treated as a single pass.
-        /// Returns one representative reading per pass (strongest RSSI signal).
+        /// Returns one representative reading per pass.
+        /// For start checkpoint: picks LAST reading (runner leaving mat).
+        /// For other checkpoints: picks strongest RSSI signal (best timing accuracy).
         /// </summary>
         private List<RawRFIDReading> DeduplicateReadingsPerPass(
             List<RawRFIDReading> readings,
-            double dedupWindowSeconds = DEFAULT_DEDUP_WINDOW_SECONDS)
+            double dedupWindowSeconds = DEFAULT_DEDUP_WINDOW_SECONDS,
+            bool isStartCheckpoint = false)  // ADD THIS PARAMETER
         {
             if (readings.Count <= 1) return new List<RawRFIDReading>(readings);
 
@@ -69,39 +72,48 @@ namespace Runnatics.Services
 
                 if (timeDiffSeconds <= dedupWindowSeconds)
                 {
-                    // Same pass — add to current group
                     currentGroup.Add(sorted[i]);
                 }
                 else
                 {
-                    // New pass detected (gap > dedup window)
-                    // Pick the best reading from the current group
-                    result.Add(PickBestReadingFromGroup(currentGroup));
+                    // CHANGE: Add isStartCheckpoint parameter
+                    result.Add(PickBestReadingFromGroup(currentGroup, isStartCheckpoint));
                     currentGroup = new List<RawRFIDReading> { sorted[i] };
                 }
             }
 
-            // Don't forget the last group
-            result.Add(PickBestReadingFromGroup(currentGroup));
+            // CHANGE: Add isStartCheckpoint parameter
+            result.Add(PickBestReadingFromGroup(currentGroup, isStartCheckpoint));
 
             return result;
         }
 
         /// <summary>
-        /// From a group of duplicate readings (same pass), pick the one with strongest RSSI.
-        /// If RSSI is not available, pick the earliest reading.
+        /// From a group of duplicate readings (same pass), pick the best representative.
+        /// For start checkpoint: pick LAST reading (when runner exits mat).
+        /// For other checkpoints: pick strongest RSSI (most accurate timing point).
         /// </summary>
-        private RawRFIDReading PickBestReadingFromGroup(List<RawRFIDReading> group)
+        private RawRFIDReading PickBestReadingFromGroup(List<RawRFIDReading> group, bool isStartCheckpoint = false)
         {
             if (group.Count == 1) return group[0];
 
-            // Pick strongest RSSI (closest to 0, i.e., maximum value since RSSI is negative)
-            return group
-                .OrderByDescending(r => r.RssiDbm ?? decimal.MinValue)
-                .ThenBy(r => r.TimestampMs)
-                .First();
+            // For start checkpoint: pick LAST reading (runner exiting mat)
+            // For other checkpoints: pick BEST RSSI (strongest signal = most accurate timing)
+            if (isStartCheckpoint)
+            {
+                return group
+                    .OrderByDescending(r => r.TimestampMs)  // Latest timestamp
+                    .ThenByDescending(r => r.RssiDbm ?? decimal.MinValue)
+                    .First();
+            }
+            else
+            {
+                return group
+                    .OrderByDescending(r => r.RssiDbm ?? decimal.MinValue)  // Strongest RSSI
+                    .ThenBy(r => r.TimestampMs)
+                    .First();
+            }
         }
-
         public async Task<EPCMappingImportResponse> UploadEPCMappingAsync(string eventId, string raceId, EPCMappingImportRequest request)
         {
             var userId = _userContext.UserId;
@@ -427,7 +439,9 @@ namespace Runnatics.Services
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var existingBatch = await batchRepo.GetQuery(b =>
                     b.FileHash == fileHash &&
-                    b.RaceId == decryptedRaceId)
+                    b.RaceId == decryptedRaceId &&
+                    b.AuditProperties.IsActive &&
+                    !b.AuditProperties.IsDeleted)
                     .FirstOrDefaultAsync();
 
                 if (existingBatch != null)
@@ -940,6 +954,19 @@ namespace Runnatics.Services
                     // Also keep deduplicated version for correct index-based checkpoint assignment
                     Dictionary<int, List<RawRFIDReading>> deduplicatedReadingsByParticipant = new Dictionary<int, List<RawRFIDReading>>();
 
+                    // IDENTIFY START CHECKPOINT(S): All checkpoints with DistanceFromStart = 0
+                    var startCheckpointIds = deviceCheckpoints
+                        .Where(cp => cp.DistanceFromStart == 0)
+                        .Select(cp => cp.Id)
+                        .ToHashSet();
+
+                    // GET RACE START TIME for filtering start checkpoint readings
+                    var raceRepo = _repository.GetRepository<Race>();
+                    var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+                    var raceStartTime = race?.StartTime;
+
                     if (isLoopRace)
                     {
                         // Get EPC->Participant mapping first
@@ -966,8 +993,77 @@ namespace Runnatics.Services
                         {
                             kvp.Value.Sort((a, b) => a.TimestampMs.CompareTo(b.TimestampMs));
 
+                            // ================================================================
+                            // FIX ISSUE #1: For START checkpoint in loop race, filter by race start time
+                            // Use 5-minute window (not 10) to strictly separate start from finish readings
+                            // In fast races (5K ~15-20 min), 10-minute window could include finish readings
+                            // ================================================================
+                            var isFirstPassStart = deviceCheckpoints.Count > 0 && 
+                                                    startCheckpointIds.Contains(deviceCheckpoints[0].Id);
+                            
+                            List<RawRFIDReading> readingsToDedup = kvp.Value;
+                            
+                            if (isFirstPassStart)
+                            {
+                                // Validate race start time is configured
+                                if (!raceStartTime.HasValue)
+                                {
+                                    _logger.LogWarning(
+                                        "Loop race: Participant {ParticipantId} has start checkpoint readings but Race.StartTime is not set. " +
+                                        "Cannot apply temporal filtering. This may cause incorrect start reading selection.",
+                                        kvp.Key);
+                                }
+                            else
+                            {
+                                    // Filter to start window (configurable per race, defaults to 5 minutes)
+                                    // This ensures we only capture actual start readings, excluding finish readings
+                                    // Allows flexibility for different race types (5K = 5 min, marathon = 10-15 min)
+                                    var startWindowMinutes = 5; //race.StartWindowMinutes ?? 5.0; // Use Race.StartWindowMinutes if configured
+                                var originalCount = readingsToDedup.Count;
+                                    
+                                    readingsToDedup = kvp.Value
+                                        .Where(r => 
+                                        {
+                                            var minutesSinceStart = (r.ReadTimeUtc - raceStartTime.Value).TotalMinutes;
+                                            // Allow readings from 1 minute BEFORE race start (early arrivals at mat)
+                                            // up to 5 minutes AFTER race start (normal rolling start window)
+                                            return minutesSinceStart >= -1.0 && minutesSinceStart <= startWindowMinutes;
+                                        })
+                                        .ToList();
+                                    
+                                    if (readingsToDedup.Count < originalCount)
+                                    {
+                                        _logger.LogInformation(
+                                            "Loop race: Participant {ParticipantId} start checkpoint filtered from {Original} to {Filtered} readings " +
+                                            "(excluded {Excluded} finish/late readings outside {Window}-minute start window). " +
+                                            "Race start: {RaceStart}",
+                                            kvp.Key, originalCount, readingsToDedup.Count, 
+                                            originalCount - readingsToDedup.Count, startWindowMinutes,
+                                            raceStartTime.Value.ToString("HH:mm:ss"));
+                                    }
+                                    
+                                    if (readingsToDedup.Count == 0)
+                                    {
+                                        _logger.LogWarning(
+                                            "Loop race: Participant {ParticipantId} has {OriginalCount} readings but NONE within {Window}-minute start window " +
+                                            "(Race start: {RaceStart}). Earliest reading: {EarliestTime}. " +
+                                            "Participant may have DNS (Did Not Start) or Race.StartTime is incorrectly configured.",
+                                            kvp.Key, originalCount, startWindowMinutes, 
+                                            raceStartTime.Value.ToString("HH:mm:ss"),
+                                            kvp.Value.OrderBy(r => r.TimestampMs).FirstOrDefault()?.ReadTimeUtc.ToString("HH:mm:ss") ?? "N/A");
+                                        deduplicatedReadingsByParticipant[kvp.Key] = new List<RawRFIDReading>();
+                                        continue;
+                                    }
+                                }
+                            }
+                            
                             // Deduplicate: readings within dedup window = same pass
-                            var deduplicated = DeduplicateReadingsPerPass(kvp.Value, DEFAULT_DEDUP_WINDOW_SECONDS);
+                            // For START checkpoint: pick LAST reading from filtered start window (runner exiting mat)
+                            // For other checkpoints: pick BEST RSSI (optimal timing accuracy)
+                            var deduplicated = DeduplicateReadingsPerPass(
+                                readingsToDedup, 
+                                DEFAULT_DEDUP_WINDOW_SECONDS,
+                                isFirstPassStart);  // ? Picks LAST reading for start, BEST RSSI for others
                             deduplicatedReadingsByParticipant[kvp.Key] = deduplicated;
 
                             if (kvp.Value.Count != deduplicated.Count)
@@ -2453,52 +2549,64 @@ namespace Runnatics.Services
                     _logger.LogInformation("Cleared {Count} checkpoint assignments", assignments.Count);
                 }
 
-                // 5. Reset RawRFIDReading status
+                // 5. Reset RawRFIDReading status (or delete if not keeping uploads)
                 var readings = await readingRepo.GetQuery(r => batchIds.Contains(r.BatchId))
                     .ToListAsync();
 
-                if (readings.Count > 0)
-                {
-                    foreach (var reading in readings)
-                    {
-                        reading.ProcessResult = "Pending";
-                        reading.ProcessedAt = null;
-                        reading.AssignmentMethod = null;
-                        reading.Notes = null;
-                    }
-                    await readingRepo.UpdateRangeAsync(readings);
-                    response.ReadingsReset = readings.Count;
-                    _logger.LogInformation("Reset {Count} raw readings to Pending", readings.Count);
-                }
-
-                // 6. Reset UploadBatch status
-                if (batches.Count > 0)
-                {
-                    foreach (var batch in batches)
-                    {
-                        batch.Status = "uploaded";
-                        batch.ProcessingStartedAt = null;
-                        batch.ProcessingCompletedAt = null;
-                    }
-                    await batchRepo.UpdateRangeAsync(batches);
-                    response.BatchesReset = batches.Count;
-                    _logger.LogInformation("Reset {Count} batches to uploaded status", batches.Count);
-                }
-
-                // 7. Optionally delete uploads completely
                 if (!keepUploads)
                 {
+                    // 5a. Delete readings directly if not keeping uploads
                     if (readings.Count > 0)
                     {
-                        // Use long overload for RawRFIDReading.Id
-                        var readingIdsToDelete = readings.Select(r => r.Id).ToList();
-                        await readingRepo.DeleteRangeAsync(readingIdsToDelete);
+                        // Use the already-tracked entities to avoid re-querying
+                        await readingRepo.BulkDeleteAsync(readings);
+                        response.UploadsDeleted = readings.Count;
+                        _logger.LogInformation("Deleted {Count} raw readings", readings.Count);
                     }
+                }
+                else
+                {
+                    // 5b. Reset readings to Pending if keeping uploads
+                    if (readings.Count > 0)
+                    {
+                        foreach (var reading in readings)
+                        {
+                            reading.ProcessResult = "Pending";
+                            reading.ProcessedAt = null;
+                            reading.AssignmentMethod = null;
+                            reading.Notes = null;
+                        }
+                        await readingRepo.UpdateRangeAsync(readings);
+                        response.ReadingsReset = readings.Count;
+                        _logger.LogInformation("Reset {Count} raw readings to Pending", readings.Count);
+                    }
+                }
+
+                // 6. Reset or delete UploadBatch status
+                if (!keepUploads)
+                {
+                    // 6a. Delete batches if not keeping uploads
                     if (batches.Count > 0)
                     {
                         await batchRepo.DeleteRangeAsync(batches.Select(b => b.Id).ToList());
                         response.UploadsDeleted = batches.Count;
                         _logger.LogInformation("Deleted {Count} upload batches", batches.Count);
+                    }
+                }
+                else
+                {
+                    // 6b. Reset batches if keeping uploads
+                    if (batches.Count > 0)
+                    {
+                        foreach (var batch in batches)
+                        {
+                            batch.Status = "uploaded";
+                            batch.ProcessingStartedAt = null;
+                            batch.ProcessingCompletedAt = null;
+                        }
+                        await batchRepo.UpdateRangeAsync(batches);
+                        response.BatchesReset = batches.Count;
+                        _logger.LogInformation("Reset {Count} batches to uploaded status", batches.Count);
                     }
                 }
 

@@ -2503,7 +2503,7 @@ namespace Runnatics.Services
 
                 if (results.Count > 0)
                 {
-                    await resultsRepo.DeleteRangeAsync(results.Select(r => r.Id).ToList());
+                    await resultsRepo.BulkDeleteAsync(results);
                     response.ResultsCleared = results.Count;
                     _logger.LogInformation("Cleared {Count} results", results.Count);
                 }
@@ -2517,7 +2517,7 @@ namespace Runnatics.Services
 
                 if (normalized.Count > 0)
                 {
-                    await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
+                    await normalizedRepo.BulkDeleteAsync(normalized);
                     response.NormalizedReadingsCleared = normalized.Count;
                     _logger.LogInformation("Cleared {Count} normalized readings", normalized.Count);
                 }
@@ -2544,7 +2544,7 @@ namespace Runnatics.Services
 
                 if (assignments.Count > 0)
                 {
-                    await assignmentRepo.DeleteRangeAsync(assignments.Select(a => a.Id).ToList());
+                    await assignmentRepo.BulkDeleteAsync(assignments);
                     response.AssignmentsCleared = assignments.Count;
                     _logger.LogInformation("Cleared {Count} checkpoint assignments", assignments.Count);
                 }
@@ -2588,7 +2588,7 @@ namespace Runnatics.Services
                     // 6a. Delete batches if not keeping uploads
                     if (batches.Count > 0)
                     {
-                        await batchRepo.DeleteRangeAsync(batches.Select(b => b.Id).ToList());
+                        await batchRepo.BulkDeleteAsync(batches);
                         response.UploadsDeleted = batches.Count;
                         _logger.LogInformation("Deleted {Count} upload batches", batches.Count);
                     }
@@ -2941,8 +2941,8 @@ namespace Runnatics.Services
 
         /// <summary>
         /// Assign checkpoints to readings for loop races where a single device is used at multiple checkpoints.
-        /// For shared devices (same device at Start and Finish), readings are assigned based on timing gaps.
-        /// For non-shared devices, readings are assigned to the single checkpoint associated with that device.
+        /// Uses turnaround-based algorithm: readings before turnaround = outbound, after turnaround = return.
+        /// Falls back to chronological order for participants without turnaround readings.
         /// </summary>
         public async Task<AssignCheckpointsResponse> AssignCheckpointsForLoopRaceAsync(string eventId, string raceId)
         {
@@ -2958,7 +2958,7 @@ namespace Runnatics.Services
 
             try
             {
-                _logger.LogInformation("Assigning checkpoints for loop race {RaceId}", decryptedRaceId);
+                _logger.LogInformation("Assigning checkpoints for loop race {RaceId} using turnaround-based algorithm", decryptedRaceId);
 
                 // Get race start time
                 var raceRepo = _repository.GetRepository<Race>();
@@ -3006,28 +3006,34 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                // Group checkpoints by device to find shared devices (loop race indicators)
+                // Initialize the turnaround-based assigner
+                var assigner = new LoopRaceCheckpointAssigner(_logger);
+
+                // ============================================================================
+                // STEP 1: Identify turnaround checkpoint (device with single checkpoint mapping)
+                // ============================================================================
+                var turnaroundConfig = assigner.IdentifyTurnaroundCheckpoint(checkpoints);
+
+                // ============================================================================
+                // STEP 2: Identify shared devices (devices mapped to 2 checkpoints: outbound + return)
+                // ============================================================================
+                var sharedDevices = assigner.IdentifySharedDevices(checkpoints);
+
+                // Group checkpoints by device for quick lookup
                 var checkpointsByDeviceId = checkpoints
                     .Where(cp => cp.DeviceId > 0)
                     .GroupBy(cp => cp.DeviceId)
                     .ToDictionary(g => g.Key, g => g.OrderBy(cp => cp.DistanceFromStart).ToList());
 
-                // Find devices used at multiple checkpoints (shared devices in loop races)
-                var sharedDeviceIds = checkpointsByDeviceId
-                    .Where(kvp => kvp.Value.Count > 1)
-                    .Select(kvp => kvp.Key)
-                    .ToHashSet();
+                var sharedDeviceIds = sharedDevices.Keys.ToHashSet();
 
                 if (sharedDeviceIds.Count > 0)
                 {
                     _logger.LogInformation(
-                        "Detected {Count} shared devices used at multiple checkpoints (loop race): {Devices}",
+                        "Detected {Count} shared devices for turnaround-based assignment: {Devices}",
                         sharedDeviceIds.Count,
-                        string.Join(", ", sharedDeviceIds.Select(id =>
-                        {
-                            var cps = checkpointsByDeviceId[id];
-                            return $"Device {id} -> [{string.Join(", ", cps.Select(cp => $"{cp.Name} ({cp.DistanceFromStart}km)"))}]";
-                        })));
+                        string.Join(", ", sharedDevices.Select(kvp =>
+                            $"Device {kvp.Key}: Outbound CP {kvp.Value.OutboundCheckpointId} ({kvp.Value.OutboundDistance}km) ? Return CP {kvp.Value.ReturnCheckpointId} ({kvp.Value.ReturnDistance}km)")));
                 }
 
                 // Get active chip assignments to map EPC to participant
@@ -3067,7 +3073,7 @@ namespace Runnatics.Services
                 var batchIds = batches.Select(b => b.Id).ToList();
                 var batchToDeviceSerial = batches.ToDictionary(b => b.Id, b => b.DeviceId);
 
-                var unassignedReadings = await readingRepo.GetQuery(r =>
+                var allReadings = await readingRepo.GetQuery(r =>
                     r.ProcessResult == "Success" &&
                     batchIds.Contains(r.BatchId) &&
                     r.AuditProperties.IsActive &&
@@ -3075,195 +3081,190 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 // Filter to only unassigned readings
-                unassignedReadings = unassignedReadings
+                var unassignedReadings = allReadings
                     .Where(r => !existingAssignmentSet.Contains(r.Id))
                     .ToList();
 
                 _logger.LogInformation("Found {Count} readings needing checkpoint assignment", unassignedReadings.Count);
 
-                var assignmentsToCreate = new List<ReadingCheckpointAssignment>();
-                var flaggedForReview = 0;
-
-                // Get race distance for the generic loop race assigner
-                var raceDistance = race.Distance ?? 10.0m; // Default to 10km if not specified
+                if (unassignedReadings.Count == 0)
+                {
+                    response.Status = "Completed";
+                    response.CheckpointsAssigned = 0;
+                    response.ReadingsProcessed = 0;
+                    response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
+                    return response;
+                }
 
                 // ============================================================================
-                // GENERIC LOOP RACE ASSIGNMENT - Works for any race distance
+                // STEP 3: Build reading data structure for turnaround time calculation
                 // ============================================================================
 
-                var assigner = new LoopRaceCheckpointAssigner(_logger);
-
-                // First, group ALL readings by device serial (for shared devices, we need all readings to calculate split times)
-                var readingsByDevice = unassignedReadings
-                    .GroupBy(r => batchToDeviceSerial.TryGetValue(r.BatchId, out var serial) ? serial : r.DeviceId)
+                // Map each reading to its device ID (primary key)
+                var readingsWithDeviceId = unassignedReadings
+                    .Select(r =>
+                    {
+                        var deviceSerial = batchToDeviceSerial.TryGetValue(r.BatchId, out var serial) ? serial : r.DeviceId;
+                        var deviceId = !string.IsNullOrEmpty(deviceSerial) && deviceSerialToId.TryGetValue(deviceSerial, out var id) ? id : 0;
+                        return new { Reading = r, DeviceId = deviceId, DeviceSerial = deviceSerial };
+                    })
+                    .Where(x => x.DeviceId > 0)
                     .ToList();
 
-                foreach (var deviceGroup in readingsByDevice)
+                // Group by EPC for turnaround calculation and assignment
+                var readingsByEpc = readingsWithDeviceId
+                    .GroupBy(x => x.Reading.Epc)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.OrderBy(x => x.Reading.ReadTimeUtc).ToList());
+
+                // ============================================================================
+                // STEP 4: Calculate turnaround times per participant (using turnaround device)
+                // ============================================================================
+                var turnaroundTimes = new Dictionary<string, DateTime>();
+
+                if (turnaroundConfig != null)
                 {
-                    var deviceSerial = deviceGroup.Key;
-
-                    // Look up device ID from serial
-                    if (string.IsNullOrEmpty(deviceSerial) || !deviceSerialToId.TryGetValue(deviceSerial, out var deviceId))
+                    foreach (var kvp in readingsByEpc)
                     {
-                        _logger.LogWarning("Device serial '{DeviceSerial}' not found in database, skipping {Count} readings",
-                            deviceSerial ?? "null", deviceGroup.Count());
-                        flaggedForReview += deviceGroup.Count();
-                        continue;
-                    }
+                        var turnaroundReading = kvp.Value
+                            .Where(x => x.DeviceId == turnaroundConfig.DeviceId)
+                            .OrderBy(x => x.Reading.ReadTimeUtc)
+                            .FirstOrDefault();
 
-                    // Get checkpoints for this device
-                    if (!checkpointsByDeviceId.TryGetValue(deviceId, out var deviceCheckpoints))
-                    {
-                        _logger.LogWarning("No checkpoints found for device {DeviceId} (serial: {Serial}), skipping {Count} readings",
-                            deviceId, deviceSerial, deviceGroup.Count());
-                        flaggedForReview += deviceGroup.Count();
-                        continue;
-                    }
-
-                    // SIMPLE CASE: Device has only one checkpoint - assign all readings to it
-                    if (!sharedDeviceIds.Contains(deviceId))
-                    {
-                        var checkpoint = deviceCheckpoints.First();
-                        foreach (var reading in deviceGroup)
+                        if (turnaroundReading != null)
                         {
-                            var elapsedSeconds = (reading.ReadTimeUtc - raceStartTime).TotalSeconds;
-                            if (elapsedSeconds < -60) // Allow 1 minute grace period before race start
+                            turnaroundTimes[kvp.Key] = turnaroundReading.Reading.ReadTimeUtc;
+                        }
+                    }
+
+                    _logger.LogInformation(
+                        "Calculated turnaround times for {WithTurnaround}/{Total} participants using device {DeviceId} (checkpoint '{Name}')",
+                        turnaroundTimes.Count, readingsByEpc.Count, turnaroundConfig.DeviceId, turnaroundConfig.CheckpointName);
+                }
+
+                // Calculate median turnaround time as fallback
+                var medianTurnaround = assigner.CalculateMedianTurnaround(turnaroundTimes, raceStartTime);
+
+                // ============================================================================
+                // STEP 5: Assign checkpoints to all readings
+                // ============================================================================
+                var assignmentsToCreate = new List<ReadingCheckpointAssignment>();
+                var assignedReadings = new List<LoopRaceCheckpointAssigner.AssignedReading>();
+                var flaggedForReview = 0;
+                var turnaroundAssignments = 0;
+                var chronologicalAssignments = 0;
+
+                foreach (var kvp in readingsByEpc)
+                {
+                    var epc = kvp.Key;
+                    var epcReadings = kvp.Value;
+
+                    // Get turnaround time for this participant (their own or median fallback)
+                    DateTime? participantTurnaround = turnaroundTimes.TryGetValue(epc, out var tt)
+                        ? tt
+                        : medianTurnaround;
+
+                    // Track chronological rank per device (for fallback when no turnaround)
+                    var deviceRanks = new Dictionary<int, int>();
+
+                    foreach (var readingData in epcReadings)
+                    {
+                        var reading = readingData.Reading;
+                        var deviceId = readingData.DeviceId;
+
+                        // Skip readings before race start (allow 1 minute grace period)
+                        var elapsedSeconds = (reading.ReadTimeUtc - raceStartTime).TotalSeconds;
+                        if (elapsedSeconds < -60)
+                        {
+                            _logger.LogDebug("Reading {ReadingId}: {Seconds}s before race start, flagging for review",
+                                reading.Id, -elapsedSeconds);
+                            flaggedForReview++;
+                            continue;
+                        }
+
+                        // Use turnaround-based assignment
+                        var checkpointId = assigner.AssignCheckpointToReading(
+                            reading.ReadTimeUtc,
+                            deviceId,
+                            turnaroundConfig,
+                            sharedDevices,
+                            participantTurnaround,
+                            deviceRanks,
+                            out var assignmentMethod);
+
+                        if (!checkpointId.HasValue)
+                        {
+                            // Device not found in checkpoint configuration
+                            if (checkpointsByDeviceId.TryGetValue(deviceId, out var deviceCheckpoints) && deviceCheckpoints.Count == 1)
                             {
-                                _logger.LogDebug("Reading {ReadingId}: {Seconds}s before race start, flagging for review",
-                                    reading.Id, -elapsedSeconds);
+                                // Single checkpoint device - assign directly
+                                checkpointId = deviceCheckpoints[0].Id;
+                                assignmentMethod = "SingleDeviceMapping";
+                            }
+                            else
+                            {
+                                _logger.LogWarning(
+                                    "EPC {Epc}: Could not assign reading at {Time} from device {DeviceId}",
+                                    epc, reading.ReadTimeUtc.ToString("HH:mm:ss"), deviceId);
                                 flaggedForReview++;
                                 continue;
                             }
-
-                            assignmentsToCreate.Add(new ReadingCheckpointAssignment
-                            {
-                                ReadingId = reading.Id,
-                                CheckpointId = checkpoint.Id,
-                                AuditProperties = new Models.Data.Common.AuditProperties
-                                {
-                                    CreatedBy = userId,
-                                    CreatedDate = DateTime.UtcNow,
-                                    IsActive = true,
-                                    IsDeleted = false
-                                }
-                            });
                         }
-                        continue;
-                    }
 
-                    // LOOP RACE CASE: Device is shared across multiple checkpoints (e.g., Start AND Finish)
-                    _logger.LogInformation(
-                        "Processing loop race device {DeviceSerial} with {CheckpointCount} checkpoints",
-                        deviceSerial, deviceCheckpoints.Count);
+                        // Track assignment method statistics
+                        if (assignmentMethod == "TurnaroundReference")
+                            turnaroundAssignments++;
+                        else if (assignmentMethod == "ChronologicalOrder")
+                            chronologicalAssignments++;
 
-                    // Collect ALL readings from this device to calculate split times
-                    var allDeviceReadings = deviceGroup
-                        .Select(r => r.ReadTimeUtc)
-                        .ToList();
-
-                    try
-                    {
-                        // Calculate split times using generic algorithm
-                        var splitTimes = assigner.CalculateSplitTimes(
-                            allDeviceReadings,
-                            deviceCheckpoints,
-                            raceStartTime,
-                            raceDistance);
-
-                        // Now assign each participant's readings using the calculated splits
-                        var readingsByEpc = deviceGroup.GroupBy(r => r.Epc);
-
-                        foreach (var epcGroup in readingsByEpc)
+                        // Store for deduplication
+                        assignedReadings.Add(new LoopRaceCheckpointAssigner.AssignedReading
                         {
-                            var epc = epcGroup.Key;
-
-                            // ==========================================================
-                            // FIX: Deduplicate readings per EPC before assignment
-                            // Readings within the dedup window are the same pass
-                            // ==========================================================
-                            var allEpcReadings = epcGroup.OrderBy(r => r.TimestampMs).ToList();
-                            var deduplicatedReadings = DeduplicateReadingsPerPass(allEpcReadings, DEFAULT_DEDUP_WINDOW_SECONDS);
-
-                            if (allEpcReadings.Count != deduplicatedReadings.Count)
-                            {
-                                _logger.LogInformation(
-                                    "EPC {Epc}: Deduplicated {Original} readings to {Deduped} unique passes " +
-                                    "(dedup window: {Window}s)",
-                                    epc, allEpcReadings.Count, deduplicatedReadings.Count, DEFAULT_DEDUP_WINDOW_SECONDS);
-                            }
-
-                            // Use deduplicated readings for checkpoint assignment
-                            var participantReadings = deduplicatedReadings.Select(r => r.ReadTimeUtc).ToList();
-
-                            // Assign readings to checkpoints using clustering-based split times
-                            var assignments = assigner.AssignParticipantReadings(
-                                participantReadings,
-                                splitTimes,
-                                raceStartTime);
-
-                            // Build lookup from deduplicated reading index to checkpoint index
-                            var passToCheckpoint = new Dictionary<int, int>(); // passIndex -> checkpointIndex
-                            for (int ai = 0; ai < assignments.Count; ai++)
-                            {
-                                passToCheckpoint[ai] = assignments[ai].checkpointIndex;
-                            }
-
-                            // Assign ALL original readings (including duplicates) to the correct checkpoint
-                            foreach (var originalReading in allEpcReadings)
-                            {
-                                // Find which deduplicated pass this reading belongs to
-                                int passIndex = -1;
-                                for (int pi = 0; pi < deduplicatedReadings.Count; pi++)
-                                {
-                                    var timeDiffMs = Math.Abs(originalReading.TimestampMs - deduplicatedReadings[pi].TimestampMs);
-                                    if (timeDiffMs <= (long)(DEFAULT_DEDUP_WINDOW_SECONDS * 1000))
-                                    {
-                                        passIndex = pi;
-                                        break;
-                                    }
-                                }
-
-                                if (passIndex < 0 || !passToCheckpoint.TryGetValue(passIndex, out var checkpointIndex))
-                                {
-                                    _logger.LogWarning(
-                                        "EPC {Epc}: Reading at {Time} could not be matched to any pass",
-                                        epc, originalReading.ReadTimeUtc.ToString("HH:mm:ss"));
-                                    flaggedForReview++;
-                                    continue;
-                                }
-
-                                if (checkpointIndex >= deviceCheckpoints.Count)
-                                {
-                                    _logger.LogWarning(
-                                        "EPC {Epc}: Reading assigned to checkpoint index {Index} but only {Count} available",
-                                        epc, checkpointIndex, deviceCheckpoints.Count);
-                                    flaggedForReview++;
-                                    continue;
-                                }
-
-                                var assignedCheckpoint = deviceCheckpoints[checkpointIndex];
-
-                                assignmentsToCreate.Add(new ReadingCheckpointAssignment
-                                {
-                                    ReadingId = originalReading.Id,
-                                    CheckpointId = assignedCheckpoint.Id,
-                                    AuditProperties = new Models.Data.Common.AuditProperties
-                                    {
-                                        CreatedBy = userId,
-                                        CreatedDate = DateTime.UtcNow,
-                                        IsActive = true,
-                                        IsDeleted = false
-                                    }
-                                });
-                            }
-                        }
+                            ReadingId = reading.Id,
+                            Epc = epc,
+                            DeviceId = deviceId,
+                            ReadTimeUtc = reading.ReadTimeUtc,
+                            CheckpointId = checkpointId.Value,
+                            AssignmentMethod = assignmentMethod
+                        });
                     }
-                    catch (Exception ex)
+                }
+
+                _logger.LogInformation(
+                    "Assignment methods: TurnaroundReference={Turnaround}, ChronologicalOrder={Chronological}, Flagged={Flagged}",
+                    turnaroundAssignments, chronologicalAssignments, flaggedForReview);
+
+                // ============================================================================
+                // STEP 6: Deduplicate readings (Start = LAST, Others = EARLIEST)
+                // ============================================================================
+                var deduplicatedReadings = assigner.DeduplicateAssignedReadings(assignedReadings, checkpoints);
+
+                _logger.LogInformation(
+                    "Deduplication: {Original} assigned readings ? {Deduped} after deduplication",
+                    assignedReadings.Count, deduplicatedReadings.Count);
+
+                // Convert to ReadingCheckpointAssignment entities
+                foreach (var assigned in deduplicatedReadings)
+                {
+                    assignmentsToCreate.Add(new ReadingCheckpointAssignment
                     {
-                        _logger.LogError(ex,
-                            "Failed to assign checkpoints for device {DeviceSerial}. Flagging {Count} readings for review.",
-                            deviceSerial, deviceGroup.Count());
-                        flaggedForReview += deviceGroup.Count();
+                        ReadingId = assigned.ReadingId,
+                        CheckpointId = assigned.CheckpointId,
+                        AuditProperties = new Models.Data.Common.AuditProperties
+                        {
+                            CreatedBy = userId,
+                            CreatedDate = DateTime.UtcNow,
+                            IsActive = true,
+                            IsDeleted = false
+                        }
+                    });
+
+                    // Update the raw reading with assignment method
+                    var reading = unassignedReadings.FirstOrDefault(r => r.Id == assigned.ReadingId);
+                    if (reading != null)
+                    {
+                        reading.AssignmentMethod = assigned.AssignmentMethod;
                     }
                 }
 
@@ -3272,6 +3273,15 @@ namespace Runnatics.Services
                 {
                     await assignmentRepo.BulkInsertAsync(assignmentsToCreate);
                     _logger.LogInformation("Created {Count} checkpoint assignments", assignmentsToCreate.Count);
+
+                    // Update raw readings with assignment methods
+                    var readingsToUpdate = unassignedReadings
+                        .Where(r => !string.IsNullOrEmpty(r.AssignmentMethod))
+                        .ToList();
+                    if (readingsToUpdate.Count > 0)
+                    {
+                        await readingRepo.BulkUpdateAsync(readingsToUpdate);
+                    }
                 }
 
                 response.CheckpointsAssigned = assignmentsToCreate.Count;
@@ -3279,6 +3289,10 @@ namespace Runnatics.Services
                 response.FlaggedForReview = flaggedForReview;
                 response.Status = "Completed";
                 response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
+
+                _logger.LogInformation(
+                    "Loop race checkpoint assignment completed in {Time}ms. Assigned: {Assigned}, Processed: {Processed}, Flagged: {Flagged}",
+                    response.ProcessingTimeMs, response.CheckpointsAssigned, response.ReadingsProcessed, response.FlaggedForReview);
 
                 return response;
             }

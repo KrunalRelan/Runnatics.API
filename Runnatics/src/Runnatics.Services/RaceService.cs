@@ -548,12 +548,12 @@ namespace Runnatics.Services
                 return false;
             }
 
-            if (request.StartTime < DateTime.UtcNow.Date)
-            {
-                ErrorMessage = "Race start time cannot be in the past.";
-                _logger.LogWarning("Past race start time provided: {Date}", request.StartTime);
-                return false;
-            }
+            //if (request.StartTime < DateTime.UtcNow.Date)
+            //{
+            //    ErrorMessage = "Race start time cannot be in the past.";
+            //    _logger.LogWarning("Past race start time provided: {Date}", request.StartTime);
+            //    return false;
+            //}
 
             if (request.EndTime < DateTime.UtcNow.Date && request.EndTime <= request.StartTime)
             {

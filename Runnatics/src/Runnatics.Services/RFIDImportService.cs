@@ -1,4 +1,4 @@
-using AutoMapper;
+﻿using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
@@ -1106,7 +1106,7 @@ namespace Runnatics.Services
                                 if (isLoopRace && deviceCheckpoints.Count > 0)
                                 {
                                     // ==========================================================
-                                    // FIX: LOOP RACE MODE � Assign based on DEDUPLICATED passes
+                                    // FIX: LOOP RACE MODE — Assign based on DEDUPLICATED passes
                                     // ==========================================================
                                     if (deduplicatedReadingsByParticipant.TryGetValue(participant.Id, out var dedupedReadings))
                                     {
@@ -1251,116 +1251,207 @@ namespace Runnatics.Services
         /// Process ALL pending RFID batches for an event/race with a single call.
         /// Useful for bulk processing after multiple file uploads.
         /// </summary>
-        public async Task<BulkProcessRFIDImportResponse> ProcessAllRFIDDataAsync(string eventId, string raceId)
+        // ============================================================================
+        // UPDATED ProcessCompleteWorkflowAsync — uses new race-level processing
+        //
+        // OLD FLOW (broken):
+        //   Phase 1:   ProcessAllRFIDDataAsync → foreach batch → ProcessRFIDStagingDataAsync
+        //              (per-batch loop race assignment can't see full timeline)
+        //   Phase 1.5: AssignCheckpointsForLoopRaceAsync
+        //              (tries to fix but readings already assigned incorrectly)
+        //
+        // NEW FLOW:
+        //   Phase 1:   ProcessAllStagingDataForRaceAsync
+        //              (validates ALL readings at once, assigns ONLY simple devices)
+        //   Phase 1.5: AssignCheckpointsForLoopRaceAsync
+        //              (assigns ALL shared/loop devices using turnaround algorithm)
+        //   Phase 2:   DeduplicateAndNormalizeAsync (unchanged)
+        //   Phase 2.5: CreateSplitTimesFromNormalizedReadingsAsync (unchanged)
+        //   Phase 3:   CalculateRaceResultsAsync (unchanged)
+        // ============================================================================
+            
+        public async Task<CompleteRFIDProcessingResponse> ProcessCompleteWorkflowAsync(string eventId, string raceId)
         {
-            var userId = _userContext.UserId;
-            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-
-            var response = new BulkProcessRFIDImportResponse
+            var overallStartTime = DateTime.UtcNow;
+            var response = new CompleteRFIDProcessingResponse
             {
-                ProcessedAt = DateTime.UtcNow,
+                ProcessedAt = overallStartTime,
                 Status = "Processing"
             };
 
             try
             {
-                _logger.LogInformation("Starting bulk RFID processing for Race {RaceId}", decryptedRaceId);
+                _logger.LogInformation("Starting complete RFID processing workflow for race {RaceId}", raceId);
 
-                // Get ALL pending batches for this event/race
-                var batchRepo = _repository.GetRepository<UploadBatch>();
-                var pendingBatches = await batchRepo.GetQuery(b =>
-                    b.EventId == decryptedEventId &&
-                    b.RaceId == decryptedRaceId &&
-                    (b.Status == "uploaded" || b.Status == "uploading") &&
-                    b.AuditProperties.IsActive &&
-                    !b.AuditProperties.IsDeleted)
-                    .AsNoTracking() // Read-only query, no need to track
-                    .OrderBy(b => b.AuditProperties.CreatedDate)
-                    .ToListAsync();
+                // ========== PHASE 1: Validate & Process ALL Readings (Race-Level) ==========
+                var phase1Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 1: Processing ALL staging data for race...");
 
-                if (pendingBatches.Count == 0)
+                // KEY CHANGE: Single call processes ALL batches at once
+                // Groups by EPC, orders by ReadTimeUtc across all batches
+                // Assigns checkpoints ONLY for simple devices (1:1 device→checkpoint)
+                // Shared/loop devices are left unassigned for Phase 1.5
+                var processAllResponse = await ProcessAllStagingDataForRaceAsync(eventId, raceId);
+
+                response.Phase1ProcessingMs = (long)(DateTime.UtcNow - phase1Start).TotalMilliseconds;
+                response.TotalBatchesProcessed = processAllResponse.TotalBatches;
+                response.SuccessfulBatches = processAllResponse.SuccessfulBatches;
+                response.FailedBatches = processAllResponse.FailedBatches;
+                response.TotalRawReadingsProcessed = processAllResponse.TotalProcessedReadings;
+
+                if (processAllResponse.Status == "Failed")
                 {
-                    response.Status = "NoDataToProcess";
-                    response.Message = "No pending batches found for this race";
-                    _logger.LogInformation("No pending batches found for Race {RaceId}", decryptedRaceId);
+                    response.Errors.Add("Phase 1 failed: " + processAllResponse.Message);
+                    response.Status = "Failed";
                     return response;
                 }
 
-                response.TotalBatches = pendingBatches.Count;
-                _logger.LogInformation("Processing {Count} batches for Race {RaceId}", pendingBatches.Count, decryptedRaceId);
-
-                // Process each batch
-                foreach (var batch in pendingBatches)
+                if (processAllResponse.Status == "NoDataToProcess")
                 {
-                    var batchResult = new BatchProcessResult
-                    {
-                        BatchId = _encryptionService.Encrypt(batch.Id.ToString()),
-                        FileName = batch.OriginalFileName,
-                        DeviceId = batch.DeviceId,
-                        Status = "Processing"
-                    };
-
-                    try
-                    {
-                        _logger.LogInformation("Processing batch {BatchId} - {FileName}", batch.Id, batch.OriginalFileName);
-
-                        // Reuse existing single-batch processing logic
-                        var processRequest = new ProcessRFIDImportRequest
-                        {
-                            EventId = eventId,
-                            RaceId = raceId,
-                            UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString())
-                        };
-
-                        var result = await ProcessRFIDStagingDataAsync(processRequest);
-
-                        batchResult.Status = result.Status;
-                        batchResult.SuccessCount = result.SuccessCount;
-                        batchResult.ErrorCount = result.ErrorCount;
-                        batchResult.UnlinkedCount = result.UnlinkedCount;
-
-                        if (result.Status == "Completed" || result.Status == "CompletedWithErrors")
-                        {
-                            response.SuccessfulBatches++;
-                            response.TotalProcessedReadings += result.SuccessCount;
-                        }
-                        else
-                        {
-                            response.FailedBatches++;
-                            batchResult.ErrorMessage = "Processing failed";
-                        }
-
-                        _logger.LogInformation(
-                            "Batch {BatchId} processed. Success: {Success}, Errors: {Errors}",
-                            batch.Id, result.SuccessCount, result.ErrorCount);
-                    }
-                    catch (Exception ex)
-                    {
-                        batchResult.Status = "Failed";
-                        batchResult.ErrorMessage = ex.Message;
-                        response.FailedBatches++;
-                        _logger.LogError(ex, "Failed to process batch {BatchId}", batch.Id);
-                    }
-
-                    response.BatchResults.Add(batchResult);
+                    response.Warnings.Add("No pending batches found to process");
                 }
 
-                response.Status = response.FailedBatches > 0 ? "CompletedWithErrors" : "Completed";
-                response.Message = $"Processed {response.SuccessfulBatches} of {response.TotalBatches} batches successfully";
+                _logger.LogInformation(
+                    "Phase 1 completed in {Time}ms. Batches: {Batches}, Readings: {Readings}",
+                    response.Phase1ProcessingMs,
+                    processAllResponse.TotalBatches,
+                    processAllResponse.TotalProcessedReadings);
+
+                // ========== PHASE 1.5: Assign Checkpoints for Shared/Loop Devices ==========
+                var phase15Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 1.5: Assigning checkpoints for shared/loop devices...");
+
+                // This now processes ALL unassigned readings across all batches
+                // using the turnaround-based algorithm with full participant timelines
+                var assignResponse = await AssignCheckpointsForLoopRaceAsync(eventId, raceId);
+
+                response.Phase15AssignmentMs = (long)(DateTime.UtcNow - phase15Start).TotalMilliseconds;
+                response.CheckpointsAssigned = assignResponse.CheckpointsAssigned;
+
+                if (assignResponse.Status == "Failed")
+                {
+                    response.Warnings.Add("Phase 1.5 failed: " + (assignResponse.ErrorMessage ?? "Checkpoint assignment error"));
+                }
 
                 _logger.LogInformation(
-                    "Bulk processing completed. Success: {Success}, Failed: {Failed}, Total Readings: {Readings}",
-                    response.SuccessfulBatches, response.FailedBatches, response.TotalProcessedReadings);
+                    "Phase 1.5 completed in {Time}ms. Assigned: {Count}",
+                    response.Phase15AssignmentMs,
+                    assignResponse.CheckpointsAssigned);
+
+                // ========== PHASE 2: Deduplicate and Normalize ==========
+                var phase2Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 2: Deduplicating and normalizing readings...");
+
+                var dedupeResponse = await DeduplicateAndNormalizeAsync(eventId, raceId);
+
+                response.Phase2DeduplicationMs = (long)(DateTime.UtcNow - phase2Start).TotalMilliseconds;
+                response.TotalNormalizedReadings = dedupeResponse.NormalizedReadings;
+                response.DuplicatesRemoved = dedupeResponse.DuplicatesRemoved;
+                response.CheckpointsProcessed = dedupeResponse.CheckpointsProcessed;
+                response.ParticipantsProcessed = dedupeResponse.ParticipantsProcessed;
+
+                if (dedupeResponse.Status == "Failed")
+                {
+                    response.Errors.Add("Phase 2 failed: Deduplication error");
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                if (dedupeResponse.NormalizedReadings == 0)
+                {
+                    response.Warnings.Add("No new readings to deduplicate");
+                }
+
+                _logger.LogInformation(
+                    "Phase 2 completed in {Time}ms. Normalized: {Normalized}, Duplicates removed: {Duplicates}",
+                    response.Phase2DeduplicationMs,
+                    dedupeResponse.NormalizedReadings,
+                    dedupeResponse.DuplicatesRemoved);
+
+                // ========== PHASE 2.5: Create Split Times ==========
+                var phase25Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 2.5: Creating split times...");
+
+                var splitTimeResponse = await CreateSplitTimesFromNormalizedReadingsAsync(eventId, raceId);
+
+                response.Phase25SplitTimesMs = (long)(DateTime.UtcNow - phase25Start).TotalMilliseconds;
+                response.SplitTimesCreated = splitTimeResponse.SplitTimesCreated;
+
+                if (splitTimeResponse.Status == "Failed")
+                {
+                    response.Warnings.Add("Phase 2.5 failed: Split time creation error (non-critical)");
+                }
+
+                _logger.LogInformation(
+                    "Phase 2.5 completed in {Time}ms. Split times created: {Count}",
+                    response.Phase25SplitTimesMs,
+                    splitTimeResponse.SplitTimesCreated);
+
+                // ========== PHASE 3: Calculate Results ==========
+                var phase3Start = DateTime.UtcNow;
+                _logger.LogInformation("Phase 3: Calculating race results...");
+
+                var calcResponse = await CalculateRaceResultsAsync(eventId, raceId);
+
+                response.Phase3CalculationMs = (long)(DateTime.UtcNow - phase3Start).TotalMilliseconds;
+                response.TotalFinishers = calcResponse.TotalFinishers;
+                response.ResultsCreated = calcResponse.ResultsCreated;
+                response.ResultsUpdated = calcResponse.ResultsUpdated;
+                response.DNFCount = calcResponse.DNFCount;
+                response.CategoriesProcessed = calcResponse.CategoriesProcessed;
+                response.GenderStats = calcResponse.GenderStats;
+
+                if (calcResponse.Status == "Failed")
+                {
+                    response.Errors.Add("Phase 3 failed: Results calculation error");
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                if (calcResponse.TotalFinishers == 0)
+                {
+                    response.Warnings.Add("No finishers found. Ensure checkpoints are properly configured.");
+                }
+
+                _logger.LogInformation(
+                    "Phase 3 completed in {Time}ms. Finishers: {Finishers}, Created: {Created}, Updated: {Updated}",
+                    response.Phase3CalculationMs,
+                    calcResponse.TotalFinishers,
+                    calcResponse.ResultsCreated,
+                    calcResponse.ResultsUpdated);
+
+                // ========== Final Summary ==========
+                var overallEndTime = DateTime.UtcNow;
+                response.TotalProcessingTimeMs = (long)(overallEndTime - overallStartTime).TotalMilliseconds;
+
+                response.Status = response.Errors.Count > 0 ? "CompletedWithErrors" : "Completed";
+                response.Message = $"Complete workflow finished: {response.TotalFinishers} finishers processed across {response.CheckpointsProcessed} checkpoints";
+
+                _logger.LogInformation(
+                    "═══ Complete RFID workflow finished in {TotalTime}ms ═══\n" +
+                    "  Phase 1  (Validate):   {P1}ms — {Batches} batches, {Readings} readings\n" +
+                    "  Phase 1.5 (Assign):    {P15}ms — {Assigned} checkpoint assignments\n" +
+                    "  Phase 2  (Normalize):  {P2}ms — {Normalized} normalized, {Dupes} dupes removed\n" +
+                    "  Phase 2.5 (Splits):    {P25}ms — {Splits} split times\n" +
+                    "  Phase 3  (Results):    {P3}ms — {Finishers} finishers\n" +
+                    "  Status: {Status}",
+                    response.TotalProcessingTimeMs,
+                    response.Phase1ProcessingMs, response.TotalBatchesProcessed, response.TotalRawReadingsProcessed,
+                    response.Phase15AssignmentMs, response.CheckpointsAssigned,
+                    response.Phase2DeduplicationMs, response.TotalNormalizedReadings, response.DuplicatesRemoved,
+                    response.Phase25SplitTimesMs, response.SplitTimesCreated,
+                    response.Phase3CalculationMs, response.TotalFinishers,
+                    response.Status);
 
                 return response;
             }
             catch (Exception ex)
             {
-                ErrorMessage = $"Error during bulk processing: {ex.Message}";
-                _logger.LogError(ex, "Error processing all RFID data for race {RaceId}", decryptedRaceId);
+                ErrorMessage = $"Error during complete RFID workflow: {ex.Message}";
+                _logger.LogError(ex, "Error during complete RFID processing workflow");
                 response.Status = "Failed";
-                response.Message = ex.Message;
+                response.Errors.Add($"Unexpected error: {ex.Message}");
+                response.TotalProcessingTimeMs = (long)(DateTime.UtcNow - overallStartTime).TotalMilliseconds;
                 return response;
             }
         }
@@ -1955,10 +2046,7 @@ namespace Runnatics.Services
             }
         }
 
-        /// <summary>
-        /// Calculate race results from normalized readings and insert into Results table.
-        /// Calculates overall, gender, and category rankings.
-        /// </summary>
+        
         public async Task<CalculateResultsResponse> CalculateRaceResultsAsync(string eventId, string raceId)
         {
             var userId = _userContext.UserId;
@@ -2212,9 +2300,6 @@ namespace Runnatics.Services
             }
         }
 
-        /// <summary>
-        /// Calculate gender-based rankings for all results in a race - Optimized with LINQ (no for loops)
-        /// </summary>
         private async Task CalculateGenderRankingsAsync(int eventId, int raceId, int? userId)
         {
             var resultsRepo = _repository.GetRepository<Results>();
@@ -2249,9 +2334,6 @@ namespace Runnatics.Services
             }
         }
 
-        /// <summary>
-        /// Calculate category-based rankings for all results in a race - Optimized with LINQ (no for loops)
-        /// </summary>
         private async Task<int> CalculateCategoryRankingsAsync(int eventId, int raceId, int? userId)
         {
             var resultsRepo = _repository.GetRepository<Results>();
@@ -2292,184 +2374,410 @@ namespace Runnatics.Services
             return categoryGroups.Count;
         }
 
+        // ============================================================================
+        // REPLACE ProcessAllRFIDDataAsync AND ProcessRFIDStagingDataAsync with these
+        // two methods in RFIDImportService.cs
+        //
+        // KEY CHANGE: Instead of processing batch-by-batch, we now:
+        //   1. Load ALL pending readings across ALL batches for the race
+        //   2. Group by EPC (participant), order by ReadTimeUtc
+        //   3. Validate only (EPC linking, RSSI check)
+        //   4. Mark readings as Success/Invalid — NO checkpoint assignment here
+        //   5. Phase 1.5 (AssignCheckpointsForLoopRaceAsync) handles all assignment
+        //
+        // OLD FLOW (broken for loop races):
+        //   ProcessAllRFIDDataAsync → foreach batch → ProcessRFIDStagingDataAsync
+        //     → per-batch checkpoint assignment (can't see full participant timeline)
+        //
+        // NEW FLOW:
+        //   ProcessAllStagingDataForRaceAsync (processes everything at once)
+        //     → validates all readings across all batches
+        //     → simple devices: assigns checkpoint immediately
+        //     → shared/loop devices: skips assignment (Phase 1.5 handles it)
+        // ============================================================================
+
+
         /// <summary>
-        /// Complete RFID processing workflow: Process all pending batches, deduplicate readings, and calculate results.
-        /// Optimized with bulk operations for best performance.
+        /// Process ALL pending RFID readings for a race in one pass.
+        /// Groups readings by EPC across all batches, validates them, and assigns
+        /// checkpoints for simple (single-device) mappings only.
+        /// 
+        /// Loop race / shared device checkpoint assignment is DEFERRED to
+        /// AssignCheckpointsForLoopRaceAsync (Phase 1.5), which has the full
+        /// cross-batch participant timeline needed for turnaround-based assignment.
         /// </summary>
-        public async Task<CompleteRFIDProcessingResponse> ProcessCompleteWorkflowAsync(string eventId, string raceId)
+        public async Task<BulkProcessRFIDImportResponse> ProcessAllStagingDataForRaceAsync(string eventId, string raceId)
+{
+    var userId = _userContext.UserId;
+    var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+    var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+    var response = new BulkProcessRFIDImportResponse
+    {
+        ProcessedAt = DateTime.UtcNow,
+        Status = "Processing"
+    };
+
+    try
+    {
+        _logger.LogInformation(
+            "═══ Phase 1: Processing ALL staging data for Race {RaceId} ═══",
+            decryptedRaceId);
+
+        // ================================================================
+        // 1. GET ALL PENDING BATCHES
+        // ================================================================
+        var batchRepo = _repository.GetRepository<UploadBatch>();
+        var pendingBatches = await batchRepo.GetQuery(b =>
+            b.EventId == decryptedEventId &&
+            b.RaceId == decryptedRaceId &&
+            (b.Status == "uploaded" || b.Status == "uploading") &&
+            b.AuditProperties.IsActive &&
+            !b.AuditProperties.IsDeleted)
+            .OrderBy(b => b.AuditProperties.CreatedDate)
+            .ToListAsync();
+
+        if (pendingBatches.Count == 0)
         {
-            var overallStartTime = DateTime.UtcNow;
-            var response = new CompleteRFIDProcessingResponse
+            response.Status = "NoDataToProcess";
+            response.Message = "No pending batches found for this race";
+            _logger.LogInformation("No pending batches found for Race {RaceId}", decryptedRaceId);
+            return response;
+        }
+
+        var batchIds = pendingBatches.Select(b => b.Id).ToList();
+        response.TotalBatches = pendingBatches.Count;
+
+        _logger.LogInformation(
+            "Found {Count} pending batches: [{BatchIds}]",
+            pendingBatches.Count,
+            string.Join(", ", pendingBatches.Select(b => $"{b.Id}({b.DeviceId})")));
+
+        // ================================================================
+        // 2. LOAD ALL PENDING READINGS ACROSS ALL BATCHES
+        // ================================================================
+        var readingRepo = _repository.GetRepository<RawRFIDReading>();
+        var allReadings = await readingRepo.GetQuery(r =>
+            batchIds.Contains(r.BatchId) &&
+            r.ProcessResult == "Pending" &&
+            r.AuditProperties.IsActive &&
+            !r.AuditProperties.IsDeleted)
+            .OrderBy(r => r.Epc)
+            .ThenBy(r => r.ReadTimeUtc)
+            .ToListAsync();
+
+        if (allReadings.Count == 0)
+        {
+            response.Status = "Completed";
+            response.Message = "No pending readings to process";
+            _logger.LogInformation("No pending readings across {Count} batches", pendingBatches.Count);
+
+            // Mark batches as completed
+            foreach (var batch in pendingBatches)
             {
-                ProcessedAt = overallStartTime,
-                Status = "Processing"
-            };
-
-            try
-            {
-                _logger.LogInformation("Starting complete RFID processing workflow for race {RaceId}", raceId);
-
-                // ========== PHASE 1: Process All Pending Batches ==========
-                var phase1Start = DateTime.UtcNow;
-                _logger.LogInformation("Phase 1: Processing pending batches...");
-
-                var processAllResponse = await ProcessAllRFIDDataAsync(eventId, raceId);
-
-                response.Phase1ProcessingMs = (long)(DateTime.UtcNow - phase1Start).TotalMilliseconds;
-                response.TotalBatchesProcessed = processAllResponse.TotalBatches;
-                response.SuccessfulBatches = processAllResponse.SuccessfulBatches;
-                response.FailedBatches = processAllResponse.FailedBatches;
-                response.TotalRawReadingsProcessed = processAllResponse.TotalProcessedReadings;
-
-                if (processAllResponse.Status == "Failed")
-                {
-                    response.Errors.Add("Phase 1 failed: " + processAllResponse.Message);
-                    response.Status = "Failed";
-                    return response;
-                }
-
-                if (processAllResponse.Status == "NoDataToProcess")
-                {
-                    response.Warnings.Add("No pending batches found to process");
-                }
-
-                _logger.LogInformation(
-                    "Phase 1 completed in {Time}ms. Batches: {Success}/{Total}, Readings: {Readings}",
-                    response.Phase1ProcessingMs,
-                    processAllResponse.SuccessfulBatches,
-                    processAllResponse.TotalBatches,
-                    processAllResponse.TotalProcessedReadings);
-
-                // ========== PHASE 1.5: Assign Checkpoints (Loop Races) ==========
-                var phase15Start = DateTime.UtcNow;
-                _logger.LogInformation("Phase 1.5: Assigning checkpoints for loop races...");
-
-                var assignResponse = await AssignCheckpointsForLoopRaceAsync(eventId, raceId);
-
-                response.Phase15AssignmentMs = (long)(DateTime.UtcNow - phase15Start).TotalMilliseconds;
-                response.CheckpointsAssigned = assignResponse.CheckpointsAssigned;
-
-                if (assignResponse.Status == "Failed")
-                {
-                    response.Warnings.Add("Phase 1.5 failed: Checkpoint assignment error (may affect loop races)");
-                }
-
-                _logger.LogInformation(
-                    "Phase 1.5 completed in {Time}ms. Assigned: {Count}",
-                    response.Phase15AssignmentMs,
-                    assignResponse.CheckpointsAssigned);
-
-                // ========== PHASE 2: Deduplicate and Normalize ==========
-                var phase2Start = DateTime.UtcNow;
-                _logger.LogInformation("Phase 2: Deduplicating and normalizing readings...");
-
-                var dedupeResponse = await DeduplicateAndNormalizeAsync(eventId, raceId);
-
-                response.Phase2DeduplicationMs = (long)(DateTime.UtcNow - phase2Start).TotalMilliseconds;
-                response.TotalNormalizedReadings = dedupeResponse.NormalizedReadings;
-                response.DuplicatesRemoved = dedupeResponse.DuplicatesRemoved;
-                response.CheckpointsProcessed = dedupeResponse.CheckpointsProcessed;
-                response.ParticipantsProcessed = dedupeResponse.ParticipantsProcessed;
-
-                if (dedupeResponse.Status == "Failed")
-                {
-                    response.Errors.Add("Phase 2 failed: Deduplication error");
-                    response.Status = "Failed";
-                    return response;
-                }
-
-                if (dedupeResponse.NormalizedReadings == 0)
-                {
-                    response.Warnings.Add("No new readings to deduplicate");
-                }
-
-                _logger.LogInformation(
-                    "Phase 2 completed in {Time}ms. Normalized: {Normalized}, Duplicates removed: {Duplicates}",
-                    response.Phase2DeduplicationMs,
-                    dedupeResponse.NormalizedReadings,
-                    dedupeResponse.DuplicatesRemoved);
-
-                // ========== PHASE 2.5: Create Split Times ==========
-                var phase25Start = DateTime.UtcNow;
-                _logger.LogInformation("Phase 2.5: Creating split times...");
-
-                var splitTimeResponse = await CreateSplitTimesFromNormalizedReadingsAsync(eventId, raceId);
-
-                response.Phase25SplitTimesMs = (long)(DateTime.UtcNow - phase25Start).TotalMilliseconds;
-                response.SplitTimesCreated = splitTimeResponse.SplitTimesCreated;
-
-                if (splitTimeResponse.Status == "Failed")
-                {
-                    response.Warnings.Add("Phase 2.5 failed: Split time creation error (non-critical)");
-                }
-
-                _logger.LogInformation(
-                    "Phase 2.5 completed in {Time}ms. Split times created: {Count}",
-                    response.Phase25SplitTimesMs,
-                    splitTimeResponse.SplitTimesCreated);
-
-                // ========== PHASE 3: Calculate Results ==========
-                var phase3Start = DateTime.UtcNow;
-                _logger.LogInformation("Phase 3: Calculating race results...");
-
-                var calcResponse = await CalculateRaceResultsAsync(eventId, raceId);
-
-                response.Phase3CalculationMs = (long)(DateTime.UtcNow - phase3Start).TotalMilliseconds;
-                response.TotalFinishers = calcResponse.TotalFinishers;
-                response.ResultsCreated = calcResponse.ResultsCreated;
-                response.ResultsUpdated = calcResponse.ResultsUpdated;
-                response.DNFCount = calcResponse.DNFCount;
-                response.CategoriesProcessed = calcResponse.CategoriesProcessed;
-                response.GenderStats = calcResponse.GenderStats;
-
-                if (calcResponse.Status == "Failed")
-                {
-                    response.Errors.Add("Phase 3 failed: Results calculation error");
-                    response.Status = "Failed";
-                    return response;
-                }
-
-                if (calcResponse.TotalFinishers == 0)
-                {
-                    response.Warnings.Add("No finishers found. Ensure checkpoints are properly configured.");
-                }
-
-                _logger.LogInformation(
-                    "Phase 3 completed in {Time}ms. Finishers: {Finishers}, Results created: {Created}, Updated: {Updated}",
-                    response.Phase3CalculationMs,
-                    calcResponse.TotalFinishers,
-                    calcResponse.ResultsCreated,
-                    calcResponse.ResultsUpdated);
-
-                // ========== Final Summary ==========
-                var overallEndTime = DateTime.UtcNow;
-                response.TotalProcessingTimeMs = (long)(overallEndTime - overallStartTime).TotalMilliseconds;
-
-                response.Status = response.Errors.Count > 0 ? "CompletedWithErrors" : "Completed";
-                response.Message = $"Complete workflow finished: {response.TotalFinishers} finishers processed across {response.CheckpointsProcessed} checkpoints";
-
-                _logger.LogInformation(
-                    "Complete RFID workflow finished in {TotalTime}ms. Status: {Status}. " +
-                    "Batches: {Batches}, Readings: {Readings}, Normalized: {Normalized}, Finishers: {Finishers}",
-                    response.TotalProcessingTimeMs,
-                    response.Status,
-                    response.TotalBatchesProcessed,
-                    response.TotalRawReadingsProcessed,
-                    response.TotalNormalizedReadings,
-                    response.TotalFinishers);
-
-                return response;
+                batch.Status = "completed";
+                batch.ProcessingCompletedAt = DateTime.UtcNow;
             }
-            catch (Exception ex)
+            await batchRepo.UpdateRangeAsync(pendingBatches);
+            await _repository.SaveChangesAsync();
+            return response;
+        }
+
+        _logger.LogInformation(
+            "Loaded {TotalReadings} pending readings across {BatchCount} batches. " +
+            "Unique EPCs: {UniqueEpcs}",
+            allReadings.Count,
+            batchIds.Count,
+            allReadings.Select(r => r.Epc).Distinct().Count());
+
+        // ================================================================
+        // 3. LOAD PARTICIPANT / CHIP ASSIGNMENTS
+        // ================================================================
+        var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+        var chipAssignments = await chipAssignmentRepo.GetQuery(ca =>
+            ca.Participant.RaceId == decryptedRaceId &&
+            ca.Participant.EventId == decryptedEventId &&
+            !ca.UnassignedAt.HasValue &&
+            ca.AuditProperties.IsActive &&
+            !ca.AuditProperties.IsDeleted)
+            .Include(ca => ca.Chip)
+            .Include(ca => ca.Participant)
+            .AsNoTracking()
+            .ToListAsync();
+
+        // EPC → Participant lookup
+        var epcToParticipant = chipAssignments
+            .Where(ca => ca.Chip != null && !string.IsNullOrEmpty(ca.Chip.EPC))
+            .ToDictionary(ca => ca.Chip.EPC, ca => ca.Participant);
+
+        _logger.LogInformation("Loaded {Count} EPC→Participant mappings", epcToParticipant.Count);
+
+        // ================================================================
+        // 4. LOAD DEVICE → CHECKPOINT MAPPINGS
+        //    Determine which devices are "simple" (1 checkpoint) vs "shared" (2+ checkpoints)
+        // ================================================================
+        var deviceRepo = _repository.GetRepository<Device>();
+        var devices = await deviceRepo.GetQuery(d =>
+            d.AuditProperties.IsActive && !d.AuditProperties.IsDeleted)
+            .AsNoTracking()
+            .ToListAsync();
+
+        var deviceSerialToId = devices
+            .Where(d => !string.IsNullOrEmpty(d.DeviceId))
+            .ToDictionary(d => d.DeviceId!, d => d.Id);
+
+        var checkpointRepo = _repository.GetRepository<Checkpoint>();
+        var allCheckpoints = await checkpointRepo.GetQuery(cp =>
+            cp.RaceId == decryptedRaceId &&
+            cp.EventId == decryptedEventId &&
+            cp.AuditProperties.IsActive &&
+            !cp.AuditProperties.IsDeleted)
+            .AsNoTracking()
+            .ToListAsync();
+
+        // Group checkpoints by device to identify simple vs shared
+        var checkpointsByDeviceId = allCheckpoints
+            .Where(cp => cp.DeviceId > 0)
+            .GroupBy(cp => cp.DeviceId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        // Simple devices: exactly 1 checkpoint mapping → can assign immediately
+        var simpleDeviceToCheckpoint = checkpointsByDeviceId
+            .Where(kvp => kvp.Value.Count == 1)
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value[0].Id);
+
+        // Shared devices: 2+ checkpoint mappings → Phase 1.5 will handle
+        var sharedDeviceIds = checkpointsByDeviceId
+            .Where(kvp => kvp.Value.Count > 1)
+            .Select(kvp => kvp.Key)
+            .ToHashSet();
+
+        _logger.LogInformation(
+            "Device mapping: {Simple} simple devices (assign now), {Shared} shared devices (defer to Phase 1.5)",
+            simpleDeviceToCheckpoint.Count, sharedDeviceIds.Count);
+
+        // Build batch → device ID (primary key) lookup
+        var batchToDeviceId = new Dictionary<int, int>();
+        foreach (var batch in pendingBatches)
+        {
+            if (!string.IsNullOrEmpty(batch.DeviceId) &&
+                deviceSerialToId.TryGetValue(batch.DeviceId, out var deviceId))
             {
-                ErrorMessage = $"Error during complete RFID workflow: {ex.Message}";
-                _logger.LogError(ex, "Error during complete RFID processing workflow");
-                response.Status = "Failed";
-                response.Errors.Add($"Unexpected error: {ex.Message}");
-                response.TotalProcessingTimeMs = (long)(DateTime.UtcNow - overallStartTime).TotalMilliseconds;
-                return response;
+                batchToDeviceId[batch.Id] = deviceId;
             }
         }
+
+        // ================================================================
+        // 5. VALIDATE ALL READINGS + ASSIGN SIMPLE CHECKPOINTS
+        //    Group by EPC → order by ReadTimeUtc → validate → assign (simple only)
+        // ================================================================
+        var readingsToUpdate = new List<RawRFIDReading>();
+        var assignmentsToAdd = new List<ReadingCheckpointAssignment>();
+        var unlinkedEPCs = new HashSet<string>();
+
+        int successCount = 0;
+        int errorCount = 0;
+        int simpleAssignments = 0;
+        int deferredAssignments = 0;
+        int noCheckpointCount = 0;
+
+        // Get existing assignments to avoid duplicates
+        var existingAssignmentReadingIds = await _repository.GetRepository<ReadingCheckpointAssignment>()
+            .GetQuery(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted)
+            .Select(a => a.ReadingId)
+            .ToListAsync();
+        var existingAssignmentSet = new HashSet<long>(existingAssignmentReadingIds);
+
+        // Group by EPC and process all readings for each participant together
+        var readingsByEpc = allReadings
+            .GroupBy(r => r.Epc)
+            .ToList();
+
+        _logger.LogInformation(
+            "Processing {EpcCount} unique EPCs ({TotalReadings} readings)...",
+            readingsByEpc.Count, allReadings.Count);
+
+        await _repository.BeginTransactionAsync();
+
+        try
+        {
+            foreach (var epcGroup in readingsByEpc)
+            {
+                var epc = epcGroup.Key;
+                // Readings are already ordered by ReadTimeUtc from the query
+                var participantReadings = epcGroup.ToList();
+
+                // ── Link to participant ──
+                if (!epcToParticipant.TryGetValue(epc, out var participant))
+                {
+                    // Unlinked EPC — no participant found
+                    unlinkedEPCs.Add(epc);
+                    foreach (var reading in participantReadings)
+                    {
+                        reading.ProcessResult = "Invalid";
+                        reading.Notes = "No participant found with this RFID tag";
+                        reading.ProcessedAt = DateTime.UtcNow;
+                        readingsToUpdate.Add(reading);
+                    }
+                    errorCount += participantReadings.Count;
+                    continue;
+                }
+
+                // ── Process each reading for this participant (in chronological order) ──
+                foreach (var reading in participantReadings)
+                {
+                    // RSSI validation (relaxed to -80 dBm to capture weak but valid reads
+                    // from devices like Box 16 which often report -76 dBm at the edges)
+                    if (reading.RssiDbm.HasValue && reading.RssiDbm.Value < -80)
+                    {
+                        reading.ProcessResult = "Invalid";
+                        reading.Notes = "Weak signal (RSSI < -80 dBm)";
+                        reading.ProcessedAt = DateTime.UtcNow;
+                        readingsToUpdate.Add(reading);
+                        errorCount++;
+                        continue;
+                    }
+
+                    // Mark as Success
+                    reading.ProcessResult = "Success";
+                    reading.ProcessedAt = DateTime.UtcNow;
+                    readingsToUpdate.Add(reading);
+                    successCount++;
+
+                    // ── Checkpoint Assignment ──
+                    // Only assign for SIMPLE devices (1:1 device→checkpoint mapping)
+                    // Shared/loop devices are deferred to Phase 1.5
+                    if (existingAssignmentSet.Contains(reading.Id))
+                        continue; // Already assigned
+
+                    var deviceId = batchToDeviceId.TryGetValue(reading.BatchId, out var dId) ? dId : 0;
+
+                    if (deviceId > 0 && simpleDeviceToCheckpoint.TryGetValue(deviceId, out var checkpointId))
+                    {
+                        // Simple device: assign immediately
+                        assignmentsToAdd.Add(new ReadingCheckpointAssignment
+                        {
+                            ReadingId = reading.Id,
+                            CheckpointId = checkpointId,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        });
+                        reading.AssignmentMethod = "DeviceMapping";
+                        simpleAssignments++;
+                    }
+                    else if (deviceId > 0 && sharedDeviceIds.Contains(deviceId))
+                    {
+                        // Shared device: defer to Phase 1.5
+                        // Do NOT assign checkpoint here — turnaround-based algorithm needs
+                        // the full participant timeline across all batches
+                        reading.AssignmentMethod = null; // Will be set by Phase 1.5
+                        deferredAssignments++;
+                    }
+                    else
+                    {
+                        // Unknown device or no mapping
+                        noCheckpointCount++;
+                        _logger.LogDebug(
+                            "Reading {ReadingId} (EPC {Epc}): No checkpoint mapping for device {DeviceId}",
+                            reading.Id, epc, deviceId);
+                    }
+                }
+            }
+
+            // ================================================================
+            // 6. BULK PERSIST
+            // ================================================================
+            if (assignmentsToAdd.Count > 0)
+            {
+                var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+                await assignmentRepo.BulkInsertAsync(assignmentsToAdd);
+                _logger.LogInformation("Bulk inserted {Count} simple checkpoint assignments", assignmentsToAdd.Count);
+            }
+
+            if (readingsToUpdate.Count > 0)
+            {
+                await readingRepo.BulkUpdateAsync(readingsToUpdate);
+                _logger.LogInformation("Bulk updated {Count} readings", readingsToUpdate.Count);
+            }
+
+            // ================================================================
+            // 7. UPDATE ALL BATCH STATUSES
+            // ================================================================
+            foreach (var batch in pendingBatches)
+            {
+                batch.Status = "completed";
+                batch.ProcessingStartedAt ??= DateTime.UtcNow;
+                batch.ProcessingCompletedAt = DateTime.UtcNow;
+            }
+            await batchRepo.UpdateRangeAsync(pendingBatches);
+
+            await _repository.SaveChangesAsync();
+            await _repository.CommitTransactionAsync();
+
+            // ================================================================
+            // 8. BUILD RESPONSE
+            // ================================================================
+            response.TotalBatches = pendingBatches.Count;
+            response.SuccessfulBatches = pendingBatches.Count;
+            response.FailedBatches = 0;
+            response.TotalProcessedReadings = successCount;
+            response.Status = errorCount > 0 ? "CompletedWithErrors" : "Completed";
+            response.Message = string.Format(
+                "Processed {0} readings across {1} batches. " +
+                "Simple assignments: {2}, Deferred to Phase 1.5: {3}, Unlinked EPCs: {4}",
+                allReadings.Count, pendingBatches.Count,
+                simpleAssignments, deferredAssignments, unlinkedEPCs.Count);
+
+            // Per-batch results for the response
+            var readingCountByBatch = allReadings
+                .GroupBy(r => r.BatchId)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            foreach (var batch in pendingBatches)
+            {
+                var batchReadingCount = readingCountByBatch.GetValueOrDefault(batch.Id, 0);
+                response.BatchResults.Add(new BatchProcessResult
+                {
+                    BatchId = _encryptionService.Encrypt(batch.Id.ToString()),
+                    FileName = batch.OriginalFileName,
+                    DeviceId = batch.DeviceId,
+                    Status = "Completed",
+                    SuccessCount = batchReadingCount
+                });
+            }
+
+            _logger.LogInformation(
+                "═══ Phase 1 COMPLETE ═══ " +
+                "Total={Total}, Success={Success}, Errors={Errors}, " +
+                "SimpleAssign={Simple}, DeferredToPhase15={Deferred}, " +
+                "UnlinkedEPCs={Unlinked}, NoMapping={NoMap}",
+                allReadings.Count, successCount, errorCount,
+                simpleAssignments, deferredAssignments,
+                unlinkedEPCs.Count, noCheckpointCount);
+
+            return response;
+        }
+        catch
+        {
+            await _repository.RollbackTransactionAsync();
+            throw;
+        }
+    }
+    catch (Exception ex)
+    {
+        ErrorMessage = $"Error during bulk processing: {ex.Message}";
+        _logger.LogError(ex, "Error processing all staging data for Race {RaceId}", decryptedRaceId);
+        response.Status = "Failed";
+        response.Message = ex.Message;
+        return response;
+    }
+}
+
 
         /// <summary>
         /// Clears all processed data for a race, optionally keeping raw uploads.
@@ -2944,12 +3252,51 @@ namespace Runnatics.Services
         /// Uses turnaround-based algorithm: readings before turnaround = outbound, after turnaround = return.
         /// Falls back to chronological order for participants without turnaround readings.
         /// </summary>
+        // ============================================================================
+        // REPLACE the existing AssignCheckpointsForLoopRaceAsync method in RFIDImportService.cs
+        // with this implementation. Follows the 5-step algorithm using LoopRaceCheckpointAssigner.
+        // ============================================================================
+
+        /// <summary>
+        /// Assign checkpoints to readings for loop races where a single device serves multiple checkpoints.
+        /// 
+        /// ┌─────────────────────────────────────────────────────────────────────────┐
+        /// │ Step 1: Load Data (readings, checkpoints, device mappings)             │
+        /// │ Step 2: Identify Turnaround + Shared Devices                          │
+        /// │ Step 3: Calculate Turnaround Time per Participant + Median fallback    │
+        /// │ Step 4: Assign Checkpoints (turnaround ref → chronological order)     │
+        /// │ Step 5: Deduplicate (Start=LAST, Others=EARLIEST)                     │
+        /// └─────────────────────────────────────────────────────────────────────────┘
+        /// </summary>
+        // ============================================================================
+        // REPLACE the existing AssignCheckpointsForLoopRaceAsync in RFIDImportService.cs
+        //
+        // FIXES from real data analysis:
+        //   1. CROSS-BATCH DEDUP: Same .db files uploaded multiple times → 100 rows but 21 unique
+        //      readings. Without dedup, chronological rank overflows (5 copies of Start reading = rank 5)
+        //   2. DEVICE ID RESOLUTION: Resolve via BOTH Device.DeviceId (MAC) AND Device.Name (friendly)
+        //      Some batches use "Box 16", others "0016251292a1" — both are Device.Id=12
+        //   3. STALE ASSIGNMENT CLEANUP: Checkpoints can be recreated (new IDs). Old assignments
+        //      that reference deleted checkpoint IDs must be cleaned up before re-assigning
+        //   4. RACE START TIME: Filter out readings before Race.StartTime
+        //   5. DEDUP WINDOW: Multiple reads within N seconds on same shared group = same pass
+        //   6. RE-PROCESSING: Delete existing assignments for current race checkpoints before reassigning
+        // ============================================================================
+
+        /// <summary>
+        /// Phase 1.5: Assign checkpoints for loop/shared devices using turnaround-based algorithm.
+        /// Processes ALL readings across ALL batches, deduplicated, with full participant timeline.
+        /// </summary>
         public async Task<AssignCheckpointsResponse> AssignCheckpointsForLoopRaceAsync(string eventId, string raceId)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
             var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
             var startTime = DateTime.UtcNow;
+
+            // Configurable dedup window: readings within this many seconds on the same
+            // shared group are treated as the same "pass" over the mat
+            const int DEDUP_WINDOW_SECONDS = 30;
 
             var response = new AssignCheckpointsResponse
             {
@@ -2958,11 +3305,19 @@ namespace Runnatics.Services
 
             try
             {
-                _logger.LogInformation("Assigning checkpoints for loop race {RaceId} using turnaround-based algorithm", decryptedRaceId);
+                _logger.LogInformation(
+                    "═══ Phase 1.5: Loop Race Checkpoint Assignment START — Race {RaceId} ═══",
+                    decryptedRaceId);
 
-                // Get race start time
+                // ================================================================
+                // STEP 1: LOAD DATA
+                // ================================================================
+                _logger.LogInformation("Step 1: Loading data...");
+
+                // 1a. Race start time (required)
                 var raceRepo = _repository.GetRepository<Race>();
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                    .AsNoTracking()
                     .FirstOrDefaultAsync();
 
                 if (race == null || !race.StartTime.HasValue)
@@ -2975,20 +3330,24 @@ namespace Runnatics.Services
 
                 var raceStartTime = race.StartTime.Value;
 
-                // Get all devices
+                // 1b. Devices — build resolution map for BOTH serial (MAC) AND friendly name
                 var deviceRepo = _repository.GetRepository<Device>();
                 var devices = await deviceRepo.GetQuery(d =>
-                    d.AuditProperties.IsActive &&
-                    !d.AuditProperties.IsDeleted)
+                    d.AuditProperties.IsActive && !d.AuditProperties.IsDeleted)
                     .AsNoTracking()
                     .ToListAsync();
 
-                // Create mapping: Device.DeviceId (serial) -> Device.Id (primary key)
-                var deviceSerialToId = devices
-                    .Where(d => !string.IsNullOrEmpty(d.DeviceId))
-                    .ToDictionary(d => d.DeviceId!, d => d.Id);
+                // FIX #2: Resolve by BOTH Device.DeviceId (MAC) and Device.Name (friendly name)
+                var deviceLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var device in devices)
+                {
+                    if (!string.IsNullOrEmpty(device.DeviceId))
+                        deviceLookup[device.DeviceId] = device.Id;    // MAC: "0016251292a1" → 12
+                    if (!string.IsNullOrEmpty(device.Name))
+                        deviceLookup[device.Name] = device.Id;         // Name: "Box 16" → 12
+                }
 
-                // Get checkpoints ordered by distance
+                // 1c. Checkpoints
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 var checkpoints = await checkpointRepo.GetQuery(cp =>
                     cp.RaceId == decryptedRaceId &&
@@ -2996,6 +3355,7 @@ namespace Runnatics.Services
                     cp.AuditProperties.IsActive &&
                     !cp.AuditProperties.IsDeleted)
                     .OrderBy(cp => cp.DistanceFromStart)
+                    .AsNoTracking()
                     .ToListAsync();
 
                 if (checkpoints.Count == 0)
@@ -3006,63 +3366,21 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                // Initialize the turnaround-based assigner
-                var assigner = new LoopRaceCheckpointAssigner(_logger);
+                var currentCheckpointIds = checkpoints.Select(cp => cp.Id).ToHashSet();
 
-                // ============================================================================
-                // STEP 1: Identify turnaround checkpoint (device with single checkpoint mapping)
-                // ============================================================================
-                var turnaroundConfig = assigner.IdentifyTurnaroundCheckpoint(checkpoints);
-
-                // ============================================================================
-                // STEP 2: Identify shared devices (devices mapped to 2 checkpoints: outbound + return)
-                // ============================================================================
-                var sharedDevices = assigner.IdentifySharedDevices(checkpoints);
-
-                // Group checkpoints by device for quick lookup
-                var checkpointsByDeviceId = checkpoints
-                    .Where(cp => cp.DeviceId > 0)
-                    .GroupBy(cp => cp.DeviceId)
-                    .ToDictionary(g => g.Key, g => g.OrderBy(cp => cp.DistanceFromStart).ToList());
-
-                var sharedDeviceIds = sharedDevices.Keys.ToHashSet();
-
-                if (sharedDeviceIds.Count > 0)
-                {
-                    _logger.LogInformation(
-                        "Detected {Count} shared devices for turnaround-based assignment: {Devices}",
-                        sharedDeviceIds.Count,
-                        string.Join(", ", sharedDevices.Select(kvp =>
-                            $"Device {kvp.Key}: Outbound CP {kvp.Value.OutboundCheckpointId} ({kvp.Value.OutboundDistance}km) ? Return CP {kvp.Value.ReturnCheckpointId} ({kvp.Value.ReturnDistance}km)")));
-                }
-
-                // Get active chip assignments to map EPC to participant
+                // 1d. EPC → Participant
                 var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
-                var chipAssignments = await chipAssignmentRepo.GetQuery(ca =>
+                var epcToParticipant = (await chipAssignmentRepo.GetQuery(ca =>
                     ca.Participant.RaceId == decryptedRaceId &&
                     !ca.UnassignedAt.HasValue &&
                     ca.AuditProperties.IsActive &&
                     !ca.AuditProperties.IsDeleted)
                     .Include(ca => ca.Chip)
-                    .Select(ca => new { ca.ParticipantId, EPC = ca.Chip.EPC })
-                    .ToListAsync();
+                    .Select(ca => new { EPC = ca.Chip.EPC, ca.ParticipantId })
+                    .ToListAsync())
+                    .ToDictionary(ca => ca.EPC, ca => ca.ParticipantId);
 
-                var epcToParticipant = chipAssignments.ToDictionary(ca => ca.EPC, ca => ca.ParticipantId);
-
-                // Get readings that need checkpoint assignment
-                var readingRepo = _repository.GetRepository<RawRFIDReading>();
-                var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
-
-                // Get existing assignments
-                var existingAssignmentReadingIds = await assignmentRepo.GetQuery(a =>
-                    a.AuditProperties.IsActive &&
-                    !a.AuditProperties.IsDeleted)
-                    .Select(a => a.ReadingId)
-                    .ToListAsync();
-
-                var existingAssignmentSet = new HashSet<long>(existingAssignmentReadingIds);
-
-                // Get batches for this race with device info
+                // 1e. Batches → device serial mapping
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var batches = await batchRepo.GetQuery(b =>
                     b.EventId == decryptedEventId &&
@@ -3073,178 +3391,287 @@ namespace Runnatics.Services
                 var batchIds = batches.Select(b => b.Id).ToList();
                 var batchToDeviceSerial = batches.ToDictionary(b => b.Id, b => b.DeviceId);
 
+                // ================================================================
+                // FIX #3 + #6: CLEAN UP STALE AND EXISTING ASSIGNMENTS
+                // Delete assignments that reference non-existent checkpoints (stale)
+                // AND delete existing assignments for current checkpoints (re-process)
+                // ================================================================
+                var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+
+                // Get all assignment IDs for readings in this race's batches
+                var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                var raceReadingIds = await readingRepo.GetQuery(r =>
+                    batchIds.Contains(r.BatchId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .Select(r => r.Id)
+                    .ToListAsync();
+                var raceReadingIdSet = new HashSet<long>(raceReadingIds);
+
+                // Find all existing assignments for readings in this race
+                var existingAssignments = await assignmentRepo.GetQuery(a =>
+                    raceReadingIdSet.Contains(a.ReadingId))
+                    .ToListAsync();
+
+                // Identify shared device checkpoint IDs (the ones we'll reassign)
+                var sharedCheckpointIds = new HashSet<int>();
+                // We'll compute this after step 2, but first let's identify stale ones
+                var staleAssignments = existingAssignments
+                    .Where(a => !currentCheckpointIds.Contains(a.CheckpointId))
+                    .ToList();
+
+                if (staleAssignments.Count > 0)
+                {
+                    _logger.LogWarning(
+                        "FIX #3: Found {Count} STALE assignments referencing deleted checkpoint IDs. Deleting.",
+                        staleAssignments.Count);
+                    await assignmentRepo.BulkDeleteAsync(staleAssignments);
+                }
+
+                // ================================================================
+                // 1f. Load ALL readings (Success status) across all batches
+                //     FIX #4: Filter readings after race start time
+                // ================================================================
                 var allReadings = await readingRepo.GetQuery(r =>
                     r.ProcessResult == "Success" &&
                     batchIds.Contains(r.BatchId) &&
+                    r.ReadTimeUtc >= raceStartTime &&  // FIX #4: Only readings after race starts
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
                     .ToListAsync();
 
-                // Filter to only unassigned readings
-                var unassignedReadings = allReadings
-                    .Where(r => !existingAssignmentSet.Contains(r.Id))
-                    .ToList();
+                _logger.LogInformation(
+                    "Step 1: Loaded {Checkpoints} checkpoints, {Devices} devices, " +
+                    "{Participants} EPC mappings, {Readings} valid readings (after race start)",
+                    checkpoints.Count, devices.Count, epcToParticipant.Count, allReadings.Count);
 
-                _logger.LogInformation("Found {Count} readings needing checkpoint assignment", unassignedReadings.Count);
-
-                if (unassignedReadings.Count == 0)
+                if (allReadings.Count == 0)
                 {
                     response.Status = "Completed";
                     response.CheckpointsAssigned = 0;
-                    response.ReadingsProcessed = 0;
-                    response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
                     return response;
                 }
 
-                // ============================================================================
-                // STEP 3: Build reading data structure for turnaround time calculation
-                // ============================================================================
-
-                // Map each reading to its device ID (primary key)
-                var readingsWithDeviceId = unassignedReadings
-                    .Select(r =>
-                    {
-                        var deviceSerial = batchToDeviceSerial.TryGetValue(r.BatchId, out var serial) ? serial : r.DeviceId;
-                        var deviceId = !string.IsNullOrEmpty(deviceSerial) && deviceSerialToId.TryGetValue(deviceSerial, out var id) ? id : 0;
-                        return new { Reading = r, DeviceId = deviceId, DeviceSerial = deviceSerial };
-                    })
-                    .Where(x => x.DeviceId > 0)
+                // ================================================================
+                // FIX #1: CROSS-BATCH DEDUPLICATION
+                // Same .db file uploaded multiple times creates duplicate readings.
+                // Deduplicate by (Epc, TimestampMs) — keep the first occurrence.
+                // ================================================================
+                var beforeDedup = allReadings.Count;
+                var dedupedReadings = allReadings
+                    .GroupBy(r => new { r.Epc, r.TimestampMs })
+                    .Select(g => g.OrderBy(r => r.Id).First())  // Keep earliest DB row
                     .ToList();
 
-                // Group by EPC for turnaround calculation and assignment
-                var readingsByEpc = readingsWithDeviceId
-                    .GroupBy(x => x.Reading.Epc)
-                    .ToDictionary(
-                        g => g.Key,
-                        g => g.OrderBy(x => x.Reading.ReadTimeUtc).ToList());
+                var duplicatesRemoved = beforeDedup - dedupedReadings.Count;
+                if (duplicatesRemoved > 0)
+                {
+                    _logger.LogWarning(
+                        "FIX #1: Cross-batch deduplication: {Before} → {After} readings " +
+                        "(removed {Removed} duplicates from re-uploaded .db files)",
+                        beforeDedup, dedupedReadings.Count, duplicatesRemoved);
+                }
 
-                // ============================================================================
-                // STEP 4: Calculate turnaround times per participant (using turnaround device)
-                // ============================================================================
+                // ================================================================
+                // 1g. Map readings to ReadingInput with resolved DeviceId
+                //     FIX #2: Use both Device.DeviceId AND Device.Name for resolution
+                // ================================================================
+                var readingInputs = new List<LoopRaceCheckpointAssigner.ReadingInput>();
+                int unresolvedDevices = 0;
+
+                foreach (var r in dedupedReadings)
+                {
+                    // Try batch device serial first, then reading's own DeviceId
+                    var deviceSerial = batchToDeviceSerial.TryGetValue(r.BatchId, out var serial) ? serial : r.DeviceId;
+                    int deviceId = 0;
+
+                    // FIX #2: Try resolving via serial/MAC first, then try name
+                    if (!string.IsNullOrEmpty(deviceSerial) && deviceLookup.TryGetValue(deviceSerial, out var id))
+                    {
+                        deviceId = id;
+                    }
+                    else if (!string.IsNullOrEmpty(r.DeviceId) && deviceLookup.TryGetValue(r.DeviceId, out var id2))
+                    {
+                        deviceId = id2;
+                    }
+
+                    if (deviceId == 0)
+                    {
+                        unresolvedDevices++;
+                        continue;
+                    }
+
+                    readingInputs.Add(new LoopRaceCheckpointAssigner.ReadingInput
+                    {
+                        ReadingId = r.Id,
+                        Epc = r.Epc,
+                        DeviceId = deviceId,
+                        DeviceSerial = deviceSerial,
+                        ReadTimeUtc = r.ReadTimeUtc
+                    });
+                }
+
+                if (unresolvedDevices > 0)
+                {
+                    _logger.LogWarning(
+                        "FIX #2: {Count} readings had unresolvable device IDs (not in Device table by serial or name)",
+                        unresolvedDevices);
+                }
+
+                _logger.LogInformation(
+                    "After dedup + device resolution: {Count} readings ready for assignment",
+                    readingInputs.Count);
+
+                // ================================================================
+                // STEP 2: IDENTIFY TURNAROUND + SHARED DEVICES
+                // ================================================================
+                var assigner = new LoopRaceCheckpointAssigner(_logger);
+
+                var turnaroundConfig = assigner.IdentifyTurnaroundCheckpoint(checkpoints);
+                var sharedDevices = assigner.IdentifySharedDevices(checkpoints);
+
+                // Now we know which checkpoints are "shared" — delete existing assignments for those
+                // FIX #6: Allow re-processing by clearing previous shared device assignments
+                foreach (var sd in sharedDevices.Values)
+                {
+                    sharedCheckpointIds.Add(sd.OutboundCheckpointId);
+                    sharedCheckpointIds.Add(sd.ReturnCheckpointId);
+                }
+                if (turnaroundConfig != null)
+                {
+                    sharedCheckpointIds.Add(turnaroundConfig.CheckpointId);
+                }
+
+                var existingSharedAssignments = existingAssignments
+                    .Where(a => sharedCheckpointIds.Contains(a.CheckpointId))
+                    .ToList();
+
+                if (existingSharedAssignments.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "FIX #6: Deleting {Count} existing shared/loop device assignments for re-processing",
+                        existingSharedAssignments.Count);
+                    await assignmentRepo.BulkDeleteAsync(existingSharedAssignments);
+                }
+
+                // Build single-device checkpoint lookup (non-shared, non-turnaround)
+                var singleDeviceCheckpoints = checkpoints
+                    .Where(cp => cp.DeviceId > 0)
+                    .GroupBy(cp => cp.DeviceId)
+                    .Where(g => g.Count() == 1 &&
+                                (turnaroundConfig == null || g.Key != turnaroundConfig.DeviceId) &&
+                                !sharedDevices.ContainsKey(g.Key))
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                // ================================================================
+                // FIX #5: DEDUP WINDOW — Group readings within N seconds as same "pass"
+                // Before passing to the assigner, collapse readings from the same
+                // shared group that are within DEDUP_WINDOW_SECONDS into one representative
+                // ================================================================
+                var deviceToGroup = new Dictionary<int, string>();
+                foreach (var kvp in sharedDevices)
+                {
+                    deviceToGroup[kvp.Key] = kvp.Value.SharedGroupKey;
+                }
+
+                // Group by EPC, then within each EPC, collapse passes within shared groups
+                var readingsByEpc = new Dictionary<string, List<LoopRaceCheckpointAssigner.ReadingInput>>();
+
+                foreach (var epcGroup in readingInputs.GroupBy(r => r.Epc))
+                {
+                    var epc = epcGroup.Key;
+                    var sorted = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
+
+                    // For each shared group, collapse readings within DEDUP_WINDOW_SECONDS
+                    // into one representative reading (keep the one with best timing = earliest for the pass)
+                    var collapsedReadings = new List<LoopRaceCheckpointAssigner.ReadingInput>();
+                    var lastPassTimeByGroup = new Dictionary<string, DateTime>();
+
+                    foreach (var reading in sorted)
+                    {
+                        if (deviceToGroup.TryGetValue(reading.DeviceId, out var groupKey))
+                        {
+                            // Shared device: check if this is within dedup window of last pass in this group
+                            if (lastPassTimeByGroup.TryGetValue(groupKey, out var lastTime))
+                            {
+                                var gap = (reading.ReadTimeUtc - lastTime).TotalSeconds;
+                                if (gap <= DEDUP_WINDOW_SECONDS)
+                                {
+                                    // Same pass — skip this reading (keep earlier one)
+                                    continue;
+                                }
+                            }
+                            // New pass
+                            lastPassTimeByGroup[groupKey] = reading.ReadTimeUtc;
+                            collapsedReadings.Add(reading);
+                        }
+                        else
+                        {
+                            // Non-shared device (turnaround, single-mapping): keep all readings
+                            // (the assigner's Step 5 dedup will handle same-checkpoint duplicates)
+                            collapsedReadings.Add(reading);
+                        }
+                    }
+
+                    readingsByEpc[epc] = collapsedReadings;
+                }
+
+                var totalCollapsed = readingsByEpc.Values.Sum(v => v.Count);
+                if (totalCollapsed < readingInputs.Count)
+                {
+                    _logger.LogInformation(
+                        "FIX #5: Pass dedup window ({Window}s): {Before} → {After} readings " +
+                        "(collapsed {Removed} same-pass readings within shared groups)",
+                        DEDUP_WINDOW_SECONDS, readingInputs.Count, totalCollapsed,
+                        readingInputs.Count - totalCollapsed);
+                }
+
+                // ================================================================
+                // STEP 3: CALCULATE TURNAROUND TIMES
+                // ================================================================
                 var turnaroundTimes = new Dictionary<string, DateTime>();
+                DateTime? medianTurnaround = null;
 
                 if (turnaroundConfig != null)
                 {
-                    foreach (var kvp in readingsByEpc)
-                    {
-                        var turnaroundReading = kvp.Value
-                            .Where(x => x.DeviceId == turnaroundConfig.DeviceId)
-                            .OrderBy(x => x.Reading.ReadTimeUtc)
-                            .FirstOrDefault();
+                    turnaroundTimes = assigner.CalculateTurnaroundTimesPerParticipant(
+                        readingInputs, turnaroundConfig.DeviceId);
 
-                        if (turnaroundReading != null)
-                        {
-                            turnaroundTimes[kvp.Key] = turnaroundReading.Reading.ReadTimeUtc;
-                        }
-                    }
-
-                    _logger.LogInformation(
-                        "Calculated turnaround times for {WithTurnaround}/{Total} participants using device {DeviceId} (checkpoint '{Name}')",
-                        turnaroundTimes.Count, readingsByEpc.Count, turnaroundConfig.DeviceId, turnaroundConfig.CheckpointName);
+                    medianTurnaround = assigner.CalculateMedianTurnaround(
+                        turnaroundTimes, raceStartTime);
                 }
-
-                // Calculate median turnaround time as fallback
-                var medianTurnaround = assigner.CalculateMedianTurnaround(turnaroundTimes, raceStartTime);
-
-                // ============================================================================
-                // STEP 5: Assign checkpoints to all readings
-                // ============================================================================
-                var assignmentsToCreate = new List<ReadingCheckpointAssignment>();
-                var assignedReadings = new List<LoopRaceCheckpointAssigner.AssignedReading>();
-                var flaggedForReview = 0;
-                var turnaroundAssignments = 0;
-                var chronologicalAssignments = 0;
-
-                foreach (var kvp in readingsByEpc)
+                else
                 {
-                    var epc = kvp.Key;
-                    var epcReadings = kvp.Value;
-
-                    // Get turnaround time for this participant (their own or median fallback)
-                    DateTime? participantTurnaround = turnaroundTimes.TryGetValue(epc, out var tt)
-                        ? tt
-                        : medianTurnaround;
-
-                    // Track chronological rank per device (for fallback when no turnaround)
-                    var deviceRanks = new Dictionary<int, int>();
-
-                    foreach (var readingData in epcReadings)
-                    {
-                        var reading = readingData.Reading;
-                        var deviceId = readingData.DeviceId;
-
-                        // Skip readings before race start (allow 1 minute grace period)
-                        var elapsedSeconds = (reading.ReadTimeUtc - raceStartTime).TotalSeconds;
-                        if (elapsedSeconds < -60)
-                        {
-                            _logger.LogDebug("Reading {ReadingId}: {Seconds}s before race start, flagging for review",
-                                reading.Id, -elapsedSeconds);
-                            flaggedForReview++;
-                            continue;
-                        }
-
-                        // Use turnaround-based assignment
-                        var checkpointId = assigner.AssignCheckpointToReading(
-                            reading.ReadTimeUtc,
-                            deviceId,
-                            turnaroundConfig,
-                            sharedDevices,
-                            participantTurnaround,
-                            deviceRanks,
-                            out var assignmentMethod);
-
-                        if (!checkpointId.HasValue)
-                        {
-                            // Device not found in checkpoint configuration
-                            if (checkpointsByDeviceId.TryGetValue(deviceId, out var deviceCheckpoints) && deviceCheckpoints.Count == 1)
-                            {
-                                // Single checkpoint device - assign directly
-                                checkpointId = deviceCheckpoints[0].Id;
-                                assignmentMethod = "SingleDeviceMapping";
-                            }
-                            else
-                            {
-                                _logger.LogWarning(
-                                    "EPC {Epc}: Could not assign reading at {Time} from device {DeviceId}",
-                                    epc, reading.ReadTimeUtc.ToString("HH:mm:ss"), deviceId);
-                                flaggedForReview++;
-                                continue;
-                            }
-                        }
-
-                        // Track assignment method statistics
-                        if (assignmentMethod == "TurnaroundReference")
-                            turnaroundAssignments++;
-                        else if (assignmentMethod == "ChronologicalOrder")
-                            chronologicalAssignments++;
-
-                        // Store for deduplication
-                        assignedReadings.Add(new LoopRaceCheckpointAssigner.AssignedReading
-                        {
-                            ReadingId = reading.Id,
-                            Epc = epc,
-                            DeviceId = deviceId,
-                            ReadTimeUtc = reading.ReadTimeUtc,
-                            CheckpointId = checkpointId.Value,
-                            AssignmentMethod = assignmentMethod
-                        });
-                    }
+                    _logger.LogWarning(
+                        "No turnaround checkpoint found. ALL shared device assignments will use chronological fallback.");
                 }
 
-                _logger.LogInformation(
-                    "Assignment methods: TurnaroundReference={Turnaround}, ChronologicalOrder={Chronological}, Flagged={Flagged}",
-                    turnaroundAssignments, chronologicalAssignments, flaggedForReview);
+                // ================================================================
+                // STEP 4: ASSIGN CHECKPOINTS
+                // ================================================================
+                var assignedReadings = assigner.AssignAllCheckpoints(
+                    readingsByEpc,
+                    turnaroundConfig,
+                    sharedDevices,
+                    turnaroundTimes,
+                    medianTurnaround,
+                    singleDeviceCheckpoints);
 
-                // ============================================================================
-                // STEP 6: Deduplicate readings (Start = LAST, Others = EARLIEST)
-                // ============================================================================
+                // ================================================================
+                // STEP 5: DEDUPLICATE
+                // ================================================================
                 var deduplicatedReadings = assigner.DeduplicateAssignedReadings(assignedReadings, checkpoints);
 
                 _logger.LogInformation(
-                    "Deduplication: {Original} assigned readings ? {Deduped} after deduplication",
-                    assignedReadings.Count, deduplicatedReadings.Count);
+                    "Pipeline: {Deduped} deduplicated → {Collapsed} pass-collapsed → {Assigned} assigned → {Final} after final dedup",
+                    dedupedReadings.Count, totalCollapsed, assignedReadings.Count, deduplicatedReadings.Count);
 
-                // Convert to ReadingCheckpointAssignment entities
+                // ================================================================
+                // PERSIST: Create ReadingCheckpointAssignment entities
+                // ================================================================
+                var assignmentsToCreate = new List<ReadingCheckpointAssignment>();
+                var rawReadingLookup = dedupedReadings.ToDictionary(r => r.Id);
+
                 foreach (var assigned in deduplicatedReadings)
                 {
                     assignmentsToCreate.Add(new ReadingCheckpointAssignment
@@ -3260,46 +3687,61 @@ namespace Runnatics.Services
                         }
                     });
 
-                    // Update the raw reading with assignment method
-                    var reading = unassignedReadings.FirstOrDefault(r => r.Id == assigned.ReadingId);
-                    if (reading != null)
+                    // Update raw reading with assignment method
+                    if (rawReadingLookup.TryGetValue(assigned.ReadingId, out var rawReading))
                     {
-                        reading.AssignmentMethod = assigned.AssignmentMethod;
+                        rawReading.AssignmentMethod = assigned.AssignmentMethod;
                     }
                 }
 
-                // Bulk insert assignments
                 if (assignmentsToCreate.Count > 0)
                 {
                     await assignmentRepo.BulkInsertAsync(assignmentsToCreate);
-                    _logger.LogInformation("Created {Count} checkpoint assignments", assignmentsToCreate.Count);
+                    _logger.LogInformation("Bulk inserted {Count} checkpoint assignments", assignmentsToCreate.Count);
 
                     // Update raw readings with assignment methods
-                    var readingsToUpdate = unassignedReadings
+                    var readingsToUpdate = dedupedReadings
                         .Where(r => !string.IsNullOrEmpty(r.AssignmentMethod))
                         .ToList();
+
                     if (readingsToUpdate.Count > 0)
                     {
                         await readingRepo.BulkUpdateAsync(readingsToUpdate);
                     }
                 }
 
+                // ================================================================
+                // RESPONSE + SUMMARY
+                // ================================================================
                 response.CheckpointsAssigned = assignmentsToCreate.Count;
-                response.ReadingsProcessed = unassignedReadings.Count;
-                response.FlaggedForReview = flaggedForReview;
+                response.ReadingsProcessed = readingInputs.Count;
                 response.Status = "Completed";
                 response.ProcessingTimeMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
 
+                var methodSummary = deduplicatedReadings
+                    .GroupBy(r => r.AssignmentMethod)
+                    .Select(g => $"{g.Key}={g.Count()}")
+                    .ToList();
+
                 _logger.LogInformation(
-                    "Loop race checkpoint assignment completed in {Time}ms. Assigned: {Assigned}, Processed: {Processed}, Flagged: {Flagged}",
-                    response.ProcessingTimeMs, response.CheckpointsAssigned, response.ReadingsProcessed, response.FlaggedForReview);
+                    "═══ Phase 1.5 COMPLETE ═══\n" +
+                    "  Raw readings:     {Raw}\n" +
+                    "  After cross-dedup: {Deduped} (removed {DupesRemoved} cross-batch dupes)\n" +
+                    "  After pass-dedup:  {Collapsed} (collapsed {PassRemoved} same-pass reads)\n" +
+                    "  Stale deleted:     {Stale}\n" +
+                    "  Final assignments: {Final} in {Time}ms [{Methods}]",
+                    allReadings.Count, dedupedReadings.Count, duplicatesRemoved,
+                    totalCollapsed, readingInputs.Count - totalCollapsed,
+                    staleAssignments.Count + existingSharedAssignments.Count,
+                    assignmentsToCreate.Count, response.ProcessingTimeMs,
+                    string.Join(", ", methodSummary));
 
                 return response;
             }
             catch (Exception ex)
             {
                 ErrorMessage = $"Error assigning checkpoints: {ex.Message}";
-                _logger.LogError(ex, "Error assigning checkpoints");
+                _logger.LogError(ex, "Error in AssignCheckpointsForLoopRaceAsync");
                 response.Status = "Failed";
                 response.ErrorMessage = ErrorMessage;
                 return response;

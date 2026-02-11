@@ -614,6 +614,228 @@ namespace Runnatics.Services
         }
 
         /// <summary>
+        /// Upload RFID file at event level. RaceId is optional - when not provided, the file is stored
+        /// at event level (RaceId = NULL) and race association happens during processing via 
+        /// EPC → Participant → RaceId. This is the recommended approach when a single device 
+        /// captures data for multiple races.
+        /// </summary>
+        public async Task<RFIDImportResponse> UploadRFIDFileEventLevelAsync(string eventId, string? raceId, RFIDImportRequest request)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = !string.IsNullOrEmpty(raceId) 
+                ? Convert.ToInt32(_encryptionService.Decrypt(raceId)) 
+                : (int?)null;
+
+            var response = new RFIDImportResponse
+            {
+                FileName = request.File.FileName,
+                UploadedAt = DateTime.UtcNow,
+                Status = "Pending"
+            };
+
+            try
+            {
+                _logger.LogInformation(
+                    "Starting event-level RFID file upload for Event {EventId}, Race {RaceId}", 
+                    decryptedEventId, 
+                    decryptedRaceId?.ToString() ?? "ALL (event-level)");
+
+                // Validate file
+                if (request.File == null || request.File.Length == 0)
+                {
+                    ErrorMessage = "File is empty or not provided";
+                    _logger.LogWarning("Upload failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Check if file is SQLite database
+                var isSqlite = request.File.FileName.EndsWith(".db", StringComparison.OrdinalIgnoreCase) ||
+                              request.File.FileName.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase);
+
+                if (!isSqlite)
+                {
+                    ErrorMessage = "Only SQLite database files (.db, .sqlite) are supported";
+                    _logger.LogWarning("Upload failed: {Error}", ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Validate event exists
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventExists = await eventRepo.GetQuery(e =>
+                    e.Id == decryptedEventId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .AnyAsync();
+
+                if (!eventExists)
+                {
+                    ErrorMessage = "Event not found or you don't have access";
+                    _logger.LogWarning("Upload failed: Event {EventId} not found", decryptedEventId);
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Validate race exists (only if raceId is provided)
+                if (decryptedRaceId.HasValue)
+                {
+                    var raceRepo = _repository.GetRepository<Race>();
+                    var raceExists = await raceRepo.GetQuery(r =>
+                        r.Id == decryptedRaceId.Value &&
+                        r.EventId == decryptedEventId &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .AnyAsync();
+
+                    if (!raceExists)
+                    {
+                        ErrorMessage = "Race not found";
+                        _logger.LogWarning("Upload failed: Race {RaceId} not found for Event {EventId}", decryptedRaceId, decryptedEventId);
+                        response.Status = "Failed";
+                        return response;
+                    }
+                }
+
+                // Save file temporarily
+                var tempFilePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString() + ".db");
+                using (var stream = new FileStream(tempFilePath, FileMode.Create))
+                {
+                    await request.File.CopyToAsync(stream);
+                }
+
+                // Calculate file hash to prevent duplicates
+                var fileHash = CalculateFileHash(tempFilePath);
+
+                // Check for duplicate upload at EVENT level (FileHash + EventId)
+                // This allows the same file to be uploaded once regardless of how many races it contains
+                var batchRepo = _repository.GetRepository<UploadBatch>();
+                var existingBatch = await batchRepo.GetQuery(b =>
+                    b.FileHash == fileHash &&
+                    b.EventId == decryptedEventId &&  // Event-level duplicate check
+                    b.AuditProperties.IsActive &&
+                    !b.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (existingBatch != null)
+                {
+                    File.Delete(tempFilePath);
+                    ErrorMessage = "This file has already been uploaded for this event";
+                    response.Status = "Failed";
+                    return response;
+                }
+
+                // Extract device serial from filename (e.g., "0016251292ae" from "2026-01-25_0016251292ae_(box15).db")
+                var deviceSerial = ExtractDeviceNameFromFilename(request.File.FileName);
+                if (string.IsNullOrEmpty(deviceSerial))
+                {
+                    deviceSerial = request.DeviceId ?? "Unknown";
+                }
+
+                // For event-level uploads, we don't try to resolve checkpoint at upload time
+                // Checkpoint assignment happens during processing based on EPC → Participant → RaceId
+                _logger.LogInformation(
+                    "Event-level upload: Device '{DeviceSerial}' detected. " +
+                    "Checkpoint assignment will be determined during race-level processing via EPC → Participant → RaceId.",
+                    deviceSerial);
+
+                // Create batch record with optional RaceId
+                var batch = new UploadBatch
+                {
+                    RaceId = decryptedRaceId,  // NULL for event-level uploads
+                    EventId = decryptedEventId,
+                    DeviceId = deviceSerial,
+                    ExpectedCheckpointId = null,  // Determined during processing
+                    OriginalFileName = request.File.FileName,
+                    StoredFilePath = tempFilePath,
+                    FileSizeBytes = request.File.Length,
+                    FileHash = fileHash,
+                    FileFormat = "DB",
+                    Status = "uploading",
+                    SourceType = "file_upload",
+                    IsLiveSync = false,
+                    AuditProperties = new Models.Data.Common.AuditProperties
+                    {
+                        CreatedBy = userId,
+                        CreatedDate = DateTime.UtcNow,
+                        IsActive = true,
+                        IsDeleted = false
+                    }
+                };
+
+                await batchRepo.AddAsync(batch);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "Created event-level UploadBatch {BatchId} (RaceId: {RaceId})", 
+                    batch.Id, 
+                    decryptedRaceId?.ToString() ?? "NULL");
+
+                // Parse SQLite file (treat as local time by default since most readers use local)
+                var readings = await ParseSqliteFileAsync(
+                    tempFilePath,
+                    batch.Id,
+                    deviceSerial,
+                    request.TimeZoneId,
+                    false // Default: timestamps from reader are in local time
+                );
+
+                if (readings.Count == 0)
+                {
+                    ErrorMessage = "No valid RFID readings found in file";
+                    _logger.LogWarning("Upload failed: No valid readings in SQLite file");
+                    response.Status = "Failed";
+                    File.Delete(tempFilePath);
+                    return response;
+                }
+
+                // Bulk insert readings
+                var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                foreach (var reading in readings)
+                {
+                    await readingRepo.AddAsync(reading);
+                }
+                await _repository.SaveChangesAsync();
+
+                // Update batch statistics
+                batch.TotalReadings = readings.Count;
+                batch.UniqueEpcs = readings.Select(r => r.Epc).Distinct().Count();
+                batch.TimeRangeStart = readings.Min(r => r.TimestampMs);
+                batch.TimeRangeEnd = readings.Max(r => r.TimestampMs);
+                batch.Status = "uploaded";
+                batch.ProcessingStartedAt = DateTime.UtcNow;
+
+                await batchRepo.UpdateAsync(batch);
+                await _repository.SaveChangesAsync();
+
+                response.UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString());
+                response.TotalReadings = readings.Count;
+                response.UniqueEpcs = readings.Select(r => r.Epc).Distinct().Count();
+                response.TimeRangeStart = readings.Min(r => r.TimestampMs);
+                response.TimeRangeEnd = readings.Max(r => r.TimestampMs);
+                response.FileSizeBytes = request.File.Length;
+                response.FileFormat = "DB";
+                response.Status = "uploaded";
+
+                _logger.LogInformation(
+                    "Event-level RFID file upload completed. Batch: {BatchId}, Readings: {Count}, UniqueEPCs: {UniqueEPCs}", 
+                    batch.Id, readings.Count, response.UniqueEpcs);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error uploading RFID file: {ex.Message}";
+                _logger.LogError(ex, "Error uploading event-level RFID file");
+                response.Status = "Failed";
+                return response;
+            }
+        }
+
+        /// <summary>
         /// Upload RFID file with automatic event/race detection based on device name from filename.
         /// Extracts device name from filename, finds associated checkpoint, and determines event/race context.
         /// </summary>
@@ -694,19 +916,22 @@ namespace Runnatics.Services
                 _logger.LogInformation("Found checkpoint: {CheckpointId} with Event: {EventId}, Race: {RaceId}",
                     checkpoint.Id, checkpoint.EventId, checkpoint.RaceId);
 
-                // Encrypt IDs and delegate to existing upload method
+                // Encrypt EventId for the upload (RaceId is intentionally NULL for event-level uploads)
                 var encryptedEventId = _encryptionService.Encrypt(checkpoint.EventId.ToString());
-                var encryptedRaceId = _encryptionService.Encrypt(checkpoint.RaceId.ToString());
 
-                // Update request with discovered checkpoint info
-                request.ExpectedCheckpointId = _encryptionService.Encrypt(checkpoint.Id.ToString());
-                request.DeviceId = device.Name;
+                // Update request with discovered device info
+                // Note: ExpectedCheckpointId is left null - it will be determined during processing
+                // based on EPC → Participant → RaceId → Checkpoint chain
+                request.DeviceId = device.DeviceId;
 
-                _logger.LogInformation("Auto-detection complete. Delegating to UploadRFIDFileAsync with EventId: {EventId}, RaceId: {RaceId}",
-                    checkpoint.EventId, checkpoint.RaceId);
+                _logger.LogInformation(
+                    "Auto-detection complete. Delegating to event-level upload with EventId: {EventId} (RaceId: NULL). " +
+                    "Race association will be determined during processing via EPC → Participant → RaceId.",
+                    checkpoint.EventId);
 
-                // Delegate to existing upload method with discovered IDs
-                return await UploadRFIDFileAsync(encryptedEventId, encryptedRaceId, request);
+                // Delegate to event-level upload method with NULL raceId
+                // This allows a single file to contain readings for multiple races
+                return await UploadRFIDFileEventLevelAsync(encryptedEventId, null, request);
             }
             catch (Exception ex)
             {
@@ -1703,20 +1928,20 @@ namespace Runnatics.Services
                 var activeEpcs = epcToParticipant.Keys.ToHashSet();
 
                 // =====================================================================
-                // FIX: Get batch IDs for THIS RACE ONLY to ensure we don't process
-                // readings from other races in the same event
+                // FIX: Get batch IDs for THIS RACE including event-level batches
+                // Event-level batches (RaceId = NULL) contain data for all races
                 // =====================================================================
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var raceBatchIds = await batchRepo.GetQuery(b =>
                     b.EventId == decryptedEventId &&
-                    b.RaceId == decryptedRaceId &&
+                    (b.RaceId == decryptedRaceId || b.RaceId == null) &&  // Include event-level batches
                     b.AuditProperties.IsActive &&
                     !b.AuditProperties.IsDeleted)
                     .Select(b => b.Id)
                     .ToListAsync();
 
                 _logger.LogInformation(
-                    "Found {Count} upload batches for Race {RaceId} (filtering out other races in event)",
+                    "Found {Count} upload batches for Race {RaceId} (including event-level batches)",
                     raceBatchIds.Count, decryptedRaceId);
 
                 // Get raw readings that haven't been normalized yet
@@ -2451,11 +2676,13 @@ namespace Runnatics.Services
 
                 // ================================================================
                 // 1. GET ALL PENDING BATCHES
+                // Include both race-specific batches AND event-level batches (RaceId = NULL)
+                // Event-level batches contain data that may span multiple races
                 // ================================================================
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var pendingBatches = await batchRepo.GetQuery(b =>
                     b.EventId == decryptedEventId &&
-                    b.RaceId == decryptedRaceId &&
+                    (b.RaceId == decryptedRaceId || b.RaceId == null) &&  // Include event-level batches
                     (b.Status == "uploaded" || b.Status == "uploading") &&
                     b.AuditProperties.IsActive &&
                     !b.AuditProperties.IsDeleted)
@@ -2470,12 +2697,17 @@ namespace Runnatics.Services
                     return response;
                 }
 
+                var eventLevelBatchCount = pendingBatches.Count(b => b.RaceId == null);
+                var raceLevelBatchCount = pendingBatches.Count(b => b.RaceId == decryptedRaceId);
+
                 var batchIds = pendingBatches.Select(b => b.Id).ToList();
                 response.TotalBatches = pendingBatches.Count;
 
                 _logger.LogInformation(
-                    "Found {Count} pending batches: [{BatchIds}]",
+                    "Found {Count} pending batches ({RaceLevel} race-specific, {EventLevel} event-level): [{BatchIds}]",
                     pendingBatches.Count,
+                    raceLevelBatchCount,
+                    eventLevelBatchCount,
                     string.Join(", ", pendingBatches.Select(b => $"{b.Id}({b.DeviceId})")));
 
                 // ================================================================
@@ -2856,14 +3088,17 @@ namespace Runnatics.Services
                     _logger.LogInformation("Cleared {Count} normalized readings", normalized.Count);
                 }
 
-                // 3. Get batch IDs for this race
+                // 3. Get batch IDs for this race (including event-level batches)
+                // For event-level batches, we need to handle their readings that belong to this race's participants
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var batches = await batchRepo.GetQuery(b =>
                     b.EventId == decryptedEventId &&
-                    b.RaceId == decryptedRaceId)
+                    (b.RaceId == decryptedRaceId || b.RaceId == null))  // Include event-level batches
                     .ToListAsync();
 
                 var batchIds = batches.Select(b => b.Id).ToList();
+                var eventLevelBatchIds = batches.Where(b => b.RaceId == null).Select(b => b.Id).ToHashSet();
+                var raceLevelBatchIds = batches.Where(b => b.RaceId == decryptedRaceId).Select(b => b.Id).ToHashSet();
 
                 // 4. Delete ReadingCheckpointAssignment
                 var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
@@ -2917,30 +3152,46 @@ namespace Runnatics.Services
                 }
 
                 // 6. Reset or delete UploadBatch status
+                // NOTE: Only affect race-specific batches, NOT event-level batches
+                // Event-level batches should remain available for other races
+                var raceLevelBatches = batches.Where(b => b.RaceId == decryptedRaceId).ToList();
+
                 if (!keepUploads)
                 {
-                    // 6a. Delete batches if not keeping uploads
-                    if (batches.Count > 0)
+                    // 6a. Delete batches if not keeping uploads (race-level only)
+                    if (raceLevelBatches.Count > 0)
                     {
-                        await batchRepo.BulkDeleteAsync(batches);
-                        response.UploadsDeleted = batches.Count;
-                        _logger.LogInformation("Deleted {Count} upload batches", batches.Count);
+                        await batchRepo.BulkDeleteAsync(raceLevelBatches);
+                        response.UploadsDeleted = raceLevelBatches.Count;
+                        _logger.LogInformation("Deleted {Count} race-level upload batches", raceLevelBatches.Count);
+                    }
+                    if (eventLevelBatchIds.Count > 0)
+                    {
+                        _logger.LogInformation(
+                            "Preserved {Count} event-level batches (shared across races)",
+                            eventLevelBatchIds.Count);
                     }
                 }
                 else
                 {
-                    // 6b. Reset batches if keeping uploads
-                    if (batches.Count > 0)
+                    // 6b. Reset batches if keeping uploads (race-level only)
+                    if (raceLevelBatches.Count > 0)
                     {
-                        foreach (var batch in batches)
+                        foreach (var batch in raceLevelBatches)
                         {
                             batch.Status = "uploaded";
                             batch.ProcessingStartedAt = null;
                             batch.ProcessingCompletedAt = null;
                         }
-                        await batchRepo.UpdateRangeAsync(batches);
-                        response.BatchesReset = batches.Count;
-                        _logger.LogInformation("Reset {Count} batches to uploaded status", batches.Count);
+                        await batchRepo.UpdateRangeAsync(raceLevelBatches);
+                        response.BatchesReset = raceLevelBatches.Count;
+                        _logger.LogInformation("Reset {Count} race-level batches to uploaded status", raceLevelBatches.Count);
+                    }
+                    if (eventLevelBatchIds.Count > 0)
+                    {
+                        _logger.LogInformation(
+                            "Event-level batches ({Count}) not reset - they serve multiple races",
+                            eventLevelBatchIds.Count);
                     }
                 }
 
@@ -3406,11 +3657,11 @@ namespace Runnatics.Services
                     .ToListAsync())
                     .ToDictionary(ca => ca.EPC, ca => ca.ParticipantId);
 
-                // 1e. Batches → device serial mapping
+                // 1e. Batches → device serial mapping (including event-level batches)
                 var batchRepo = _repository.GetRepository<UploadBatch>();
                 var batches = await batchRepo.GetQuery(b =>
                     b.EventId == decryptedEventId &&
-                    b.RaceId == decryptedRaceId)
+                    (b.RaceId == decryptedRaceId || b.RaceId == null))  // Include event-level batches
                     .AsNoTracking()
                     .ToListAsync();
 

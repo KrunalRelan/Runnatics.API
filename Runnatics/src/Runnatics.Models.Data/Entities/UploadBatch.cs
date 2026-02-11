@@ -8,8 +8,12 @@ namespace Runnatics.Models.Data.Entities
         [Key]
         public int Id { get; set; }
 
-        [Required]
-        public int RaceId { get; set; }
+        /// <summary>
+        /// RaceId is optional for event-level uploads where a single file may contain
+        /// data for multiple races. Race association is determined during processing
+        /// via the EPC → Participant → RaceId chain.
+        /// </summary>
+        public int? RaceId { get; set; }
 
         [Required]
         public int EventId { get; set; }

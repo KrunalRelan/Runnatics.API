@@ -15,8 +15,9 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.Id)
                 .ValueGeneratedOnAdd();
 
+            // RaceId is optional for event-level uploads
             builder.Property(e => e.RaceId)
-                .IsRequired();
+                .IsRequired(false);
 
             builder.Property(e => e.EventId)
                 .IsRequired();
@@ -61,9 +62,11 @@ namespace Runnatics.Data.EF.Config
                 .HasDatabaseName("IX_UploadBatches_EventId_RaceId_Status");
 
             // Relationships
+            // Race is optional - event-level uploads may have RaceId = NULL
             builder.HasOne(e => e.Race)
                 .WithMany()
                 .HasForeignKey(e => e.RaceId)
+                .IsRequired(false)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.Event)

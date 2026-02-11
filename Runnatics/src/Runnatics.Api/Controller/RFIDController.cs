@@ -115,6 +115,60 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Upload SQLite database file with RFID readings at event level.
+        /// RaceId is optional - when not provided, the file is stored at event level and race association 
+        /// happens during processing via EPC → Participant → RaceId. This is the recommended approach 
+        /// when a single device captures data for multiple races (e.g., same mat used for 21KM and 5KM).
+        /// </summary>
+        /// <param name="eventId">Encrypted event ID</param>
+        /// <param name="raceId">Optional encrypted race ID. If null, file applies to all races.</param>
+        /// <param name="request">The RFID file upload request</param>
+        [HttpPost("{eventId}/import")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<RFIDImportResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UploadRFIDFileEventLevel(
+            string eventId,
+            [FromQuery] string? raceId,
+            [FromForm] RFIDImportRequest request)
+        {
+            if (string.IsNullOrEmpty(eventId) || request == null || request.File == null)
+            {
+                return BadRequest(new { error = "Invalid input provided. Event ID and file are required." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
+            }
+
+            var response = new ResponseBase<RFIDImportResponse>();
+            var result = await _service.UploadRFIDFileEventLevelAsync(eventId, raceId, request);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<RFIDImportResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
         /// Upload SQLite database file with RFID readings using auto-detection.
         /// Automatically determines event and race based on device name extracted from filename.
         /// </summary>

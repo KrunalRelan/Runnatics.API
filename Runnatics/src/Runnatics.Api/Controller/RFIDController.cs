@@ -24,20 +24,21 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Upload EPC-BIB mapping Excel file
+        /// Upload EPC-BIB mapping Excel file.
+        /// RaceId is optional - when not provided, mappings will apply to all participants across all races of the event.
         /// </summary>
-        [HttpPost("{eventId}/{raceId}/epc-mapping")]
+        [HttpPost("{eventId}/epc-mapping")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<EPCMappingImportResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> UploadEPCMapping(string eventId, string raceId, [FromForm] EPCMappingImportRequest request)
+        public async Task<IActionResult> UploadEPCMapping(string eventId, [FromQuery] string? raceId, [FromForm] EPCMappingImportRequest request)
         {
-            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || request == null || request.File == null)
+            if (string.IsNullOrEmpty(eventId) || request == null || request.File == null)
             {
-                return BadRequest(new { error = "Invalid input provided. Event ID, Race ID, and file are required." });
+                return BadRequest(new { error = "Invalid input provided. Event ID and file are required." });
             }
 
             if (!ModelState.IsValid)

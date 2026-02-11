@@ -114,12 +114,12 @@ namespace Runnatics.Services
                     .First();
             }
         }
-        public async Task<EPCMappingImportResponse> UploadEPCMappingAsync(string eventId, string raceId, EPCMappingImportRequest request)
+        public async Task<EPCMappingImportResponse> UploadEPCMappingAsync(string eventId, string? raceId, EPCMappingImportRequest request)
         {
             var userId = _userContext.UserId;
             var tenantId = _userContext.TenantId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var decryptedRaceId = !string.IsNullOrEmpty(raceId) ? Convert.ToInt32(_encryptionService.Decrypt(raceId)) : (int?)null;
 
             var response = new EPCMappingImportResponse
             {
@@ -130,7 +130,7 @@ namespace Runnatics.Services
 
             try
             {
-                _logger.LogInformation("Starting EPC-BIB mapping upload for Event {EventId}, Race {RaceId}", decryptedEventId, decryptedRaceId);
+                _logger.LogInformation("Starting EPC-BIB mapping upload for Event {EventId}, Race {RaceId}", decryptedEventId, decryptedRaceId?.ToString() ?? "All");
 
                 // Validate file
                 if (request.File == null || request.File.Length == 0)
@@ -214,14 +214,20 @@ namespace Runnatics.Services
                     }
                 }
 
-                // Get participants by BIB number
+                // Get participants by BIB number (filtered by race if raceId provided, otherwise all event participants)
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-                var participants = await participantRepo.GetQuery(p =>
-                    p.RaceId == decryptedRaceId &&
+                var participantQuery = participantRepo.GetQuery(p =>
                     p.EventId == decryptedEventId &&
                     p.AuditProperties.IsActive &&
-                    !p.AuditProperties.IsDeleted)
-                    .ToListAsync();
+                    !p.AuditProperties.IsDeleted);
+
+                // Filter by race if raceId is provided
+                if (decryptedRaceId.HasValue)
+                {
+                    participantQuery = participantQuery.Where(p => p.RaceId == decryptedRaceId.Value);
+                }
+
+                var participants = await participantQuery.ToListAsync();
 
                 var participantsByBib = participants.ToDictionary(p => p.BibNumber ?? string.Empty, p => p);
 

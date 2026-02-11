@@ -496,12 +496,22 @@ namespace Runnatics.Services.RFID
         #endregion
 
         #region Step 5: Deduplicate
+        // ╔══════════════════════════════════════════════════════════════════════════╗
+        // ║ BUG 1 — LoopRaceCheckpointAssigner.cs                                  ║
+        // ║ Step 5: DeduplicateAssignedReadings                                     ║
+        // ║                                                                          ║
+        // ║ PROBLEM: Groups by (Epc, CheckpointId). Start (CP 4314, Dev 11) and     ║
+        // ║ Start-child (CP 4315, Dev 12) survive as separate groups. The earlier    ║
+        // ║ weak read from Dev 12 becomes the displayed Start time.                  ║
+        // ║                                                                          ║
+        // ║ FIX: Group by (Epc, LogicalGroup) where LogicalGroup merges checkpoints  ║
+        // ║ at the same DistanceFromStart. LAST is picked across BOTH devices.       ║
+        // ║                                                                          ║
+        // ║ IMPACT: Fixes 9 Start discrepancies (1-40s) in 21KM                     ║
+        // ╚══════════════════════════════════════════════════════════════════════════╝
 
-        /// <summary>
-        /// STEP 5: Deduplicate assigned readings.
-        ///   Start checkpoint  → Keep LAST reading (runner leaving mat = most accurate start time)
-        ///   Other checkpoints → Keep EARLIEST reading (first crossing = official time)
-        /// </summary>
+        // ── REPLACE the entire DeduplicateAssignedReadings method with: ──
+
         public List<AssignedReading> DeduplicateAssignedReadings(
             List<AssignedReading> readings,
             List<Checkpoint> checkpoints)
@@ -522,15 +532,29 @@ namespace Runnatics.Services.RFID
                 .ToHashSet();
             startCheckpointIds.ExceptWith(finishIds);
 
+            // ── Build logical checkpoint groups ──
+            // Checkpoints at the same DistanceFromStart are the same physical location
+            // and should be treated as ONE logical checkpoint for dedup purposes.
+            // e.g., Start (CP 4314, Dev 11) and Start-child (CP 4315, Dev 12)
+            //        both at distance=0 → same logical group
+            var cpToLogicalGroup = BuildLogicalCheckpointGroups(checkpoints);
+
             _logger.LogInformation(
-                "Step 5: Dedup config — Start CPs (keep LAST): [{StartIds}], All others: keep EARLIEST",
-                string.Join(", ", startCheckpointIds));
+                "Step 5: Dedup config — Start CPs (keep LAST): [{StartIds}], " +
+                "Logical groups: {GroupCount}, All others: keep EARLIEST",
+                string.Join(", ", startCheckpointIds),
+                cpToLogicalGroup.Values.Distinct().Count());
 
             var result = readings
-                .GroupBy(r => new { r.Epc, r.CheckpointId })
+                .GroupBy(r => new
+                {
+                    r.Epc,
+                    LogicalGroup = cpToLogicalGroup.GetValueOrDefault(r.CheckpointId, r.CheckpointId)
+                })
                 .Select(g =>
                 {
-                    var isStart = startCheckpointIds.Contains(g.Key.CheckpointId);
+                    // Check if ANY checkpoint in this group is a Start checkpoint
+                    var isStart = g.Any(r => startCheckpointIds.Contains(r.CheckpointId));
 
                     var selected = isStart
                         ? g.OrderByDescending(r => r.ReadTimeUtc).First()  // Start → LAST
@@ -539,10 +563,13 @@ namespace Runnatics.Services.RFID
                     if (g.Count() > 1)
                     {
                         _logger.LogDebug(
-                            "Dedup: EPC {Epc} at CP {CpId} — {Count} readings, kept {Rule} at {Time}",
-                            g.Key.Epc, g.Key.CheckpointId, g.Count(),
+                            "Dedup: EPC {Epc} logical group {Group} — {Count} readings from CPs [{CpIds}], " +
+                            "kept {Rule} at {Time} (CP {WinnerCp})",
+                            g.Key.Epc, g.Key.LogicalGroup, g.Count(),
+                            string.Join(",", g.Select(r => r.CheckpointId).Distinct()),
                             isStart ? "LAST" : "EARLIEST",
-                            selected.ReadTimeUtc.ToString("HH:mm:ss"));
+                            selected.ReadTimeUtc.ToString("HH:mm:ss"),
+                            selected.CheckpointId);
                     }
 
                     return selected;
@@ -560,6 +587,30 @@ namespace Runnatics.Services.RFID
             return result;
         }
 
+        /// <summary>
+        /// Build a mapping from CheckpointId → LogicalGroupId.
+        /// Checkpoints at the same DistanceFromStart are grouped together.
+        /// The lowest CheckpointId in each group becomes the representative.
+        /// </summary>
+        private Dictionary<int, int> BuildLogicalCheckpointGroups(List<Checkpoint> checkpoints)
+        {
+            var cpToGroup = new Dictionary<int, int>();
+
+            var byDistance = checkpoints
+                .GroupBy(cp => cp.DistanceFromStart)
+                .ToList();
+
+            foreach (var distGroup in byDistance)
+            {
+                var groupId = distGroup.Min(cp => cp.Id);
+                foreach (var cp in distGroup)
+                {
+                    cpToGroup[cp.Id] = groupId;
+                }
+            }
+
+            return cpToGroup;
+        }
         #endregion
     }
 }

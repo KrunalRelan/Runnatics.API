@@ -2872,16 +2872,12 @@ namespace Runnatics.Services
                         // ── Link to participant ──
                         if (!epcToParticipant.TryGetValue(epc, out var participant))
                         {
-                            // Unlinked EPC — no participant found
+                            // Unlinked EPC — belongs to another race in this event.
+                            // Leave as "Pending" so the other race can process it.
+                            // Do NOT mark as error or update the reading.
                             unlinkedEPCs.Add(epc);
-                            foreach (var reading in participantReadings)
-                            {
-                                //reading.ProcessResult = "Invalid";
-                                reading.Notes = $"No participant found with this RFID tag for {raceId}";
-                                reading.ProcessedAt = DateTime.UtcNow;
-                                readingsToUpdate.Add(reading);
-                            }
-                            errorCount += participantReadings.Count;
+                            // Don't add to readingsToUpdate — leave completely untouched
+                            // Don't increment errorCount — these aren't errors
                             continue;
                         }
 
@@ -3702,17 +3698,23 @@ namespace Runnatics.Services
                 // ================================================================
                 var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
 
-                // Get all assignment IDs for readings in this race's batches
+                // FIX BUG 2: Scope to only THIS race's participant EPCs
+                // Old code loaded ALL reading IDs from event-level batches (both races),
+                // then treated other race's checkpoint assignments as "stale" → deleted them.
+                // New code: only load readings whose EPCs match current race's participants.
+                var raceEpcSet = new HashSet<string>(epcToParticipant.Keys);
+
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
                 var raceReadingIds = await readingRepo.GetQuery(r =>
                     batchIds.Contains(r.BatchId) &&
+                    raceEpcSet.Contains(r.Epc) &&  // ← ONLY this race's participants
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
                     .Select(r => r.Id)
                     .ToListAsync();
                 var raceReadingIdSet = new HashSet<long>(raceReadingIds);
 
-                // Find all existing assignments for readings in this race
+                // Find existing assignments for THIS race's readings only
                 var existingAssignments = await assignmentRepo.GetQuery(a =>
                     raceReadingIdSet.Contains(a.ReadingId))
                     .ToListAsync();
@@ -3761,13 +3763,31 @@ namespace Runnatics.Services
                 // Same .db file uploaded multiple times creates duplicate readings.
                 // Deduplicate by (Epc, TimestampMs) — keep the first occurrence.
                 // ================================================================
-                var beforeDedup = allReadings.Count;
-                var dedupedReadings = allReadings
+                // FIX BUG 3: Filter to only THIS race's participant EPCs BEFORE dedup
+                // Without this, 21KM participant readings get processed as 10KM,
+                // polluting turnaround calculations and creating wrong assignments.
+                var raceFilteredReadings = allReadings
+                    .Where(r => raceEpcSet.Contains(r.Epc))  // ← ONLY this race's EPCs
+                    .ToList();
+
+                var filteredOut = allReadings.Count - raceFilteredReadings.Count;
+                if (filteredOut > 0)
+                {
+                    _logger.LogInformation(
+                        "EPC filter: {Before} → {After} readings (filtered out {Removed} readings from other races)",
+                        allReadings.Count, raceFilteredReadings.Count, filteredOut);
+                }
+
+                var beforeDedup = raceFilteredReadings.Count;
+                var dedupedReadings = raceFilteredReadings
                     .GroupBy(r => new { r.Epc, r.TimestampMs })
                     .Select(g => g.OrderBy(r => r.Id).First())  // Keep earliest DB row
                     .ToList();
 
                 var duplicatesRemoved = beforeDedup - dedupedReadings.Count;
+
+                // NOTE: raceEpcSet is already defined in the Bug 2 fix above.
+                // If you apply both fixes, raceEpcSet only needs to be declared once.
                 if (duplicatesRemoved > 0)
                 {
                     _logger.LogWarning(

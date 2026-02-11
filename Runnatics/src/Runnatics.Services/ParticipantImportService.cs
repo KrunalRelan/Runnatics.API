@@ -103,8 +103,8 @@ namespace Runnatics.Services
                     EventId = decryptedEventId,
                     FileName = request.File.FileName,
                     TotalRecords = stagingRecords.Count,
-                    // SuccessCount = 0,
-                    // ErrorCount = 0,
+                    SuccessCount = 0,
+                    ErrorCount = 0,
                     Status = "Pending",
                     //UploadedAt = DateTime.UtcNow,
                     AuditProperties = new Models.Data.Common.AuditProperties
@@ -266,6 +266,17 @@ namespace Runnatics.Services
                        UserId = userId
                    }, "");
 
+                if (batchProcessor != null)
+                {
+                    successCount = batchProcessor.SuccessCount;
+                    errorCount = batchProcessor.ErrorCount;
+                }
+
+                importBatch.SuccessCount = successCount;
+                importBatch.ErrorCount = errorCount;
+                importBatch.Status = "Completed";
+
+                await _repository.SaveChangesAsync();
 
                 _logger.LogInformation("Processing completed. Success: {Success}, Errors: {Errors}", successCount, errorCount);
 

@@ -21,9 +21,9 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         public int TotalRecords { get; set; }
 
-        //public int SuccessCount { get; set; } = 0;
+        public int SuccessCount { get; set; }
 
-        //public int ErrorCount { get; set; } = 0;
+        public int ErrorCount { get; set; } 
 
         [Required]
         [MaxLength(20)]

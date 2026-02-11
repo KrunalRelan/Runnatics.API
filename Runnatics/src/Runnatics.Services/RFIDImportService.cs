@@ -3692,36 +3692,36 @@ namespace Runnatics.Services
                 var batchToDeviceSerial = batches.ToDictionary(b => b.Id, b => b.DeviceId);
 
                 // ================================================================
-                // FIX #3 + #6: CLEAN UP STALE AND EXISTING ASSIGNMENTS
+                // FIX #3 + #7: CLEAN UP STALE AND ALL EXISTING ASSIGNMENTS
                 // Delete assignments that reference non-existent checkpoints (stale)
-                // AND delete existing assignments for current checkpoints (re-process)
+                // AND delete ALL existing assignments for this race's readings.
+                // Phase 1.5 handles ALL device types (shared, turnaround, AND single),
+                // so it must clear Phase 1's simple assignments too to avoid duplicate
+                // key violations on insert (e.g. child device 4317 assigned by Phase 1
+                // AND Phase 1.5 → IX_ReadingCheckpointAssignments_ReadingId_CheckpointId).
                 // ================================================================
                 var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
 
                 // FIX BUG 2: Scope to only THIS race's participant EPCs
-                // Old code loaded ALL reading IDs from event-level batches (both races),
-                // then treated other race's checkpoint assignments as "stale" → deleted them.
-                // New code: only load readings whose EPCs match current race's participants.
-                var raceEpcSet = new HashSet<string>(epcToParticipant.Keys);
+                var raceEpcList = epcToParticipant.Keys.ToList();      // For EF Core queries
+                var raceEpcSet = new HashSet<string>(raceEpcList);      // For in-memory lookups
 
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
                 var raceReadingIds = await readingRepo.GetQuery(r =>
                     batchIds.Contains(r.BatchId) &&
-                    raceEpcSet.Contains(r.Epc) &&  // ← ONLY this race's participants
+                    raceEpcList.Contains(r.Epc) &&  // ← FIX: List for EF Core SQL translation
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
                     .Select(r => r.Id)
                     .ToListAsync();
-                var raceReadingIdSet = new HashSet<long>(raceReadingIds);
+                var raceReadingIdSet = new HashSet<long>(raceReadingIds);  // For in-memory lookups
 
                 // Find existing assignments for THIS race's readings only
                 var existingAssignments = await assignmentRepo.GetQuery(a =>
-                    raceReadingIdSet.Contains(a.ReadingId))
+                    raceReadingIds.Contains(a.ReadingId))  // ← FIX: List for EF Core SQL translation
                     .ToListAsync();
 
-                // Identify shared device checkpoint IDs (the ones we'll reassign)
-                var sharedCheckpointIds = new HashSet<int>();
-                // We'll compute this after step 2, but first let's identify stale ones
+                // Delete stale assignments (referencing checkpoints that no longer exist)
                 var staleAssignments = existingAssignments
                     .Where(a => !currentCheckpointIds.Contains(a.CheckpointId))
                     .ToList();
@@ -3732,6 +3732,23 @@ namespace Runnatics.Services
                         "FIX #3: Found {Count} STALE assignments referencing deleted checkpoint IDs. Deleting.",
                         staleAssignments.Count);
                     await assignmentRepo.BulkDeleteAsync(staleAssignments);
+                }
+
+                // FIX #7: Delete ALL remaining existing assignments for this race's readings.
+                // Phase 1 may have already assigned "simple" child device checkpoints (e.g. 4317)
+                // that Phase 1.5 also assigns, causing duplicate key violations on BulkInsert.
+                // Phase 1.5 re-creates everything (shared + turnaround + single device assignments).
+                var staleIds = staleAssignments.Select(s => s.Id).ToHashSet();
+                var remainingAssignments = existingAssignments
+                    .Where(a => !staleIds.Contains(a.Id))  // Skip already-deleted stale ones
+                    .ToList();
+
+                if (remainingAssignments.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "FIX #7: Deleting {Count} existing assignments for re-processing (includes Phase 1 simple + shared device assignments)",
+                        remainingAssignments.Count);
+                    await assignmentRepo.BulkDeleteAsync(remainingAssignments);
                 }
 
                 // ================================================================
@@ -3764,10 +3781,8 @@ namespace Runnatics.Services
                 // Deduplicate by (Epc, TimestampMs) — keep the first occurrence.
                 // ================================================================
                 // FIX BUG 3: Filter to only THIS race's participant EPCs BEFORE dedup
-                // Without this, 21KM participant readings get processed as 10KM,
-                // polluting turnaround calculations and creating wrong assignments.
                 var raceFilteredReadings = allReadings
-                    .Where(r => raceEpcSet.Contains(r.Epc))  // ← ONLY this race's EPCs
+                    .Where(r => raceEpcSet.Contains(r.Epc))  // ← In-memory: HashSet is fine
                     .ToList();
 
                 var filteredOut = allReadings.Count - raceFilteredReadings.Count;
@@ -3786,8 +3801,6 @@ namespace Runnatics.Services
 
                 var duplicatesRemoved = beforeDedup - dedupedReadings.Count;
 
-                // NOTE: raceEpcSet is already defined in the Bug 2 fix above.
-                // If you apply both fixes, raceEpcSet only needs to be declared once.
                 if (duplicatesRemoved > 0)
                 {
                     _logger.LogWarning(
@@ -3853,30 +3866,6 @@ namespace Runnatics.Services
 
                 var turnaroundConfig = assigner.IdentifyTurnaroundCheckpoint(checkpoints);
                 var sharedDevices = assigner.IdentifySharedDevices(checkpoints);
-
-                // Now we know which checkpoints are "shared" — delete existing assignments for those
-                // FIX #6: Allow re-processing by clearing previous shared device assignments
-                foreach (var sd in sharedDevices.Values)
-                {
-                    sharedCheckpointIds.Add(sd.OutboundCheckpointId);
-                    sharedCheckpointIds.Add(sd.ReturnCheckpointId);
-                }
-                if (turnaroundConfig != null)
-                {
-                    sharedCheckpointIds.Add(turnaroundConfig.CheckpointId);
-                }
-
-                var existingSharedAssignments = existingAssignments
-                    .Where(a => sharedCheckpointIds.Contains(a.CheckpointId))
-                    .ToList();
-
-                if (existingSharedAssignments.Count > 0)
-                {
-                    _logger.LogInformation(
-                        "FIX #6: Deleting {Count} existing shared/loop device assignments for re-processing",
-                        existingSharedAssignments.Count);
-                    await assignmentRepo.BulkDeleteAsync(existingSharedAssignments);
-                }
 
                 // Build single-device checkpoint lookup (non-shared, non-turnaround)
                 var singleDeviceCheckpoints = checkpoints
@@ -4047,16 +4036,18 @@ namespace Runnatics.Services
                     .Select(g => $"{g.Key}={g.Count()}")
                     .ToList();
 
+                var totalDeleted = staleAssignments.Count + remainingAssignments.Count;
+
                 _logger.LogInformation(
                     "═══ Phase 1.5 COMPLETE ═══\n" +
                     "  Raw readings:     {Raw}\n" +
                     "  After cross-dedup: {Deduped} (removed {DupesRemoved} cross-batch dupes)\n" +
                     "  After pass-dedup:  {Collapsed} (collapsed {PassRemoved} same-pass reads)\n" +
-                    "  Stale deleted:     {Stale}\n" +
+                    "  Deleted prior:     {Deleted} ({Stale} stale + {Remaining} re-process)\n" +
                     "  Final assignments: {Final} in {Time}ms [{Methods}]",
                     allReadings.Count, dedupedReadings.Count, duplicatesRemoved,
                     totalCollapsed, readingInputs.Count - totalCollapsed,
-                    staleAssignments.Count + existingSharedAssignments.Count,
+                    totalDeleted, staleAssignments.Count, remainingAssignments.Count,
                     assignmentsToCreate.Count, response.ProcessingTimeMs,
                     string.Join(", ", methodSummary));
 

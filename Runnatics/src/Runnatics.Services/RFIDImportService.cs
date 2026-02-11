@@ -2729,13 +2729,18 @@ namespace Runnatics.Services
                     response.Message = "No pending readings to process";
                     _logger.LogInformation("No pending readings across {Count} batches", pendingBatches.Count);
 
-                    // Mark batches as completed
-                    foreach (var batch in pendingBatches)
+                    // Mark ONLY race-specific batches as completed
+                    // Event-level batches (RaceId = NULL) must remain available for other races
+                    var raceLevelBatchesToUpdate = pendingBatches.Where(b => b.RaceId == decryptedRaceId).ToList();
+                    foreach (var batch in raceLevelBatchesToUpdate)
                     {
                         batch.Status = "completed";
                         batch.ProcessingCompletedAt = DateTime.UtcNow;
                     }
-                    await batchRepo.UpdateRangeAsync(pendingBatches);
+                    if (raceLevelBatchesToUpdate.Count > 0)
+                    {
+                        await batchRepo.UpdateRangeAsync(raceLevelBatchesToUpdate);
+                    }
                     await _repository.SaveChangesAsync();
                     return response;
                 }
@@ -2964,15 +2969,37 @@ namespace Runnatics.Services
                     }
 
                     // ================================================================
-                    // 7. UPDATE ALL BATCH STATUSES
+                    // 7. UPDATE BATCH STATUSES
+                    //    Only mark RACE-LEVEL batches as completed.
+                    //    Event-level batches (RaceId = NULL) must remain "uploaded" so they
+                    //    can be processed for OTHER races in the same event.
                     // ================================================================
-                    foreach (var batch in pendingBatches)
+                    var raceLevelBatches = pendingBatches.Where(b => b.RaceId == decryptedRaceId).ToList();
+                    var eventLevelBatches = pendingBatches.Where(b => b.RaceId == null).ToList();
+
+                    foreach (var batch in raceLevelBatches)
                     {
                         batch.Status = "completed";
                         batch.ProcessingStartedAt ??= DateTime.UtcNow;
                         batch.ProcessingCompletedAt = DateTime.UtcNow;
                     }
+
+                    // Event-level batches: just update timestamps, keep status as "uploaded"
+                    foreach (var batch in eventLevelBatches)
+                    {
+                        batch.ProcessingStartedAt ??= DateTime.UtcNow;
+                        // Note: NOT setting ProcessingCompletedAt or changing Status
+                        // These batches need to remain available for other races
+                    }
+
                     await batchRepo.UpdateRangeAsync(pendingBatches);
+
+                    if (eventLevelBatches.Count > 0)
+                    {
+                        _logger.LogInformation(
+                            "Preserved {Count} event-level batches (RaceId=NULL) for other races in this event",
+                            eventLevelBatches.Count);
+                    }
 
                     await _repository.SaveChangesAsync();
                     await _repository.CommitTransactionAsync();

@@ -15,12 +15,12 @@ using System.Text;
 
 namespace Runnatics.Services
 {
-    public class RFIDImportService : ServiceBase<IUnitOfWork<RaceSyncDbContext>>, IRFIDImportService
+    public class RFIDImportService(IUnitOfWork<RaceSyncDbContext> repository, IMapper mapper, ILogger<RFIDImportService> logger, IUserContextService userContext, IEncryptionService encryptionService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IRFIDImportService
     {
-        private readonly IMapper _mapper;
-        private readonly ILogger<RFIDImportService> _logger;
-        private readonly IUserContextService _userContext;
-        private readonly IEncryptionService _encryptionService;
+        private readonly IMapper _mapper = mapper;
+        private readonly ILogger<RFIDImportService> _logger = logger;
+        private readonly IUserContextService _userContext = userContext;
+        private readonly IEncryptionService _encryptionService = encryptionService;
 
         /// <summary>
         /// Default deduplication window in seconds.
@@ -28,20 +28,6 @@ namespace Runnatics.Services
         /// TODO: Make this configurable per race/event (discuss with client).
         /// </summary>
         private const double DEFAULT_DEDUP_WINDOW_SECONDS = 30.0;
-
-        public RFIDImportService(
-            IUnitOfWork<RaceSyncDbContext> repository,
-            IMapper mapper,
-            ILogger<RFIDImportService> logger,
-            IUserContextService userContext,
-            IEncryptionService encryptionService)
-            : base(repository)
-        {
-            _mapper = mapper;
-            _logger = logger;
-            _userContext = userContext;
-            _encryptionService = encryptionService;
-        }
 
         // =====================================================================
         // FIX: Deduplication helper methods for loop race support
@@ -1192,9 +1178,10 @@ namespace Runnatics.Services
                     var raceRepo = _repository.GetRepository<Race>();
                     var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
                         .AsNoTracking()
+                        .Include(r => r.RaceSettings)
                         .FirstOrDefaultAsync();
                     var raceStartTime = race?.StartTime;
-
+                    var dedupWindowSeconds = race?.RaceSettings?.DedUpSeconds ?? DEFAULT_DEDUP_WINDOW_SECONDS;
                     if (isLoopRace)
                     {
                         // Get EPC->Participant mapping first
@@ -1210,7 +1197,7 @@ namespace Runnatics.Services
                             {
                                 if (!readingsByParticipant.ContainsKey(participantId))
                                 {
-                                    readingsByParticipant[participantId] = new List<RawRFIDReading>();
+                                    readingsByParticipant[participantId] = [];
                                 }
                                 readingsByParticipant[participantId].Add(reading);
                             }
@@ -1279,7 +1266,7 @@ namespace Runnatics.Services
                                             kvp.Key, originalCount, startWindowMinutes,
                                             raceStartTime.Value.ToString("HH:mm:ss"),
                                             kvp.Value.OrderBy(r => r.TimestampMs).FirstOrDefault()?.ReadTimeUtc.ToString("HH:mm:ss") ?? "N/A");
-                                        deduplicatedReadingsByParticipant[kvp.Key] = new List<RawRFIDReading>();
+                                        deduplicatedReadingsByParticipant[kvp.Key] = [];
                                         continue;
                                     }
                                 }
@@ -1288,7 +1275,7 @@ namespace Runnatics.Services
                             // Deduplicate: readings within dedup window = same pass
                             // For START checkpoint: pick LAST reading from filtered start window (runner exiting mat)
                             // For other checkpoints: pick BEST RSSI (optimal timing accuracy)
-                            var deduplicated = DeduplicateReadingsPerPass(readingsToDedup, DEFAULT_DEDUP_WINDOW_SECONDS, isFirstPassStart);  // ? Picks LAST reading for start, BEST RSSI for others
+                            var deduplicated = DeduplicateReadingsPerPass(readingsToDedup, dedupWindowSeconds, isFirstPassStart);  // ? Picks LAST reading for start, BEST RSSI for others
                             deduplicatedReadingsByParticipant[kvp.Key] = deduplicated;
 
                             if (kvp.Value.Count != deduplicated.Count)
@@ -1681,12 +1668,7 @@ namespace Runnatics.Services
             }
         }
 
-        private async Task<List<RawRFIDReading>> ParseSqliteFileAsync(
-            string filePath,
-            int batchId,
-            string deviceId,
-            string timeZoneId,
-            bool treatAsUtc)
+        private async Task<List<RawRFIDReading>> ParseSqliteFileAsync(string filePath, int batchId, string deviceId, string timeZoneId, bool treatAsUtc)
         {
             var readings = new List<RawRFIDReading>();
             var userId = _userContext.UserId;
@@ -2325,29 +2307,67 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                // Get finish checkpoint (checkpoint with maximum distance from start)
+                // Get all checkpoints ordered by distance
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
-                var finishCheckpoint = await checkpointRepo.GetQuery(cp =>
+                var checkpoints = await checkpointRepo.GetQuery(cp =>
                     cp.RaceId == decryptedRaceId &&
                     cp.EventId == decryptedEventId &&
                     cp.AuditProperties.IsActive &&
                     !cp.AuditProperties.IsDeleted)
-                    .OrderByDescending(cp => cp.DistanceFromStart)
+                    .OrderBy(cp => cp.DistanceFromStart)
                     .AsNoTracking()
-                    .FirstOrDefaultAsync();
+                    .ToListAsync();
 
-                if (finishCheckpoint == null)
+                if (checkpoints.Count == 0)
                 {
-                    ErrorMessage = "No finish checkpoint found for this race";
+                    ErrorMessage = "No checkpoints found for this race";
                     response.Status = "Failed";
                     return response;
                 }
 
-                _logger.LogInformation("Using checkpoint {CheckpointId} as finish line (Distance: {Distance})",
+                var parentCheckpoints = checkpoints
+                                        .Where(cp => !cp.ParentDeviceId.HasValue || cp.ParentDeviceId == 0)
+                                        .OrderBy(cp => cp.DistanceFromStart)
+                                        .ToList();
+                // Identify start checkpoint (minimum distance) and finish checkpoint (maximum distance)
+                var startCheckpoint = parentCheckpoints.First();
+                var finishCheckpoint = parentCheckpoints.Last();
+
+                _logger.LogInformation(
+                    "Start checkpoint: {StartId} (Distance: {StartDist}), Finish checkpoint: {FinishId} (Distance: {FinishDist})",
+                    startCheckpoint.Id, startCheckpoint.DistanceFromStart,
                     finishCheckpoint.Id, finishCheckpoint.DistanceFromStart);
 
-                // Get normalized readings at finish checkpoint with participant data
+                // Get ALL registered participants for this race
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var allParticipants = await participantRepo.GetQuery(p =>
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                if (allParticipants.Count == 0)
+                {
+                    response.Status = "Completed";
+                    response.Message = "No registered participants found.";
+                    return response;
+                }
+
+                // Get normalized readings at START checkpoint — to determine DNS
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var startReadings = await normalizedRepo.GetQuery(rn =>
+                    rn.EventId == decryptedEventId &&
+                    rn.CheckpointId == startCheckpoint.Id &&
+                    rn.AuditProperties.IsActive &&
+                    !rn.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                var participantsWithStart = startReadings
+                    .Select(r => r.ParticipantId)
+                    .ToHashSet();
+
+                // Get normalized readings at FINISH checkpoint — to determine Finished vs DNF
                 var finishReadings = await normalizedRepo.GetQuery(rn =>
                     rn.EventId == decryptedEventId &&
                     rn.CheckpointId == finishCheckpoint.Id &&
@@ -2357,15 +2377,12 @@ namespace Runnatics.Services
                     .OrderBy(rn => rn.GunTime ?? long.MaxValue)
                     .ToListAsync();
 
-                if (finishReadings.Count == 0)
-                {
-                    response.Status = "Completed";
-                    response.Message = "No finish line readings found. Run deduplication first.";
-                    return response;
-                }
+                var participantsWithFinish = finishReadings
+                    .Select(r => r.ParticipantId)
+                    .ToHashSet();
 
                 // =====================================================================
-                // FIX #4: Validate result times before processing
+                // Validate result times before processing
                 // =====================================================================
                 var negativeGunTimes = finishReadings.Where(r => r.GunTime.HasValue && r.GunTime.Value < 0).ToList();
                 if (negativeGunTimes.Any())
@@ -2387,24 +2404,52 @@ namespace Runnatics.Services
                 {
                     _logger.LogWarning(
                         "Found {Count} finish readings with negative NetTime. " +
-                        "This indicates participant start time assignment errors. " +
-                        "Results will be calculated but NetTime may be incorrect for these participants: {Examples}",
+                        "This indicates participant start time assignment errors: {Examples}",
                         negativeNetTimes.Count,
                         string.Join(", ", negativeNetTimes.Take(5).Select(r =>
                             $"Participant {r.ParticipantId}: {r.NetTime}ms")));
                 }
 
                 var veryLongTimes = finishReadings.Where(r =>
-                    r.GunTime.HasValue && r.GunTime.Value > 24 * 60 * 60 * 1000).ToList(); // > 24 hours
+                    r.GunTime.HasValue && r.GunTime.Value > 24 * 60 * 60 * 1000).ToList();
                 if (veryLongTimes.Any())
                 {
                     _logger.LogWarning(
-                        "Found {Count} finish readings with GunTime > 24 hours. " +
-                        "This may indicate timing errors: {Examples}",
+                        "Found {Count} finish readings with GunTime > 24 hours: {Examples}",
                         veryLongTimes.Count,
                         string.Join(", ", veryLongTimes.Take(5).Select(r =>
                             $"Participant {r.ParticipantId}: {TimeSpan.FromMilliseconds(r.GunTime.Value):hh\\:mm\\:ss}")));
                 }
+
+                // =====================================================================
+                // Classify all participants: Finished, DNF, or DNS
+                // =====================================================================
+                var finishedParticipantIds = new HashSet<int>();
+                var dnfParticipantIds = new HashSet<int>();
+                var dnsParticipantIds = new HashSet<int>();
+
+                foreach (var participant in allParticipants)
+                {
+                    if (participantsWithFinish.Contains(participant.Id))
+                    {
+                        finishedParticipantIds.Add(participant.Id);
+                    }
+                    else if (!participantsWithStart.Contains(participant.Id))
+                    {
+                        // No start reading → Did Not Start
+                        dnsParticipantIds.Add(participant.Id);
+                    }
+                    else
+                    {
+                        // Has start but no finish → Did Not Finish
+                        dnfParticipantIds.Add(participant.Id);
+                    }
+                }
+
+                _logger.LogInformation(
+                    "Participant classification: {Finished} Finished, {DNF} DNF, {DNS} DNS (out of {Total} registered)",
+                    finishedParticipantIds.Count, dnfParticipantIds.Count,
+                    dnsParticipantIds.Count, allParticipants.Count);
 
                 // Get existing results to check for updates vs inserts
                 var resultsRepo = _repository.GetRepository<Results>();
@@ -2413,15 +2458,6 @@ namespace Runnatics.Services
                     r.RaceId == decryptedRaceId)
                     .ToDictionaryAsync(r => r.ParticipantId, r => r);
 
-                // Get all registered participants for DNF calculation
-                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-                var totalParticipants = await participantRepo.GetQuery(p =>
-                    p.RaceId == decryptedRaceId &&
-                    p.EventId == decryptedEventId &&
-                    p.AuditProperties.IsActive &&
-                    !p.AuditProperties.IsDeleted)
-                    .CountAsync();
-
                 await _repository.BeginTransactionAsync();
 
                 try
@@ -2429,27 +2465,32 @@ namespace Runnatics.Services
                     var resultsToAdd = new List<Results>();
                     var resultsToUpdate = new List<Results>();
 
-                    // Process all readings using LINQ with index - no for loop needed
-                    var processedResults = finishReadings.Select((reading, index) =>
-                    {
-                        var overallRank = index + 1;
+                    // =====================================================================
+                    // 1. Process FINISHED participants — ranked by GunTime ascending
+                    // =====================================================================
+                    var rankedFinishers = finishReadings
+                        .Where(r => finishedParticipantIds.Contains(r.ParticipantId))
+                        .OrderBy(r => r.GunTime ?? long.MaxValue)
+                        .Select((reading, index) => new { reading, OverallRank = index + 1 })
+                        .ToList();
 
-                        if (existingResults.TryGetValue(reading.ParticipantId, out var existingResult))
+                    foreach (var item in rankedFinishers)
+                    {
+                        var reading = item.reading;
+                        if (existingResults.TryGetValue(reading.ParticipantId, out var existing))
                         {
-                            // Update existing result
-                            existingResult.FinishTime = reading.GunTime;
-                            existingResult.GunTime = reading.GunTime;
-                            existingResult.NetTime = reading.NetTime;
-                            existingResult.OverallRank = overallRank;
-                            existingResult.Status = "Finished";
-                            existingResult.AuditProperties.UpdatedBy = userId;
-                            existingResult.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            return (result: existingResult, isNew: false);
+                            existing.FinishTime = reading.GunTime;
+                            existing.GunTime = reading.GunTime;
+                            existing.NetTime = reading.NetTime;
+                            existing.OverallRank = item.OverallRank;
+                            existing.Status = "Finished";
+                            existing.AuditProperties.UpdatedBy = userId;
+                            existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            resultsToUpdate.Add(existing);
                         }
                         else
                         {
-                            // Create new result
-                            var result = new Results
+                            resultsToAdd.Add(new Results
                             {
                                 EventId = decryptedEventId,
                                 RaceId = decryptedRaceId,
@@ -2457,7 +2498,7 @@ namespace Runnatics.Services
                                 FinishTime = reading.GunTime,
                                 GunTime = reading.GunTime,
                                 NetTime = reading.NetTime,
-                                OverallRank = overallRank,
+                                OverallRank = item.OverallRank,
                                 Status = "Finished",
                                 IsOfficial = false,
                                 CertificateGenerated = false,
@@ -2468,48 +2509,131 @@ namespace Runnatics.Services
                                     IsActive = true,
                                     IsDeleted = false
                                 }
-                            };
-                            return (result: result, isNew: true);
+                            });
                         }
-                    }).ToList();
+                    }
 
-                    resultsToAdd = processedResults.Where(r => r.isNew).Select(r => r.result).ToList();
-                    resultsToUpdate = processedResults.Where(r => !r.isNew).Select(r => r.result).ToList();
+                    // =====================================================================
+                    // 2. Process DNF participants — no rank, no finish time
+                    // =====================================================================
+                    foreach (var participantId in dnfParticipantIds)
+                    {
+                        if (existingResults.TryGetValue(participantId, out var existing))
+                        {
+                            existing.FinishTime = null;
+                            existing.GunTime = null;
+                            existing.NetTime = null;
+                            existing.OverallRank = null;
+                            existing.GenderRank = null;
+                            existing.CategoryRank = null;
+                            existing.Status = "DNF";
+                            existing.AuditProperties.UpdatedBy = userId;
+                            existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            resultsToUpdate.Add(existing);
+                        }
+                        else
+                        {
+                            resultsToAdd.Add(new Results
+                            {
+                                EventId = decryptedEventId,
+                                RaceId = decryptedRaceId,
+                                ParticipantId = participantId,
+                                FinishTime = null,
+                                GunTime = null,
+                                NetTime = null,
+                                OverallRank = null,
+                                Status = "DNF",
+                                IsOfficial = false,
+                                CertificateGenerated = false,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            });
+                        }
+                    }
 
-                    // TRUE BULK INSERT - Single DB roundtrip
+                    // =====================================================================
+                    // 3. Process DNS participants — no rank, no times
+                    // =====================================================================
+                    foreach (var participantId in dnsParticipantIds)
+                    {
+                        if (existingResults.TryGetValue(participantId, out var existing))
+                        {
+                            existing.FinishTime = null;
+                            existing.GunTime = null;
+                            existing.NetTime = null;
+                            existing.OverallRank = null;
+                            existing.GenderRank = null;
+                            existing.CategoryRank = null;
+                            existing.Status = "DNS";
+                            existing.AuditProperties.UpdatedBy = userId;
+                            existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            resultsToUpdate.Add(existing);
+                        }
+                        else
+                        {
+                            resultsToAdd.Add(new Results
+                            {
+                                EventId = decryptedEventId,
+                                RaceId = decryptedRaceId,
+                                ParticipantId = participantId,
+                                FinishTime = null,
+                                GunTime = null,
+                                NetTime = null,
+                                OverallRank = null,
+                                Status = "DNS",
+                                IsOfficial = false,
+                                CertificateGenerated = false,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            });
+                        }
+                    }
+
+                    // Bulk persist
                     if (resultsToAdd.Count > 0)
                     {
                         await resultsRepo.BulkInsertAsync(resultsToAdd);
-                        _logger.LogInformation("Bulk inserted {Count} new results", resultsToAdd.Count);
+                        _logger.LogInformation("Bulk inserted {Count} results", resultsToAdd.Count);
                     }
 
-                    // TRUE BULK UPDATE - Single DB roundtrip
                     if (resultsToUpdate.Count > 0)
                     {
                         await resultsRepo.BulkUpdateAsync(resultsToUpdate);
-                        _logger.LogInformation("Bulk updated {Count} existing results", resultsToUpdate.Count);
+                        _logger.LogInformation("Bulk updated {Count} results", resultsToUpdate.Count);
                     }
 
                     await _repository.SaveChangesAsync();
 
-                    // Calculate gender rankings
+                    // Calculate gender rankings (only for Finished)
                     await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
 
-                    // Calculate category rankings
+                    // Calculate category rankings (only for Finished)
                     var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
 
                     await _repository.SaveChangesAsync();
                     await _repository.CommitTransactionAsync();
 
-                    // Calculate gender stats for response
+                    // Build response
                     var genderStats = finishReadings
+                        .Where(r => finishedParticipantIds.Contains(r.ParticipantId))
                         .GroupBy(r => r.Participant?.Gender?.ToLower() ?? "other")
                         .ToDictionary(g => g.Key, g => g.Count());
 
-                    response.TotalFinishers = finishReadings.Count;
+                    response.TotalFinishers = finishedParticipantIds.Count;
                     response.ResultsCreated = resultsToAdd.Count;
                     response.ResultsUpdated = resultsToUpdate.Count;
-                    response.DNFCount = totalParticipants - finishReadings.Count;
+                    response.DNFCount = dnfParticipantIds.Count;
+                    response.DNSCount = dnsParticipantIds.Count;
                     response.CategoriesProcessed = categoriesProcessed;
                     response.GenderStats = new GenderBreakdown
                     {
@@ -2518,14 +2642,17 @@ namespace Runnatics.Services
                         OtherFinishers = genderStats.GetValueOrDefault("other", 0)
                     };
                     response.Status = "Completed";
-                    response.Message = $"Successfully calculated results for {finishReadings.Count} finishers";
+                    response.Message = $"Results: {finishedParticipantIds.Count} Finished, " +
+                        $"{dnfParticipantIds.Count} DNF, {dnsParticipantIds.Count} DNS";
 
                     var endTime = DateTime.UtcNow;
                     response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
 
                     _logger.LogInformation(
-                        "Race results calculated. Finishers: {Finishers}, Created: {Created}, Updated: {Updated}, Time: {Time}ms",
-                        finishReadings.Count, resultsToAdd.Count, resultsToUpdate.Count, response.ProcessingTimeMs);
+                        "Race results complete — Finished: {Finished} (ranked), DNF: {DNF}, DNS: {DNS}, " +
+                        "Created: {Created}, Updated: {Updated}, Time: {Time}ms",
+                        finishedParticipantIds.Count, dnfParticipantIds.Count, dnsParticipantIds.Count,
+                        resultsToAdd.Count, resultsToUpdate.Count, response.ProcessingTimeMs);
 
                     return response;
                 }
@@ -3242,10 +3369,7 @@ namespace Runnatics.Services
         /// Reprocesses specific participants after manual corrections.
         /// Clears their processed data and recalculates from raw readings.
         /// </summary>
-        public async Task<ReprocessParticipantsResponse> ReprocessParticipantsAsync(
-            string eventId,
-            string raceId,
-            string[] participantIds)
+        public async Task<ReprocessParticipantsResponse> ReprocessParticipantsAsync(string eventId, string raceId, string[] participantIds)
         {
             var startTime = DateTime.UtcNow;
             var userId = _userContext.UserId;
@@ -3425,10 +3549,7 @@ namespace Runnatics.Services
         /// <summary>
         /// Reprocesses a single upload batch after configuration changes.
         /// </summary>
-        public async Task<ProcessRFIDImportResponse> ReprocessBatchAsync(
-            string eventId,
-            string raceId,
-            string uploadBatchId)
+        public async Task<ProcessRFIDImportResponse> ReprocessBatchAsync(string eventId, string raceId, string uploadBatchId)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));

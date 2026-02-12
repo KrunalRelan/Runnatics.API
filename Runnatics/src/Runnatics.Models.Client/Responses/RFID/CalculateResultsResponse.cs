@@ -43,6 +43,8 @@ namespace Runnatics.Models.Client.Responses.RFID
         /// Number of unique categories processed
         /// </summary>
         public int CategoriesProcessed { get; set; }
+
+        public int DNSCount { get; set; }
     }
 }
 

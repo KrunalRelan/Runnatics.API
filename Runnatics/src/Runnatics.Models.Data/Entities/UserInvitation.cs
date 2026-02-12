@@ -16,22 +16,22 @@ namespace Runnatics.Models.Data.Entities
         [Required]
         [EmailAddress]
         [StringLength(255)]
-        public string Email { get; set; }
+        public string Email { get; set; } = string.Empty;
 
         [Required]
         [StringLength(50)]
-        public string FirstName { get; set; }
+        public string FirstName { get; set; } = string.Empty;
 
         [Required]
         [StringLength(50)]
-        public string LastName { get; set; }
+        public string LastName { get; set; } = string.Empty;
 
         [Required]
         public UserRole Role { get; set; }
 
         [Required]
         [StringLength(255)]
-        public string Token { get; set; }
+        public string Token { get; set; } = string.Empty;
 
         [Required]
         public int InvitedBy { get; set; }
@@ -50,12 +50,12 @@ namespace Runnatics.Models.Data.Entities
 
         // Navigation properties
         [ForeignKey("TenantId")]
-        public virtual Organization Organization { get; set; }
+        public virtual Organization Organization { get; set; } = null!;
 
         [ForeignKey("InvitedBy")]
-        public virtual User InvitedByUser { get; set; }
+        public virtual User InvitedByUser { get; set; } = null!;
 
         [ForeignKey("AcceptedBy")]
-        public virtual User AcceptedByUser { get; set; }
+        public virtual User? AcceptedByUser { get; set; }
     }
 }

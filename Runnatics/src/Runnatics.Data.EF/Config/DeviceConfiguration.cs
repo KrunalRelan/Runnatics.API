@@ -14,6 +14,10 @@ namespace Runnatics.Data.EF.Config
              .ValueGeneratedOnAdd();
 
             // Properties
+            builder.Property(e => e.DeviceId)
+                .HasMaxLength(100)
+                .IsRequired();
+
             builder.Property(e => e.Name)
                 .HasMaxLength(100)
                 .IsRequired();

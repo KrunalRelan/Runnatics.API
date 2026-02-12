@@ -19,6 +19,6 @@ namespace Runnatics.Repositories.Interface
         void SetTenantId(int TenantId);
         int? GetCurrentTenantId();
 
-        Task<dynamic> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string output = null) where O: class;
+        Task<dynamic> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string? output = null) where O: class;
     }
 }

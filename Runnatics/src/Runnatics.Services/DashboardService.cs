@@ -55,7 +55,7 @@ namespace Runnatics.Services
             {
                 ErrorMessage = $"Error fetching stats: {ex.Message}";
                 _logger.LogError(ex, "Error fetching stats");
-                return null;
+                return null!; // Null return is intentional on error - caller checks HasError
             }
         }
 

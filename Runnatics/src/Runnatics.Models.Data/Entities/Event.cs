@@ -68,7 +68,7 @@ namespace Runnatics.Models.Data.Entities
         public virtual ICollection<ChipAssignment> ChipAssignments { get; set; } = [];
         public virtual ICollection<ReadRaw> ReadRaws { get; set; } = [];
         public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = [];
-        public virtual ICollection<SplitTime> SplitTimes { get; set; } = [];
+        public virtual ICollection<SplitTimes> SplitTimes { get; set; } = [];
         public virtual ICollection<Results> Results { get; set; } = [];
     }
 }

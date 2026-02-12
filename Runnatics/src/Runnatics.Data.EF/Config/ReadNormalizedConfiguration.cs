@@ -46,33 +46,39 @@ namespace Runnatics.Data.EF.Config
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.IsDeleted)
+                    .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
+                    .HasColumnName("CreatedDate")
                     .HasDefaultValueSql("GETUTCDATE()")
                     .IsRequired();
 
                 ap.Property(p => p.CreatedBy)
+                    .HasColumnName("CreatedBy")
                     .IsRequired();
 
-                ap.Property(p => p.UpdatedBy);
+                ap.Property(p => p.UpdatedBy)
+                    .HasColumnName("UpdatedBy");
 
-                ap.Property(p => p.UpdatedDate);
+                ap.Property(p => p.UpdatedDate)
+                    .HasColumnName("UpdatedDate");
 
                 ap.Property(p => p.IsActive)
+                    .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });
 
             // Relationships
             builder.HasOne(e => e.Event)
-                .WithMany()
+                .WithMany(ev => ev.ReadNormalized)
                 .HasForeignKey(e => e.EventId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.Participant)
-                .WithMany()
+                .WithMany(p => p.ReadNormalized)
                 .HasForeignKey(e => e.ParticipantId)
                 .OnDelete(DeleteBehavior.Restrict);
 
@@ -82,7 +88,7 @@ namespace Runnatics.Data.EF.Config
                 .OnDelete(DeleteBehavior.Restrict);
 
             builder.HasOne(e => e.RawRead)
-                .WithMany()
+                .WithMany(rr => rr.ReadNormalized)
                 .HasForeignKey(e => e.RawReadId)
                 .OnDelete(DeleteBehavior.SetNull);
 
@@ -97,28 +103,6 @@ namespace Runnatics.Data.EF.Config
             builder.HasIndex(e => e.GunTime);
 
             builder.HasIndex(e => e.RawReadId);
-            
-            builder.OwnsOne(o => o.AuditProperties, ap =>
-            {
-                ap.Property(p => p.CreatedBy)
-                    .IsRequired();
-
-                ap.Property(p => p.CreatedDate)
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
-
-                ap.Property(p => p.UpdatedBy);
-
-                ap.Property(p => p.UpdatedDate);
-
-                ap.Property(p => p.IsDeleted)
-                    .HasDefaultValue(false)
-                    .IsRequired();
-
-                ap.Property(p => p.IsActive)
-                    .HasDefaultValue(true)
-                    .IsRequired();
-            });
         }
     }
 }

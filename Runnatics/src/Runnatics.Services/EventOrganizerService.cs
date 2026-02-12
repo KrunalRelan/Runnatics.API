@@ -155,7 +155,7 @@ namespace Runnatics.Services
                 }
 
                 // Remove organizer name
-                existingOrgEvent.Name = null;
+                existingOrgEvent.Name = string.Empty;
                 existingOrgEvent.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 existingOrgEvent.AuditProperties.UpdatedBy = userId;
 

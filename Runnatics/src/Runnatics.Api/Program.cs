@@ -20,6 +20,7 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        options.JsonSerializerOptions.PropertyNameCaseInsensitive = true; // Allow camelCase input
     });
 
 // Swagger
@@ -157,6 +158,8 @@ builder.Services.AddScoped<ICheckpointsService, CheckpointService>();
 builder.Services.AddScoped<IDevicesService, DevicesService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<ICertificatesService, CertificatesService>();
+builder.Services.AddScoped<IRFIDImportService, RFIDImportService>();
+builder.Services.AddScoped<IResultsService, ResultsService>();
 
 // Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);

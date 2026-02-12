@@ -80,7 +80,7 @@ namespace Runnatics.Data.EF.Config
                 .OnDelete(DeleteBehavior.Cascade);
 
             builder.HasOne(e => e.Participant)
-                .WithMany()
+                .WithMany(p => p.Notifications)
                 .HasForeignKey(e => e.ParticipantId)
                 .OnDelete(DeleteBehavior.Cascade);
 

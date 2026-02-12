@@ -25,7 +25,7 @@ namespace Runnatics.Data.EF
         public DbSet<ReaderAssignment> ReaderAssignments { get; set; }
         public DbSet<ReadRaw> ReadRaws { get; set; }
         public DbSet<ReadNormalized> ReadNormalizeds { get; set; }
-        public DbSet<SplitTime> SplitTimes { get; set; }
+        public DbSet<SplitTimes> SplitTimes { get; set; }
         public DbSet<Results> Results { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<EventOrganizer> EventOrganizers { get; set; }
@@ -35,6 +35,11 @@ namespace Runnatics.Data.EF
         public DbSet<Device> Devices { get; set; }
         public DbSet<CertificateTemplate> CertificateTemplates { get; set; }
         public DbSet<CertificateField> CertificateFields { get; set; }
+
+        // RFID Entities
+        public DbSet<UploadBatch> UploadBatches { get; set; }
+        public DbSet<RawRFIDReading> RawRFIDReadings { get; set; }
+        public DbSet<ReadingCheckpointAssignment> ReadingCheckpointAssignments { get; set; }
 
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
@@ -67,6 +72,12 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new DeviceConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateTemplateConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateFieldConfiguration());
+            
+            // RFID Configurations
+            modelBuilder.ApplyConfiguration(new UploadBatchConfiguration());
+            modelBuilder.ApplyConfiguration(new RawRFIDReadingConfiguration());
+            modelBuilder.ApplyConfiguration(new ReadingCheckpointAssignmentConfiguration());
+            
             //modelBuilder.DefaultFilters();
 
             // Configure entity relationships and constraints here

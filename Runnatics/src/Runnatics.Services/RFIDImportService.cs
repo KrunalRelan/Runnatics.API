@@ -54,12 +54,9 @@ namespace Runnatics.Services
         /// For start checkpoint: picks LAST reading (runner leaving mat).
         /// For other checkpoints: picks strongest RSSI signal (best timing accuracy).
         /// </summary>
-        private List<RawRFIDReading> DeduplicateReadingsPerPass(
-            List<RawRFIDReading> readings,
-            double dedupWindowSeconds = DEFAULT_DEDUP_WINDOW_SECONDS,
-            bool isStartCheckpoint = false)  // ADD THIS PARAMETER
+        private List<RawRFIDReading> DeduplicateReadingsPerPass(List<RawRFIDReading> readings, double dedupWindowSeconds = DEFAULT_DEDUP_WINDOW_SECONDS, bool isStartCheckpoint = false)  // ADD THIS PARAMETER
         {
-            if (readings.Count <= 1) return new List<RawRFIDReading>(readings);
+            if (readings.Count <= 1) return [.. readings];
 
             var sorted = readings.OrderBy(r => r.TimestampMs).ToList();
             var result = new List<RawRFIDReading>();
@@ -623,8 +620,8 @@ namespace Runnatics.Services
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-            var decryptedRaceId = !string.IsNullOrEmpty(raceId) 
-                ? Convert.ToInt32(_encryptionService.Decrypt(raceId)) 
+            var decryptedRaceId = !string.IsNullOrEmpty(raceId)
+                ? Convert.ToInt32(_encryptionService.Decrypt(raceId))
                 : (int?)null;
 
             var response = new RFIDImportResponse
@@ -637,8 +634,8 @@ namespace Runnatics.Services
             try
             {
                 _logger.LogInformation(
-                    "Starting event-level RFID file upload for Event {EventId}, Race {RaceId}", 
-                    decryptedEventId, 
+                    "Starting event-level RFID file upload for Event {EventId}, Race {RaceId}",
+                    decryptedEventId,
                     decryptedRaceId?.ToString() ?? "ALL (event-level)");
 
                 // Validate file
@@ -770,8 +767,8 @@ namespace Runnatics.Services
                 await _repository.SaveChangesAsync();
 
                 _logger.LogInformation(
-                    "Created event-level UploadBatch {BatchId} (RaceId: {RaceId})", 
-                    batch.Id, 
+                    "Created event-level UploadBatch {BatchId} (RaceId: {RaceId})",
+                    batch.Id,
                     decryptedRaceId?.ToString() ?? "NULL");
 
                 // Parse SQLite file (treat as local time by default since most readers use local)
@@ -821,7 +818,7 @@ namespace Runnatics.Services
                 response.Status = "uploaded";
 
                 _logger.LogInformation(
-                    "Event-level RFID file upload completed. Batch: {BatchId}, Readings: {Count}, UniqueEPCs: {UniqueEPCs}", 
+                    "Event-level RFID file upload completed. Batch: {BatchId}, Readings: {Count}, UniqueEPCs: {UniqueEPCs}",
                     batch.Id, readings.Count, response.UniqueEpcs);
 
                 return response;
@@ -1175,7 +1172,7 @@ namespace Runnatics.Services
                             .Select(a => a.ReadingId)
                             .ToListAsync();
 
-                        existingAssignmentIds = new HashSet<long>(existing);
+                        existingAssignmentIds = [.. existing];
                     }
 
                     // =================================================================
@@ -1291,10 +1288,7 @@ namespace Runnatics.Services
                             // Deduplicate: readings within dedup window = same pass
                             // For START checkpoint: pick LAST reading from filtered start window (runner exiting mat)
                             // For other checkpoints: pick BEST RSSI (optimal timing accuracy)
-                            var deduplicated = DeduplicateReadingsPerPass(
-                                readingsToDedup,
-                                DEFAULT_DEDUP_WINDOW_SECONDS,
-                                isFirstPassStart);  // ? Picks LAST reading for start, BEST RSSI for others
+                            var deduplicated = DeduplicateReadingsPerPass(readingsToDedup, DEFAULT_DEDUP_WINDOW_SECONDS, isFirstPassStart);  // ? Picks LAST reading for start, BEST RSSI for others
                             deduplicatedReadingsByParticipant[kvp.Key] = deduplicated;
 
                             if (kvp.Value.Count != deduplicated.Count)
@@ -3947,8 +3941,21 @@ namespace Runnatics.Services
 
                 if (turnaroundConfig != null)
                 {
-                    turnaroundTimes = assigner.CalculateTurnaroundTimesPerParticipant(
-                        readingInputs, turnaroundConfig.DeviceId);
+                    // FIX #8: Include child devices in turnaround calculation.
+                    // Participants read only by a child device (e.g. Box 24/Device 14)
+                    // and not the parent (Box 19/Device 13) were getting no turnaround time,
+                    // causing their Finish readings to be misclassified as Start.
+                    var turnaroundDeviceIds = new HashSet<int> { turnaroundConfig.DeviceId };
+                    foreach (var cp in checkpoints.Where(c => c.ParentDeviceId == turnaroundConfig.DeviceId))
+                    {
+                        turnaroundDeviceIds.Add(cp.DeviceId);
+                    }
+
+                    _logger.LogInformation(
+                        "FIX #8: Turnaround device IDs (parent + children): [{DeviceIds}]",
+                        string.Join(", ", turnaroundDeviceIds));
+
+                    turnaroundTimes = assigner.CalculateTurnaroundTimesPerParticipant(readingInputs, turnaroundDeviceIds);
 
                     medianTurnaround = assigner.CalculateMedianTurnaround(
                         turnaroundTimes, raceStartTime);

@@ -276,12 +276,10 @@ namespace Runnatics.Services.RFID
         /// <summary>
         /// STEP 3: For each EPC, find the earliest reading on the turnaround device.
         /// </summary>
-        public Dictionary<string, DateTime> CalculateTurnaroundTimesPerParticipant(
-            List<ReadingInput> allReadings,
-            int turnaroundDeviceId)
+        public Dictionary<string, DateTime> CalculateTurnaroundTimesPerParticipant(List<ReadingInput> allReadings, HashSet<int> turnaroundDeviceIds)
         {
             var result = allReadings
-                .Where(r => r.DeviceId == turnaroundDeviceId)
+                .Where(r => turnaroundDeviceIds.Contains(r.DeviceId))
                 .GroupBy(r => r.Epc)
                 .ToDictionary(
                     g => g.Key,

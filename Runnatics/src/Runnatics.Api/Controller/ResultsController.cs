@@ -115,45 +115,32 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Get race leaderboard with filtering and pagination
         /// </summary>
-        [HttpGet("{eventId}/{raceId}/leaderboard")]
+        [HttpPost("leaderboard")]
         [ProducesResponseType(typeof(ResponseBase<LeaderboardResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> GetLeaderboard(
-            string eventId,
-            string raceId,
-            [FromQuery] string rankBy = "overall",
-            [FromQuery] string? gender = null,
-            [FromQuery] string? category = null,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 50,
-            [FromQuery] bool includeSplits = false)
+        public async Task<IActionResult> GetLeaderboard([FromBody] GetLeaderboardRequest request)
         {
-            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            if (string.IsNullOrEmpty(request.EventId) || string.IsNullOrEmpty(request.RaceId))
             {
                 return BadRequest(new { error = "Event ID and Race ID are required." });
             }
 
-            if (page < 1)
+            if (!ModelState.IsValid)
             {
-                return BadRequest(new { error = "Page must be greater than 0." });
-            }
-
-            if (pageSize < 1 || pageSize > 100)
-            {
-                return BadRequest(new { error = "Page size must be between 1 and 100." });
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
             }
 
             var response = new ResponseBase<LeaderboardResponse>();
-            var result = await _service.GetLeaderboardAsync(
-                eventId,
-                raceId,
-                rankBy,
-                gender,
-                category,
-                page,
-                pageSize,
-                includeSplits);
+            var result = await _service.GetLeaderboardAsync(request);
 
             if (_service.HasError)
             {
@@ -161,6 +148,12 @@ namespace Runnatics.Api.Controller
                 {
                     Message = _service.ErrorMessage
                 };
+
+                if (_service.ErrorMessage.Contains("not enabled") || _service.ErrorMessage.Contains("not published"))
+                {
+                    return StatusCode((int)HttpStatusCode.Forbidden, response);
+                }
+
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 

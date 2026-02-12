@@ -18,22 +18,14 @@ namespace Runnatics.Services.Interface
         /// <summary>
         /// Gets leaderboard with filtering and pagination
         /// </summary>
-        Task<LeaderboardResponse> GetLeaderboardAsync(
-            string eventId, 
-            string raceId, 
-            string rankBy = "overall",
-            string? gender = null,
-            string? category = null,
-            int page = 1,
-            int pageSize = 50,
-            bool includeSplits = false);
+        Task<LeaderboardResponse> GetLeaderboardAsync(GetLeaderboardRequest request);
 
         /// <summary>
         /// Gets detailed results for a specific participant
         /// </summary>
         Task<ParticipantResultResponse?> GetParticipantResultAsync(
-            string eventId, 
-            string raceId, 
+            string eventId,
+            string raceId,
             string participantId);
     }
 }

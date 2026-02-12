@@ -284,7 +284,6 @@ namespace Runnatics.Services
         {
             try
             {
-
                 var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
                 var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
 
@@ -303,37 +302,102 @@ namespace Runnatics.Services
                 );
 
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-                var baseExpression = BuildSearchExpression(request, decryptedEventId, decryptedRaceId);
+                var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
 
-                // If a free-text search string is provided, extend the expression to include ORed fields
-                if (!string.IsNullOrWhiteSpace(request.SearchString))
+                // Build base participant query with filters
+                var participantQuery = participantRepo.GetQuery(p =>
+                    p.EventId == decryptedEventId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted);
+
+                // Apply status filter if provided
+                if (request.Status.HasValue)
                 {
-                    baseExpression = CombineExpressionWithSearch(baseExpression, request.SearchString.Trim());
+                    var statusString = request.Status.Value.ToString();
+                    participantQuery = participantQuery.Where(p => p.Status == statusString);
                 }
 
-                var mappedSortField = GetMappedSortField(request.SortFieldName);
+                // Apply gender filter if provided
+                if (request.Gender.HasValue)
+                {
+                    var genderString = request.Gender.Value.ToString();
+                    participantQuery = participantQuery.Where(p => p.Gender == genderString);
+                }
 
-                var response = await participantRepo.SearchAsync(
-                    baseExpression,
-                    pageSize,              // Use validated pageSize
-                    pageNumber,            // Use validated pageNumber
-                    request.SortDirection == SortDirection.Ascending
-                        ? Models.Data.Common.SortDirection.Ascending
-                        : Models.Data.Common.SortDirection.Descending,
-                    mappedSortField,
-                    false,
-                    false
-                );
+                // Apply category filter if provided
+                if (!string.IsNullOrEmpty(request.Category))
+                {
+                    participantQuery = participantQuery.Where(p => p.AgeCategory == request.Category);
+                }
+
+                // Apply free-text search if provided
+                if (!string.IsNullOrWhiteSpace(request.SearchString))
+                {
+                    var search = request.SearchString.Trim();
+                    participantQuery = participantQuery.Where(p =>
+                        (p.BibNumber != null && p.BibNumber.Contains(search)) ||
+                        (p.FirstName != null && p.FirstName.Contains(search)) ||
+                        (p.LastName != null && p.LastName.Contains(search)) ||
+                        (p.Email != null && p.Email.Contains(search)) ||
+                        (p.Phone != null && p.Phone.Contains(search)) ||
+                        (p.AgeCategory != null && p.AgeCategory.Contains(search))
+                    );
+                }
+
+                // Left join with Results to get rank-based sorting
+                var resultsQuery = resultsRepo.GetQuery(r =>
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId);
+
+                var joinedQuery = participantQuery
+                    .GroupJoin(
+                        resultsQuery,
+                        p => p.Id,
+                        r => r.ParticipantId,
+                        (p, results) => new { Participant = p, Results = results })
+                    .SelectMany(
+                        x => x.Results.DefaultIfEmpty(),
+                        (x, r) => new
+                        {
+                            x.Participant,
+                            Status = r != null ? r.Status : null,
+                            OverallRank = r != null ? r.OverallRank : (int?)null,
+                            // Sort priority: Finished=0, DNF=1, DNS=2, No result=3
+                            StatusOrder = r == null ? 3 :
+                                r.Status == "Finished" ? 0 :
+                                r.Status == "DNF" ? 1 :
+                                r.Status == "DNS" ? 2 : 3
+                        });
+
+                // Apply sorting: Status priority first, then by OverallRank within Finished, then by Bib for others
+                var orderedQuery = joinedQuery
+                    .OrderBy(x => x.StatusOrder)
+                    .ThenBy(x => x.OverallRank ?? int.MaxValue)
+                    .ThenBy(x => x.Participant.BibNumber);
+
+                // Get total count for pagination
+                var totalCount = await participantQuery.CountAsync();
+
+                // Apply pagination
+                var pagedResults = await orderedQuery
+                    .Skip((pageNumber - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(x => x.Participant)
+                    .AsNoTracking()
+                    .ToListAsync();
 
                 _logger.LogInformation(
-                    "Found {TotalCount} participants, returning page {PageNumber} with items",
-                    response.TotalCount,
-                    pageNumber);
+                    "Found {TotalCount} participants, returning page {PageNumber} with {PageItems} items",
+                    totalCount,
+                    pageNumber,
+                    pagedResults.Count);
 
-                var toReturn = _mapper.Map<PagingList<ParticipantSearchReponse>>(response);
-
-                // Ensure TotalCount is preserved
-                toReturn.TotalCount = response.TotalCount;
+                // Map to response
+                var toReturn = new PagingList<ParticipantSearchReponse>();
+                var mappedItems = _mapper.Map<List<ParticipantSearchReponse>>(pagedResults);
+                toReturn.AddRange(mappedItems);
+                toReturn.TotalCount = totalCount;
 
                 // Fetch checkpoint times for the participants in this page
                 if (toReturn.Count > 0)

@@ -10,6 +10,7 @@ using Runnatics.Models.Client.Responses.Checkpoints;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Races;
+using Runnatics.Models.Client.Responses.Results;
 using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
@@ -469,6 +470,48 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Rank, opt => opt.Ignore()); // Calculated in service
 
             #endregion Race Results API Mappings
+
+            #region Leaderboard Mappings
+
+            CreateMap<Results, LeaderboardEntry>()
+                .ForMember(dest => dest.Rank, opt => opt.Ignore()) // Set in service based on RankBy
+                .ForMember(dest => dest.ParticipantId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.ParticipantId))
+                .ForMember(dest => dest.Bib, opt => opt.MapFrom(src => src.Participant.BibNumber ?? string.Empty))
+                .ForMember(dest => dest.FirstName, opt => opt.MapFrom(src => src.Participant.FirstName ?? string.Empty))
+                .ForMember(dest => dest.LastName, opt => opt.MapFrom(src => src.Participant.LastName ?? string.Empty))
+                .ForMember(dest => dest.Gender, opt => opt.MapFrom(src => src.Participant.Gender ?? string.Empty))
+                .ForMember(dest => dest.Category, opt => opt.MapFrom(src => src.Participant.AgeCategory))
+                .ForMember(dest => dest.Age, opt => opt.MapFrom(src => src.Participant.Age))
+                .ForMember(dest => dest.City, opt => opt.MapFrom(src => src.Participant.City ?? string.Empty))
+                .ForMember(dest => dest.FinishTimeMs, opt => opt.MapFrom(src => src.FinishTime))
+                .ForMember(dest => dest.GunTimeMs, opt => opt.MapFrom(src => src.GunTime))
+                .ForMember(dest => dest.NetTimeMs, opt => opt.MapFrom(src => src.NetTime))
+                .ForMember(dest => dest.FinishTime, opt => opt.Ignore()) // Formatted in service
+                .ForMember(dest => dest.GunTime, opt => opt.Ignore()) // Formatted in service
+                .ForMember(dest => dest.NetTime, opt => opt.Ignore()) // Formatted in service
+                .ForMember(dest => dest.OverallRank, opt => opt.MapFrom(src => src.OverallRank))
+                .ForMember(dest => dest.GenderRank, opt => opt.MapFrom(src => src.GenderRank))
+                .ForMember(dest => dest.CategoryRank, opt => opt.MapFrom(src => src.CategoryRank))
+                .ForMember(dest => dest.Status, opt => opt.MapFrom(src => src.Status))
+                .ForMember(dest => dest.AveragePace, opt => opt.Ignore()) // Calculated in service
+                .ForMember(dest => dest.AveragePaceFormatted, opt => opt.Ignore()) // Calculated in service
+                .ForMember(dest => dest.Splits, opt => opt.Ignore()); // Loaded separately in service
+
+            CreateMap<SplitTimes, SplitTimeInfo>()
+                .ForMember(dest => dest.CheckpointId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.CheckpointId))
+                .ForMember(dest => dest.CheckpointName, opt => opt.MapFrom(src => src.Checkpoint.Name ?? $"CP{src.Checkpoint.DistanceFromStart}km"))
+                .ForMember(dest => dest.DistanceKm, opt => opt.MapFrom(src => src.Checkpoint.DistanceFromStart))
+                .ForMember(dest => dest.SplitTimeMs, opt => opt.MapFrom(src => src.SplitTimeMs ?? 0))
+                .ForMember(dest => dest.SegmentTimeMs, opt => opt.MapFrom(src => src.SegmentTime))
+                .ForMember(dest => dest.SplitTime, opt => opt.Ignore()) // Formatted in service
+                .ForMember(dest => dest.SegmentTime, opt => opt.Ignore()) // Formatted in service
+                .ForMember(dest => dest.Pace, opt => opt.MapFrom(src => src.Pace))
+                .ForMember(dest => dest.PaceFormatted, opt => opt.Ignore()) // Formatted in service
+                .ForMember(dest => dest.Rank, opt => opt.MapFrom(src => src.Rank))
+                .ForMember(dest => dest.GenderRank, opt => opt.MapFrom(src => src.GenderRank))
+                .ForMember(dest => dest.CategoryRank, opt => opt.MapFrom(src => src.CategoryRank));
+
+            #endregion Leaderboard Mappings
         }
     }
 }

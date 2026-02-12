@@ -442,101 +442,212 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<LeaderboardResponse> GetLeaderboardAsync(
-            string eventId,
-            string raceId,
-            string rankBy = "overall",
-            string? gender = null,
-            string? category = null,
-            int page = 1,
-            int pageSize = 50,
-            bool includeSplits = false)
+        public async Task<LeaderboardResponse> GetLeaderboardAsync(GetLeaderboardRequest request)
         {
-            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(request.EventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(request.RaceId));
 
             try
             {
+                // Load settings
+                var eventSettingsRepo = _repository.GetRepository<EventSettings>();
+                var eventSettings = await eventSettingsRepo.GetQuery(es =>
+                    es.EventId == decryptedEventId &&
+                    es.AuditProperties.IsActive &&
+                    !es.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                var raceSettingsRepo = _repository.GetRepository<RaceSettings>();
+                var raceSettings = await raceSettingsRepo.GetQuery(rs =>
+                    rs.RaceId == decryptedRaceId &&
+                    rs.AuditProperties.IsActive &&
+                    !rs.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                var leaderboardSettingsRepo = _repository.GetRepository<LeaderboardSettings>();
+
+                // Check race-level override first, fall back to event-level
+                var leaderboardSettings = await leaderboardSettingsRepo.GetQuery(ls =>
+                    ls.RaceId == decryptedRaceId &&
+                    ls.OverrideSettings == true &&
+                    ls.AuditProperties.IsActive &&
+                    !ls.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                leaderboardSettings ??= await leaderboardSettingsRepo.GetQuery(ls =>
+                    ls.EventId == decryptedEventId &&
+                    ls.RaceId == null &&
+                    ls.AuditProperties.IsActive &&
+                    !ls.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                // Check if leaderboard is allowed
+                if (raceSettings != null && !raceSettings.ShowLeaderboard)
+                {
+                    ErrorMessage = "Leaderboard is not enabled for this race";
+                    return new LeaderboardResponse();
+                }
+
+                if (eventSettings != null && !eventSettings.Published)
+                {
+                    ErrorMessage = "Event results are not published yet";
+                    return new LeaderboardResponse();
+                }
+
+                // Validate requested RankBy against allowed views
+                var rankBy = request.RankBy.ToLower();
+                var showGender = leaderboardSettings?.ShowGenderResults ?? false;
+                var showCategory = leaderboardSettings?.ShowCategoryResults ?? false;
+
+                if (rankBy == "gender" && !showGender)
+                {
+                    rankBy = "overall";
+                }
+                else if (rankBy == "category" && !showCategory)
+                {
+                    rankBy = "overall";
+                }
+
+                // Build display settings from the loaded configurations
+                var displaySettings = BuildDisplaySettings(eventSettings, raceSettings, leaderboardSettings, rankBy);
+
                 var resultsRepo = _repository.GetRepository<Results>();
-                IQueryable<Results> query = resultsRepo.GetQuery(r =>
-                    r.EventId == decryptedEventId &&
-                    r.RaceId == decryptedRaceId &&
-                    r.Status == "Finished" &&
-                    r.AuditProperties.IsActive &&
-                    !r.AuditProperties.IsDeleted)
-                    .Include(r => r.Participant);
+
+                // Filter by status based on PublishDnf setting
+                IQueryable<Results> query;
+                if (displaySettings.ShowDnf)
+                {
+                    query = resultsRepo.GetQuery(r =>
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .Include(r => r.Participant);
+                }
+                else
+                {
+                    query = resultsRepo.GetQuery(r =>
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == "Finished" &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .Include(r => r.Participant);
+                }
 
                 // Apply filters
-                if (!string.IsNullOrEmpty(gender))
+                if (!string.IsNullOrEmpty(request.Gender))
                 {
-                    query = query.Where(r => r.Participant.Gender == gender);
+                    query = query.Where(r => r.Participant.Gender == request.Gender);
                 }
 
-                if (!string.IsNullOrEmpty(category))
+                if (!string.IsNullOrEmpty(request.Category))
                 {
-                    query = query.Where(r => r.Participant.AgeCategory == category);
+                    query = query.Where(r => r.Participant.AgeCategory == request.Category);
                 }
 
-                // Order by rank type
-                query = rankBy.ToLower() switch
+                // Determine sort field based on settings
+                var useNetTime = displaySettings.RankOnNet;
+                query = rankBy switch
                 {
-                    "gender" => query.OrderBy(r => r.GenderRank),
-                    "category" => query.OrderBy(r => r.CategoryRank),
-                    _ => query.OrderBy(r => r.OverallRank)
+                    "gender" => query
+                        .OrderBy(r => r.Participant.Gender)
+                        .ThenBy(r => r.GenderRank),
+                    "category" => query
+                        .OrderBy(r => r.Participant.AgeCategory)
+                        .ThenBy(r => r.CategoryRank),
+                    _ => useNetTime
+                        ? query.OrderBy(r => r.NetTime)
+                        : query.OrderBy(r => r.OverallRank)
                 };
 
                 var totalCount = await query.CountAsync();
-                var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
 
-                var results = await query
-                    .Skip((page - 1) * pageSize)
-                    .Take(pageSize)
-                    .ToListAsync();
+                // Apply per-view result limits from leaderboard settings
+                int maxResults;
+                if (rankBy == "category" && leaderboardSettings?.NumberOfResultsToShowCategory > 0)
+                {
+                    maxResults = leaderboardSettings.NumberOfResultsToShowCategory.Value;
+                }
+                else if (leaderboardSettings?.NumberOfResultsToShowOverall > 0)
+                {
+                    maxResults = leaderboardSettings.NumberOfResultsToShowOverall.Value;
+                }
+                else
+                {
+                    maxResults = totalCount;
+                }
+
+                // Cap total count to the configured limit
+                var effectiveTotalCount = Math.Min(totalCount, maxResults);
+
+                // Apply max displayed records limit to page size
+                var effectivePageSize = request.PageSize;
+                if (leaderboardSettings?.MaxDisplayedRecords > 0)
+                {
+                    effectivePageSize = Math.Min(effectivePageSize, leaderboardSettings.MaxDisplayedRecords.Value);
+                }
+
+                var totalPages = (int)Math.Ceiling(effectiveTotalCount / (double)effectivePageSize);
+
+                // Ensure requested page doesn't exceed capped total
+                var skip = (request.PageNumber - 1) * effectivePageSize;
+                var take = Math.Min(effectivePageSize, Math.Max(0, effectiveTotalCount - skip));
+
+                var results = take > 0
+                    ? await query.Skip(skip).Take(take).ToListAsync()
+                    : new List<Results>();
 
                 var leaderboardEntries = new List<LeaderboardEntry>();
 
+                // Fetch race once for pace calculation
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId).FirstOrDefaultAsync();
+
                 foreach (var result in results)
                 {
-                    var entry = new LeaderboardEntry
+                    var entry = _mapper.Map<LeaderboardEntry>(result);
+
+                    entry.Rank = rankBy switch
                     {
-                        Rank = rankBy.ToLower() switch
-                        {
-                            "gender" => result.GenderRank ?? 0,
-                            "category" => result.CategoryRank ?? 0,
-                            _ => result.OverallRank ?? 0
-                        },
-                        ParticipantId = _encryptionService.Encrypt(result.ParticipantId.ToString()),
-                        Bib = result.Participant.BibNumber ?? string.Empty,
-                        FirstName = result.Participant.FirstName ?? string.Empty,
-                        LastName = result.Participant.LastName ?? string.Empty,
-                        Gender = result.Participant.Gender ?? string.Empty,
-                        Category = result.Participant.AgeCategory,
-                        Age = result.Participant.Age,
-                        City = result.Participant.City ?? string.Empty,
-                        FinishTimeMs = result.FinishTime,
-                        GunTimeMs = result.GunTime,
-                        NetTimeMs = result.NetTime,
-                        FinishTime = result.FinishTime.HasValue ? FormatTime(result.FinishTime.Value) : null,
-                        GunTime = result.GunTime.HasValue ? FormatTime(result.GunTime.Value) : null,
-                        NetTime = result.NetTime.HasValue ? FormatTime(result.NetTime.Value) : null,
-                        OverallRank = result.OverallRank,
-                        GenderRank = result.GenderRank,
-                        CategoryRank = result.CategoryRank,
-                        Status = result.Status
+                        "gender" => result.GenderRank ?? 0,
+                        "category" => result.CategoryRank ?? 0,
+                        _ => result.OverallRank ?? 0
                     };
 
-                    // Calculate average pace if we have finish time and race distance
-                    var raceRepo = _repository.GetRepository<Race>();
-                    var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId).FirstOrDefaultAsync();
-                    if (race != null && result.FinishTime.HasValue && race.Distance > 0)
+                    // Format times based on sort field setting
+                    if (displaySettings.SortTimeField == "NetTime")
+                    {
+                        if (result.NetTime.HasValue) entry.NetTime = FormatTime(result.NetTime.Value);
+                        if (result.GunTime.HasValue) entry.GunTime = FormatTime(result.GunTime.Value);
+                    }
+                    else
+                    {
+                        if (result.GunTime.HasValue) entry.GunTime = FormatTime(result.GunTime.Value);
+                        if (result.NetTime.HasValue) entry.NetTime = FormatTime(result.NetTime.Value);
+                    }
+                    if (result.FinishTime.HasValue) entry.FinishTime = FormatTime(result.FinishTime.Value);
+
+                    // Calculate average pace if enabled in settings and we have the data
+                    if (displaySettings.ShowPace && race != null && result.FinishTime.HasValue && race.Distance > 0)
                     {
                         var timeInMinutes = result.FinishTime.Value / 60000.0m;
                         entry.AveragePace = timeInMinutes / race.Distance;
                         entry.AveragePaceFormatted = FormatPace(entry.AveragePace.Value);
                     }
 
-                    // Include splits if requested
-                    if (includeSplits)
+                    // Strip rankings the admin has disabled
+                    if (!displaySettings.ShowGenderResults)
+                    {
+                        entry.GenderRank = null;
+                    }
+                    if (!displaySettings.ShowCategoryResults)
+                    {
+                        entry.CategoryRank = null;
+                    }
+
+                    // Include splits if requested and enabled in settings
+                    if (request.IncludeSplits && displaySettings.ShowSplitTimes)
                     {
                         entry.Splits = await GetParticipantSplitsAsync(result.ParticipantId, decryptedEventId);
                     }
@@ -546,14 +657,15 @@ namespace Runnatics.Services
 
                 return new LeaderboardResponse
                 {
-                    TotalCount = totalCount,
-                    Page = page,
-                    PageSize = pageSize,
+                    TotalCount = effectiveTotalCount,
+                    Page = request.PageNumber,
+                    PageSize = effectivePageSize,
                     TotalPages = totalPages,
                     RankBy = rankBy,
-                    Gender = gender,
-                    Category = category,
-                    Results = leaderboardEntries
+                    Gender = request.Gender,
+                    Category = request.Category,
+                    Results = leaderboardEntries,
+                    DisplaySettings = displaySettings
                 };
             }
             catch (Exception ex)
@@ -661,6 +773,57 @@ namespace Runnatics.Services
 
         #region Private Helper Methods
 
+        private static LeaderboardDisplaySettings BuildDisplaySettings(
+            EventSettings? eventSettings,
+            RaceSettings? raceSettings,
+            LeaderboardSettings? leaderboardSettings,
+            string rankBy)
+        {
+            var display = new LeaderboardDisplaySettings();
+
+            // Event-level settings
+            if (eventSettings != null)
+            {
+                display.RankOnNet = eventSettings.RankOnNet;
+            }
+
+            // Race-level settings
+            if (raceSettings != null)
+            {
+                display.ShowDnf = raceSettings.PublishDnf;
+            }
+
+            // Leaderboard-level settings
+            if (leaderboardSettings != null)
+            {
+                display.ShowOverallResults = leaderboardSettings.ShowOverallResults ?? true;
+                display.ShowCategoryResults = leaderboardSettings.ShowCategoryResults ?? false;
+                display.ShowGenderResults = leaderboardSettings.ShowGenderResults ?? false;
+                display.ShowAgeGroupResults = leaderboardSettings.ShowAgeGroupResults ?? false;
+                display.ShowSplitTimes = leaderboardSettings.ShowSplitTimes ?? false;
+                display.ShowPace = leaderboardSettings.ShowPace ?? false;
+                display.ShowMedalIcon = leaderboardSettings.ShowMedalIcon ?? false;
+                display.MaxResultsOverall = leaderboardSettings.NumberOfResultsToShowOverall;
+                display.MaxResultsCategory = leaderboardSettings.NumberOfResultsToShowCategory;
+                display.MaxDisplayedRecords = leaderboardSettings.MaxDisplayedRecords;
+
+                // Determine sort time field based on current view
+                display.SortTimeField = rankBy switch
+                {
+                    "category" => leaderboardSettings.SortByCategoryChipTime == true ? "NetTime" : "GunTime",
+                    _ => leaderboardSettings.SortByOverallChipTime == true ? "NetTime" : "GunTime"
+                };
+            }
+
+            // RankOnNet from event settings overrides sort field
+            if (display.RankOnNet)
+            {
+                display.SortTimeField = "NetTime";
+            }
+
+            return display;
+        }
+
         private async Task<List<SplitTimeInfo>> GetParticipantSplitsAsync(int participantId, int eventId)
         {
             var splitTimeRepo = _repository.GetRepository<SplitTimes>();
@@ -673,21 +836,17 @@ namespace Runnatics.Services
                 .OrderBy(st => st.Checkpoint.DistanceFromStart)
                 .ToListAsync();
 
-            return splits.Select(s => new SplitTimeInfo
+            var splitInfos = _mapper.Map<List<SplitTimeInfo>>(splits);
+
+            // Format times and pace
+            for (int i = 0; i < splits.Count; i++)
             {
-                CheckpointId = _encryptionService.Encrypt(s.CheckpointId.ToString()),
-                CheckpointName = s.Checkpoint.Name ?? $"CP{s.Checkpoint.DistanceFromStart}km",
-                DistanceKm = s.Checkpoint.DistanceFromStart,
-                SplitTimeMs = s.SplitTimeMs ?? 0,
-                SegmentTimeMs = s.SegmentTime,
-                SplitTime = FormatTime(s.SplitTimeMs ?? 0),
-                SegmentTime = s.SegmentTime.HasValue ? FormatTime(s.SegmentTime.Value) : null,
-                Pace = s.Pace,
-                PaceFormatted = s.Pace.HasValue ? FormatPace(s.Pace.Value) : null,
-                Rank = s.Rank,
-                GenderRank = s.GenderRank,
-                CategoryRank = s.CategoryRank
-            }).ToList();
+                splitInfos[i].SplitTime = FormatTime(splits[i].SplitTimeMs ?? 0);
+                splitInfos[i].SegmentTime = splits[i].SegmentTime.HasValue ? FormatTime(splits[i].SegmentTime.Value) : null;
+                splitInfos[i].PaceFormatted = splits[i].Pace.HasValue ? FormatPace(splits[i].Pace.Value) : null;
+            }
+
+            return splitInfos;
         }
 
         private async Task CalculateSplitTimeRankingsAsync(int eventId, int raceId, int userId)

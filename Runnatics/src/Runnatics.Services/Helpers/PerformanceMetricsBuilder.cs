@@ -12,7 +12,7 @@ namespace Runnatics.Services.Helpers
     {
         private readonly IEncryptionService _encryptionService = encryptionService;
 
-        public void BuildSplitTimesAndPerformance(ParticipantDetailsResponse response, List<SplitTime> splitTimes)
+        public void BuildSplitTimesAndPerformance(ParticipantDetailsResponse response, List<SplitTimes> splitTimes)
         {
             response.SplitTimes = [];
             response.PaceProgression = [];
@@ -43,7 +43,7 @@ namespace Runnatics.Services.Helpers
         }
 
         private (SplitTimeInfo splitInfo, PaceProgressionInfo progressionInfo, decimal? pace, decimal? speed) ProcessSplitTime(
-            SplitTime st,
+            SplitTimes st,
             PerformanceMetrics metrics,
             ref long cumulativeTimeMs)
         {
@@ -52,7 +52,7 @@ namespace Runnatics.Services.Helpers
             var segmentDistanceKm = distanceKm - metrics.TotalDistance;
             metrics.TotalDistance = distanceKm;
 
-            var segmentTimeMs = st.SplitTimeMs;
+            var segmentTimeMs = st.SplitTimeMs ?? 0;
             cumulativeTimeMs += segmentTimeMs;
 
             var (calculatedPace, speed) = CalculatePaceAndSpeed(segmentDistanceKm, segmentTimeMs);

@@ -497,7 +497,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.AveragePaceFormatted, opt => opt.Ignore()) // Calculated in service
                 .ForMember(dest => dest.Splits, opt => opt.Ignore()); // Loaded separately in service
 
-            CreateMap<SplitTimes, SplitTimeInfo>()
+            CreateMap<SplitTimes, Runnatics.Models.Client.Responses.Results.SplitTimeInfo>()
                 .ForMember(dest => dest.CheckpointId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.CheckpointId))
                 .ForMember(dest => dest.CheckpointName, opt => opt.MapFrom(src => src.Checkpoint.Name ?? $"CP{src.Checkpoint.DistanceFromStart}km"))
                 .ForMember(dest => dest.DistanceKm, opt => opt.MapFrom(src => src.Checkpoint.DistanceFromStart))

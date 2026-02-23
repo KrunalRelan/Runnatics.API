@@ -1636,7 +1636,7 @@ namespace Runnatics.Services
                 }
 
                 // Get split times with checkpoint info
-                var splitTimeRepo = _repository.GetRepository<SplitTime>();
+                var splitTimeRepo = _repository.GetRepository<SplitTimes>();
                 var splitTimes = await splitTimeRepo.GetQuery(st =>
                     st.ParticipantId == decryptedParticipantId &&
                     !st.AuditProperties.IsDeleted)

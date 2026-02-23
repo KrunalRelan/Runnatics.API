@@ -19,7 +19,7 @@ namespace Runnatics.Services.Helpers
 
         public ParticipantDetailsResponse BuildResponse(
             Models.Data.Entities.Participant participant,
-            List<SplitTime> splitTimes,
+            List<SplitTimes> splitTimes,
             int totalParticipantsInRace,
             int totalInGender,
             int totalInCategory)

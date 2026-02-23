@@ -24,7 +24,7 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.ToCheckpointId)
                 .IsRequired();
 
-            builder.Property(e => e.SplitTimeValue)
+            builder.Property(e => e.SplitTime)
                 .HasColumnName("SplitTime")
                 .HasColumnType("time")
                 .IsRequired();
@@ -35,9 +35,6 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.AveragePace)
                 .HasColumnType("decimal(10,3)");
 
-            // Ignore computed property
-            builder.Ignore(e => e.SplitTimeMs);
-
             builder.Property(e => e.GenderRank);
 
             builder.Property(e => e.CategoryRank);
@@ -47,16 +44,14 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.SegmentTime);  // Nullable
 
-            // REQUIRED: Segment definition columns
-            builder.Property(e => e.FromCheckpointId)
-                .IsRequired();
+            builder.Property(e => e.Pace);
 
-            builder.Property(e => e.ToCheckpointId)
-                .IsRequired();
+            builder.Property(e => e.Rank);
 
             builder.Property(e => e.CheckpointId);  // Nullable (optional, usually same as ToCheckpointId)
 
             builder.Property(e => e.ReadNormalizedId);
+
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {

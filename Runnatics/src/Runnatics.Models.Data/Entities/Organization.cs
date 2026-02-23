@@ -12,16 +12,16 @@ namespace Runnatics.Models.Data.Entities
 
         [Required]
         [StringLength(100)]
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
 
         [Required]
         [StringLength(30)]
-        public string Domain { get; set; }
+        public string Domain { get; set; } = string.Empty;
 
         [Required]
         [EmailAddress]
         [StringLength(255)]
-        public string Email { get; set; }
+        public string Email { get; set; } = string.Empty;
 
         [Phone]
         [StringLength(20)]

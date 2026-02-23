@@ -1,5 +1,6 @@
 namespace Runnatics.Repositories.EF
 {
+    using EFCore.BulkExtensions;
     using Microsoft.Data.SqlClient;
     using Microsoft.EntityFrameworkCore;
     using Runnatics.Models.Data.Common;
@@ -43,12 +44,15 @@ namespace Runnatics.Repositories.EF
 
         public async Task DeleteRangeAsync(List<int> ids)
         {
-            var keyProperty = context.Model.FindEntityType(typeof(T))?.FindPrimaryKey()?.Properties.FirstOrDefault();
-            if (keyProperty == null)
-                throw new InvalidOperationException("No primary key defined for entity.");
+            // Use EF.Property to avoid reflection in LINQ queries
+            var entities = await _dbSet.Where(e => ids.Contains(EF.Property<int>(e, "Id"))).ToListAsync();
+            _dbSet.RemoveRange(entities);
+        }
 
-            var entities = await _dbSet.Where(e =>
-                ids.Contains((int)typeof(T).GetProperty(keyProperty.Name)!.GetValue(e)!)).ToListAsync();
+        public async Task DeleteRangeAsync(List<long> ids)
+        {
+            // Overload for entities with long IDs (like RawRFIDReading)
+            var entities = await _dbSet.Where(e => ids.Contains(EF.Property<long>(e, "Id"))).ToListAsync();
             _dbSet.RemoveRange(entities);
         }
 
@@ -203,9 +207,12 @@ namespace Runnatics.Repositories.EF
             }
 
             // Use SqlQueryRaw for non-entity types
+            // Suppressing EF1002: procedureName is an internal parameter, not user input
+#pragma warning disable EF1002
             var query = await context.Database
                 .SqlQueryRaw<T>($"exec {procedureName} {stringOfParameters}", parameters.ToArray())
                 .ToListAsync();
+#pragma warning restore EF1002
 
             toReturn.AddRange(query);
 
@@ -343,6 +350,50 @@ namespace Runnatics.Repositories.EF
             }
 
             return await query.CountAsync();
+        }
+
+        /// <summary>
+        /// Bulk insert entities using high-performance bulk operations (10-50x faster than AddRangeAsync)
+        /// </summary>
+        public async Task BulkInsertAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkInsertAsync(entities, bulkConfig);
+        }
+
+        /// <summary>
+        /// Bulk update entities using high-performance bulk operations (10-50x faster than UpdateRangeAsync)
+        /// </summary>
+        public async Task BulkUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkUpdateAsync(entities, bulkConfig);
+        }
+
+        /// <summary>
+        /// Bulk delete entities using high-performance bulk operations
+        /// </summary>
+        public async Task BulkDeleteAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkDeleteAsync(entities, bulkConfig);
+        }
+
+        /// <summary>
+        /// Bulk insert or update entities (upsert operation)
+        /// </summary>
+        public async Task BulkInsertOrUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null)
+        {
+            if (entities == null || entities.Count == 0)
+                return;
+
+            await context.BulkInsertOrUpdateAsync(entities, bulkConfig);
         }
     }
 }

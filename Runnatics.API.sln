@@ -1,6 +1,6 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.5.2.0
+# Visual Studio Version 18
+VisualStudioVersion = 18.3.11222.16
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Runnatics", "Runnatics", "{EDFBD9FB-DD77-F29A-0726-90DAF38F0A17}"
 EndProject
@@ -35,6 +35,17 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Data.EF", "Runnatics\src\Runnatics.Data.EF\Runnatics.Data.EF.csproj", "{6495F1D3-D70E-D2E9-AEBF-397E9C7B36BF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runnatics.Models.Client", "Runnatics\src\Runnatics.Models.Client\Runnatics.Models.Client.csproj", "{1BD21478-F065-F566-839F-E0F029658521}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Docs", "Docs", "{5A74516F-2894-430D-99C4-070981F7BDB3}"
+	ProjectSection(SolutionItems) = preProject
+		..\..\Users\MANPREET\Downloads\files (2)\01_FixRaceStartTime.sql = ..\..\Users\MANPREET\Downloads\files (2)\01_FixRaceStartTime.sql
+		..\..\Users\MANPREET\Downloads\files (2)\02_RFIDImportService_Fixed.cs = ..\..\Users\MANPREET\Downloads\files (2)\02_RFIDImportService_Fixed.cs
+		..\..\Users\MANPREET\Downloads\files (2)\03_LoopRaceCheckpointAssigner.cs = ..\..\Users\MANPREET\Downloads\files (2)\03_LoopRaceCheckpointAssigner.cs
+		..\..\Users\MANPREET\Downloads\files (2)\04_RaceResultService.cs = ..\..\Users\MANPREET\Downloads\files (2)\04_RaceResultService.cs
+		..\..\Users\MANPREET\Downloads\files (2)\05_EntityModels.cs = ..\..\Users\MANPREET\Downloads\files (2)\05_EntityModels.cs
+		..\..\Users\MANPREET\Downloads\files (2)\06_RFIDController.cs = ..\..\Users\MANPREET\Downloads\files (2)\06_RFIDController.cs
+		..\..\Users\MANPREET\Downloads\files (2)\README.md = ..\..\Users\MANPREET\Downloads\files (2)\README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -119,6 +130,7 @@ Global
 		{C040C31E-442F-2EFD-A463-D70626DC2B00} = {DA5E7B19-D95F-740A-4FE3-433B86A9D9CB}
 		{6495F1D3-D70E-D2E9-AEBF-397E9C7B36BF} = {DA5E7B19-D95F-740A-4FE3-433B86A9D9CB}
 		{1BD21478-F065-F566-839F-E0F029658521} = {DA5E7B19-D95F-740A-4FE3-433B86A9D9CB}
+		{5A74516F-2894-430D-99C4-070981F7BDB3} = {DA5E7B19-D95F-740A-4FE3-433B86A9D9CB}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {594ED57D-2FFB-4DE8-ABFB-E9225B7473E4}

@@ -4,9 +4,9 @@ namespace Runnatics.Data.EF.Config
     using Microsoft.EntityFrameworkCore.Metadata.Builders;
     using Runnatics.Models.Data.Entities;
 
-    public class SplitTimeConfiguration : IEntityTypeConfiguration<SplitTime>
+    public class SplitTimeConfiguration : IEntityTypeConfiguration<SplitTimes>
     {
-        public virtual void Configure(EntityTypeBuilder<SplitTime> builder)
+        public virtual void Configure(EntityTypeBuilder<SplitTimes> builder)
         {
             builder.ToTable("SplitTimes");
 
@@ -38,37 +38,60 @@ namespace Runnatics.Data.EF.Config
             // Ignore computed property
             builder.Ignore(e => e.SplitTimeMs);
 
+            builder.Property(e => e.GenderRank);
+
+            builder.Property(e => e.CategoryRank);
+
+            // Time measurements in milliseconds
+            builder.Property(e => e.SplitTimeMs);  // Nullable
+
+            builder.Property(e => e.SegmentTime);  // Nullable
+
+            // REQUIRED: Segment definition columns
+            builder.Property(e => e.FromCheckpointId)
+                .IsRequired();
+
+            builder.Property(e => e.ToCheckpointId)
+                .IsRequired();
+
+            builder.Property(e => e.CheckpointId);  // Nullable (optional, usually same as ToCheckpointId)
+
+            builder.Property(e => e.ReadNormalizedId);
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {
                 ap.Property(p => p.IsDeleted)
-                    .HasColumnName("IsDeleted")
+                .HasColumnName("IsDeleted")
                     .HasDefaultValue(false)
                     .IsRequired();
 
                 ap.Property(p => p.CreatedDate)
-                    .HasColumnName("CreatedAt")
-                    .HasDefaultValueSql("GETUTCDATE()")
-                    .IsRequired();
+                  .HasColumnName("CreatedAt")
+                  .HasDefaultValueSql("GETUTCDATE()")
+                  .IsRequired();
 
                 ap.Property(p => p.CreatedBy)
-                    .HasColumnName("CreatedBy")
-                    .IsRequired(false);
+                  .HasColumnName("CreatedBy")
+                    .IsRequired();
 
                 ap.Property(p => p.UpdatedBy)
-                    .HasColumnName("UpdatedBy")
-                    .IsRequired(false);
+                .HasColumnName("UpdatedBy");
 
                 ap.Property(p => p.UpdatedDate)
-                    .HasColumnName("UpdatedAt");
+                .HasColumnName("UpdatedAt");
 
                 ap.Property(p => p.IsActive)
-                    .HasColumnName("IsActive")
+                .HasColumnName("IsActive")
                     .HasDefaultValue(true)
                     .IsRequired();
             });
 
             // Relationships
+            builder.HasOne(e => e.Event)
+                .WithMany(ev => ev.SplitTimes)
+                .HasForeignKey(e => e.EventId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             builder.HasOne(e => e.Participant)
                 .WithMany(p => p.SplitTimes)
                 .HasForeignKey(e => e.ParticipantId)

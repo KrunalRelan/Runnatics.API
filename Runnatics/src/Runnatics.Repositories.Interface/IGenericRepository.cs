@@ -1,10 +1,10 @@
-using Microsoft.EntityFrameworkCore;
+using EFCore.BulkExtensions;
 using Runnatics.Models.Data.Common;
 using System.Linq.Expressions;
 
 public interface IGenericRepository<T> where T : class
 {
-    Task<PagingList<T>> SearchAsync(Expression<Func<T, bool>> filter = null,
+    Task<PagingList<T>> SearchAsync(Expression<Func<T, bool>>? filter = null,
         int? pageSize = null,
         int? pageNumber = 1,
         SortDirection sortDirection = SortDirection.Ascending,
@@ -20,6 +20,7 @@ public interface IGenericRepository<T> where T : class
     Task<List<T>> AddRangeAsync(List<T> entities);
     Task<List<T>> UpdateRangeAsync(List<T> entities);
     Task DeleteRangeAsync(List<int> ids);
+    Task DeleteRangeAsync(List<long> ids);
 
     IQueryable<T> GetQuery(Expression<Func<T, bool>>? filter = null,
                         bool ignoreQueryFilters = false,
@@ -30,4 +31,10 @@ public interface IGenericRepository<T> where T : class
     public Task<List<List<dynamic>>> ExecuteStoredProcedureDataSet<I>(string procedureName, I input);
 
     public Task<int> CountAsync(Expression<Func<T, bool>>? filter = null, bool ignoreQueryFilters = false);
+
+    // Bulk operations
+    Task BulkInsertAsync(List<T> entities, BulkConfig? bulkConfig = null);
+    Task BulkUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null);
+    Task BulkDeleteAsync(List<T> entities, BulkConfig? bulkConfig = null);
+    Task BulkInsertOrUpdateAsync(List<T> entities, BulkConfig? bulkConfig = null);
 }

@@ -548,12 +548,12 @@ namespace Runnatics.Services
                 return false;
             }
 
-            if (request.StartTime < DateTime.UtcNow.Date)
-            {
-                ErrorMessage = "Race start time cannot be in the past.";
-                _logger.LogWarning("Past race start time provided: {Date}", request.StartTime);
-                return false;
-            }
+            //if (request.StartTime < DateTime.UtcNow.Date)
+            //{
+            //    ErrorMessage = "Race start time cannot be in the past.";
+            //    _logger.LogWarning("Past race start time provided: {Date}", request.StartTime);
+            //    return false;
+            //}
 
             if (request.EndTime < DateTime.UtcNow.Date && request.EndTime <= request.StartTime)
             {
@@ -662,22 +662,23 @@ namespace Runnatics.Services
 
             var entities = await baseQuery.ToListAsync();
 
-            var orderedEntities = orderedIds
-                .Select(id => entities.FirstOrDefault(e => e.Id == id))
-                .Where(e => e != null)
-                .ToList()!;
+                        var orderedEntities = orderedIds
+                            .Select(id => entities.FirstOrDefault(e => e.Id == id))
+                            .Where(e => e != null)
+                            .Cast<Race>()
+                            .ToList();
 
-            // Get effective leaderboard settings for each race
-            var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
+                        // Get effective leaderboard settings for each race
+                        var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
 
-            foreach (var race in orderedEntities)
-            {
-                // Get effective leaderboard settings using the helper method
-                var effectiveSettings = await GetEffectiveLeaderboardSettings(race.EventId, race.Id);
+                        foreach (var race in orderedEntities)
+                        {
+                            // Get effective leaderboard settings using the helper method
+                            var effectiveSettings = await GetEffectiveLeaderboardSettings(race.EventId, race.Id);
 
-                // Attach to race for mapping
-                race.LeaderboardSettings = effectiveSettings;
-            }
+                            // Attach to race for mapping
+                            race.LeaderboardSettings = effectiveSettings;
+                        }
 
             var responses = _mapper.Map<List<RaceResponse>>(orderedEntities);
             return responses;

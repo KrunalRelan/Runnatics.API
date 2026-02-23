@@ -258,17 +258,23 @@ namespace Runnatics.Services
 
                 var batchProcessor = await _repository.ExecuteStoredProcedure<ParticipantsStagingRequest, ProcessImportResponse>("sp_ProcessParticipantStaging",
 
-                   new ParticipantsStagingRequest
-                   {
-                       ImportBatchId = decryptedImportBatchId,
-                       TenantId = tenantId,
-                       EventId = decryptedEventId,
-                       RaceId = raceId ?? 0,
-                       UserId = userId
-                   }, "");
-
+                    new ParticipantsStagingRequest
+                    {
+                        ImportBatchId = decryptedImportBatchId,
+                        TenantId = tenantId,
+                        EventId = decryptedEventId,
+                        RaceId = raceId ?? 0,
+                        UserId = userId
+                    }, "");
 
                 _logger.LogInformation("Processing completed. Success: {Success}, Errors: {Errors}", successCount, errorCount);
+                if (batchProcessor != null && batchProcessor.Count > 0)
+                {
+                    var firstResult = batchProcessor.FirstOrDefault();
+                    response.SuccessCount = firstResult?.SuccessCount ?? 0;
+                    response.ErrorCount = firstResult?.ErrorCount ?? 0;
+                    response.Status = "Completed";
+                }
 
                 return response;
             }
@@ -285,7 +291,6 @@ namespace Runnatics.Services
         {
             try
             {
-
                 var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
                 var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
 
@@ -304,37 +309,108 @@ namespace Runnatics.Services
                 );
 
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-                var baseExpression = BuildSearchExpression(request, decryptedEventId, decryptedRaceId);
+                var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
 
-                // If a free-text search string is provided, extend the expression to include ORed fields
-                if (!string.IsNullOrWhiteSpace(request.SearchString))
+                // Build base participant query with filters
+                var participantQuery = participantRepo.GetQuery(p =>
+                    p.EventId == decryptedEventId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted);
+
+                // Apply status filter if provided
+                if (request.Status.HasValue)
                 {
-                    baseExpression = CombineExpressionWithSearch(baseExpression, request.SearchString.Trim());
+                    var statusString = request.Status.Value.ToString();
+                    participantQuery = participantQuery.Where(p => p.Status == statusString);
                 }
 
-                var mappedSortField = GetMappedSortField(request.SortFieldName);
+                // Apply gender filter if provided
+                if (request.Gender.HasValue)
+                {
+                    var genderString = request.Gender.Value.ToString();
+                    participantQuery = participantQuery.Where(p => p.Gender == genderString);
+                }
 
-                var response = await participantRepo.SearchAsync(
-                    baseExpression,
-                    pageSize,              // Use validated pageSize
-                    pageNumber,            // Use validated pageNumber
-                    request.SortDirection == SortDirection.Ascending
-                        ? Models.Data.Common.SortDirection.Ascending
-                        : Models.Data.Common.SortDirection.Descending,
-                    mappedSortField,
-                    false,
-                    false
-                );
+                // Apply category filter if provided
+                if (!string.IsNullOrEmpty(request.Category))
+                {
+                    participantQuery = participantQuery.Where(p => p.AgeCategory == request.Category);
+                }
+
+                // Apply free-text search if provided
+                if (!string.IsNullOrWhiteSpace(request.SearchString))
+                {
+                    var search = request.SearchString.Trim();
+                    participantQuery = participantQuery.Where(p =>
+                        (p.BibNumber != null && p.BibNumber.Contains(search)) ||
+                        (p.FirstName != null && p.FirstName.Contains(search)) ||
+                        (p.LastName != null && p.LastName.Contains(search)) ||
+                        (p.Email != null && p.Email.Contains(search)) ||
+                        (p.Phone != null && p.Phone.Contains(search)) ||
+                        (p.AgeCategory != null && p.AgeCategory.Contains(search))
+                    );
+                }
+
+                // Left join with Results to get rank-based sorting
+                var resultsQuery = resultsRepo.GetQuery(r =>
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId);
+
+                var joinedQuery = participantQuery
+                    .GroupJoin(
+                        resultsQuery,
+                        p => p.Id,
+                        r => r.ParticipantId,
+                        (p, results) => new { Participant = p, Results = results })
+                    .SelectMany(
+                        x => x.Results.DefaultIfEmpty(),
+                        (x, r) => new
+                        {
+                            x.Participant,
+                            Status = r != null ? r.Status : null,
+                            OverallRank = r != null ? r.OverallRank : (int?)null,
+                            // Sort priority: Finished=0, DNF=1, DNS=2, No result=3
+                            StatusOrder = r == null ? 3 :
+                                r.Status == "Finished" ? 0 :
+                                r.Status == "DNF" ? 1 :
+                                r.Status == "DNS" ? 2 : 3
+                        });
+
+                // Apply sorting: Status priority first, then by OverallRank within Finished, then by Bib for others
+                var orderedQuery = joinedQuery
+                    .OrderBy(x => x.StatusOrder)
+                    .ThenBy(x => x.OverallRank ?? int.MaxValue)
+                    .ThenBy(x => x.Participant.BibNumber);
+
+                // Get total count for pagination
+                var totalCount = await participantQuery.CountAsync();
+
+                // Apply pagination
+                var pagedResults = await orderedQuery
+                    .Skip((pageNumber - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(x => x.Participant)
+                    .AsNoTracking()
+                    .ToListAsync();
 
                 _logger.LogInformation(
-                    "Found {TotalCount} participants, returning page {PageNumber} with items",
-                    response.TotalCount,
-                    pageNumber);
+                    "Found {TotalCount} participants, returning page {PageNumber} with {PageItems} items",
+                    totalCount,
+                    pageNumber,
+                    pagedResults.Count);
 
-                var toReturn = _mapper.Map<PagingList<ParticipantSearchReponse>>(response);
+                // Map to response
+                var toReturn = new PagingList<ParticipantSearchReponse>();
+                var mappedItems = _mapper.Map<List<ParticipantSearchReponse>>(pagedResults);
+                toReturn.AddRange(mappedItems);
+                toReturn.TotalCount = totalCount;
 
-                // Ensure TotalCount is preserved
-                toReturn.TotalCount = response.TotalCount;
+                // Fetch checkpoint times for the participants in this page
+                if (toReturn.Count > 0)
+                {
+                    await PopulateCheckpointTimesAsync(toReturn, decryptedEventId, decryptedRaceId);
+                }
 
                 return toReturn;
             }
@@ -354,7 +430,214 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task AddParticipant(String eventId, String raceId, ParticipantRequest addParticipant)
+        /// <summary>
+        /// Populates checkpoint times, chip IDs, and results data for each participant in the list.
+        /// Merges child checkpoint times by parent checkpoint, returning the best (earliest) time.
+        /// Returns null values gracefully when no checkpoint data exists.
+        /// </summary>
+        private async Task PopulateCheckpointTimesAsync(
+            IEnumerable<ParticipantSearchReponse> participants,
+            int eventId,
+            int raceId)
+        {
+            try
+            {
+                // Get participant IDs (decrypt them)
+                var participantIds = participants
+                    .Where(p => !string.IsNullOrEmpty(p.Id))
+                    .Select(p => Convert.ToInt32(_encryptionService.Decrypt(p.Id!)))
+                    .ToList();
+
+                if (participantIds.Count == 0)
+                    return;
+
+                // Fetch chip assignments for these participants
+                var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+                var chipAssignments = await chipAssignmentRepo.GetQuery(ca =>
+                    participantIds.Contains(ca.ParticipantId) &&
+                    ca.UnassignedAt == null &&
+                    ca.AuditProperties.IsActive &&
+                    !ca.AuditProperties.IsDeleted)
+                    .Include(ca => ca.Chip)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Create lookup: participantId -> chipEPC
+                var chipLookup = chipAssignments
+                    .GroupBy(ca => ca.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.First().Chip?.EPC);
+
+                // ========== CHECKPOINT LOGIC ==========
+
+                // Get ALL checkpoints for this race
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var allCheckpoints = await checkpointRepo.GetQuery(c =>
+                    c.RaceId == raceId &&
+                    c.EventId == eventId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Order checkpoints by distance
+                var checkpoints = allCheckpoints
+                    .OrderBy(c => c.DistanceFromStart)
+                    .ToList();
+
+                _logger.LogDebug(
+                    "Found {TotalCheckpoints} checkpoints for race {RaceId}",
+                    checkpoints.Count, raceId);
+
+                // Get all normalized readings for these participants
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var readings = await normalizedRepo.GetQuery(r =>
+                    r.EventId == eventId &&
+                    participantIds.Contains(r.ParticipantId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Group readings by participant
+                var readingsByParticipant = readings
+                    .GroupBy(r => r.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                // ========== RESULTS DATA ==========
+                var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                var results = await resultsRepo.GetQuery(r =>
+                    r.EventId == eventId &&
+                    r.RaceId == raceId &&
+                    participantIds.Contains(r.ParticipantId))
+                    .AsNoTracking()
+                    .ToDictionaryAsync(r => r.ParticipantId, r => r);
+
+                _logger.LogDebug(
+                    "Found {TotalResults} results for {TotalParticipants} participants",
+                    results.Count, participantIds.Count);
+
+                // Populate checkpoint times, chip IDs, and results for each participant
+                foreach (var participant in participants)
+                {
+                    participant.CheckpointTimes = new Dictionary<string, string?>();
+
+                    if (string.IsNullOrEmpty(participant.Id))
+                        continue;
+
+                    var participantId = Convert.ToInt32(_encryptionService.Decrypt(participant.Id));
+
+                    // Set chip ID
+                    participant.ChipId = chipLookup.TryGetValue(participantId, out var chipEpc) ? chipEpc : null;
+
+                    // ========== POPULATE RESULTS DATA ==========
+                    if (results.TryGetValue(participantId, out var result))
+                    {
+                        // Status from results
+                        participant.Status = result.Status;
+
+                        // Gun Time (total time from race start)
+                        if (result.GunTime.HasValue)
+                        {
+                            participant.GunTime = FormatDuration(result.GunTime.Value);
+                        }
+
+                        // Net/Chip Time (time minus start delay)
+                        if (result.NetTime.HasValue)
+                        {
+                            participant.NetTime = FormatDuration(result.NetTime.Value);
+                        }
+                        else if (result.GunTime.HasValue)
+                        {
+                            // Fallback: if no net time, use gun time
+                            participant.NetTime = FormatDuration(result.GunTime.Value);
+                        }
+
+                        // Rankings
+                        participant.OverallRank = result.OverallRank;
+                        participant.GenderRank = result.GenderRank;
+                        participant.CategoryRank = result.CategoryRank;
+                    }
+                    else
+                    {
+                        // No results yet - participant hasn't finished or data not processed
+                        // Keep existing status if set, otherwise mark as Registered
+                        if (string.IsNullOrEmpty(participant.Status))
+                        {
+                            participant.Status = "Registered";
+                        }
+                        participant.GunTime = null;
+                        participant.NetTime = null;
+                        participant.OverallRank = null;
+                        participant.GenderRank = null;
+                        participant.CategoryRank = null;
+                    }
+
+                    // If no checkpoints exist, skip checkpoint times
+                    if (checkpoints.Count == 0)
+                        continue;
+
+                    // Get readings for this participant (or empty list if none)
+                    var participantReadings = readingsByParticipant.TryGetValue(participantId, out var pr)
+                        ? pr
+                        : new List<ReadNormalized>();
+
+                    // Create lookup for this participant's readings by checkpoint
+                    var readingsByCheckpoint = participantReadings
+                        .GroupBy(r => r.CheckpointId)
+                        .ToDictionary(g => g.Key, g => g.OrderBy(r => r.ChipTime).First()); // Keep earliest if multiple
+
+                    // Add checkpoint times (converted to IST)
+                    var istTimeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                    foreach (var checkpoint in checkpoints)
+                    {
+                        var checkpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}";
+
+                        if (readingsByCheckpoint.TryGetValue(checkpoint.Id, out var reading))
+                        {
+                            // Convert UTC to IST and format time as HH:mm:ss
+                            var istTime = TimeZoneInfo.ConvertTimeFromUtc(reading.ChipTime, istTimeZone);
+                            participant.CheckpointTimes[checkpointName] = istTime.ToString("HH:mm:ss");
+                        }
+                        else
+                        {
+                            // No reading for this checkpoint - return null (graceful handling)
+                            participant.CheckpointTimes[checkpointName] = null;
+                        }
+                    }
+                }
+
+                _logger.LogInformation(
+                    "Populated checkpoint times and results for {Count} participants with {CheckpointCount} checkpoints",
+                    participants.Count(), checkpoints.Count);
+            }
+            catch (Exception ex)
+            {
+                // Log error but don't fail the search - just leave checkpoint times empty
+                _logger.LogWarning(ex, "Failed to populate checkpoint times for participants. Continuing with null values.");
+
+                foreach (var participant in participants)
+                {
+                    participant.CheckpointTimes ??= new Dictionary<string, string?>();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Formats milliseconds duration to HH:mm:ss or mm:ss format
+        /// </summary>
+        private static string FormatDuration(long milliseconds)
+        {
+            var timeSpan = TimeSpan.FromMilliseconds(milliseconds);
+
+            // If over 1 hour: HH:mm:ss
+            if (timeSpan.TotalHours >= 1)
+                return $"{(int)timeSpan.TotalHours}:{timeSpan.Minutes:D2}:{timeSpan.Seconds:D2}";
+
+            // If under 1 hour: mm:ss
+            return $"{timeSpan.Minutes}:{timeSpan.Seconds:D2}";
+        }
+
+        public async Task AddParticipant(string eventId, string raceId, ParticipantRequest addParticipant)
         {
             try
             {
@@ -656,7 +939,7 @@ namespace Runnatics.Services
                     .Select(p => p.BibNumber)
                     .ToListAsync();
 
-                var existingBibSet = new HashSet<string>(existingBibs, StringComparer.OrdinalIgnoreCase);
+                var existingBibSet = new HashSet<string>(existingBibs.Where(b => b != null)!, StringComparer.OrdinalIgnoreCase);
 
                 var participantsToAdd = new List<Models.Data.Entities.Participant>();
                 var skippedBibs = new List<string>();
@@ -712,7 +995,7 @@ namespace Runnatics.Services
                             "Successfully added {Count} participants for EventId: {EventId}, RaceId: {RaceId}",
                             participantsToAdd.Count, decryptedEventId, decryptedRaceId);
                     }
-                    catch (Exception ex)
+                    catch
                     {
                         await _repository.RollbackTransactionAsync();
                         throw;
@@ -890,7 +1173,7 @@ namespace Runnatics.Services
                         "UpdateParticipantsByBib completed. Updated: {Updated}, NotFound: {NotFound}, Skipped: {Skipped}",
                         updatedCount, notFoundBibs.Count, skippedCount);
                 }
-                catch (Exception ex)
+                catch
                 {
                     await _repository.RollbackTransactionAsync();
                     throw;

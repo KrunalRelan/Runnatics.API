@@ -82,7 +82,7 @@ namespace Runnatics.Models.Data.Entities
         public virtual ImportBatch? ImportBatch { get; set; }
         public virtual ICollection<ChipAssignment> ChipAssignments { get; set; } = new List<ChipAssignment>();
         public virtual ICollection<ReadNormalized> ReadNormalized { get; set; } = new List<ReadNormalized>();
-        public virtual ICollection<SplitTime> SplitTimes { get; set; } = new List<SplitTime>();
+        public virtual ICollection<SplitTimes> SplitTimes { get; set; } = new List<SplitTimes>();
         public virtual Results? Result { get; set; }
         public virtual ICollection<Notification> Notifications { get; set; } = new List<Notification>();
     }

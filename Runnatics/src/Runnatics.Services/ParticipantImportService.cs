@@ -257,17 +257,23 @@ namespace Runnatics.Services
 
                 var batchProcessor = await _repository.ExecuteStoredProcedure<ParticipantsStagingRequest, ProcessImportResponse>("sp_ProcessParticipantStaging",
 
-                   new ParticipantsStagingRequest
-                   {
-                       ImportBatchId = decryptedImportBatchId,
-                       TenantId = tenantId,
-                       EventId = decryptedEventId,
-                       RaceId = raceId ?? 0,
-                       UserId = userId
-                   }, "");
-
+                    new ParticipantsStagingRequest
+                    {
+                        ImportBatchId = decryptedImportBatchId,
+                        TenantId = tenantId,
+                        EventId = decryptedEventId,
+                        RaceId = raceId ?? 0,
+                        UserId = userId
+                    }, "");
 
                 _logger.LogInformation("Processing completed. Success: {Success}, Errors: {Errors}", successCount, errorCount);
+                if (batchProcessor != null && batchProcessor.Count > 0)
+                {
+                    var firstResult = batchProcessor.FirstOrDefault();
+                    response.SuccessCount = firstResult?.SuccessCount ?? 0;
+                    response.ErrorCount = firstResult?.ErrorCount ?? 0;
+                    response.Status = "Completed";
+                }
 
                 return response;
             }
@@ -429,8 +435,8 @@ namespace Runnatics.Services
         /// Returns null values gracefully when no checkpoint data exists.
         /// </summary>
         private async Task PopulateCheckpointTimesAsync(
-            IEnumerable<ParticipantSearchReponse> participants, 
-            int eventId, 
+            IEnumerable<ParticipantSearchReponse> participants,
+            int eventId,
             int raceId)
         {
             try
@@ -464,8 +470,8 @@ namespace Runnatics.Services
 
                 // Get ALL checkpoints for this race
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
-                var allCheckpoints = await checkpointRepo.GetQuery(c => 
-                    c.RaceId == raceId && 
+                var allCheckpoints = await checkpointRepo.GetQuery(c =>
+                    c.RaceId == raceId &&
                     c.EventId == eventId &&
                     c.AuditProperties.IsActive &&
                     !c.AuditProperties.IsDeleted)
@@ -483,7 +489,7 @@ namespace Runnatics.Services
 
                 // Get all normalized readings for these participants
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-                var readings = await normalizedRepo.GetQuery(r => 
+                var readings = await normalizedRepo.GetQuery(r =>
                     r.EventId == eventId &&
                     participantIds.Contains(r.ParticipantId) &&
                     r.AuditProperties.IsActive &&
@@ -570,8 +576,8 @@ namespace Runnatics.Services
                         continue;
 
                     // Get readings for this participant (or empty list if none)
-                    var participantReadings = readingsByParticipant.TryGetValue(participantId, out var pr) 
-                        ? pr 
+                    var participantReadings = readingsByParticipant.TryGetValue(participantId, out var pr)
+                        ? pr
                         : new List<ReadNormalized>();
 
                     // Create lookup for this participant's readings by checkpoint

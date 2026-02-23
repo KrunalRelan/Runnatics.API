@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Runnatics.Models.Data.Common;
 using Runnatics.Repositories.Interface;
 
 namespace Runnatics.Repositories.EF
@@ -151,7 +152,7 @@ namespace Runnatics.Repositories.EF
             return _tenantId;
         }
 
-        public async Task<dynamic> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string? output = null) where O : class
+        public async Task<PagingList<O>> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string? output = null) where O : class
         {
             var repository = GetRepository<O>();
             return await repository.ExecuteStoredProcedure<I>(storedProcedureName, input, output ?? string.Empty);

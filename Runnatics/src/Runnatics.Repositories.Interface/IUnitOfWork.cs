@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Runnatics.Models.Data.Common;
 
 namespace Runnatics.Repositories.Interface
 {
@@ -6,19 +7,19 @@ namespace Runnatics.Repositories.Interface
     {
         // Repository access
         IGenericRepository<T> GetRepository<T>() where T : class;
-        
+
         // Unit of Work methods
         Task<int> SaveChangesAsync();
-        
+
         // Transaction management
         Task BeginTransactionAsync();
         Task CommitTransactionAsync();
         Task RollbackTransactionAsync();
-        
+
         // Multi-tenant context
         void SetTenantId(int TenantId);
         int? GetCurrentTenantId();
 
-        Task<dynamic> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string? output = null) where O: class;
+        Task<PagingList<O>> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string? output = null) where O: class;
     }
 }

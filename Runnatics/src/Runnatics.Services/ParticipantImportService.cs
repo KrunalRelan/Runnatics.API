@@ -1668,7 +1668,7 @@ namespace Runnatics.Services
                     !r.AuditProperties.IsDeleted);
 
                 // Build response using helper
-                var responseBuilder = new ParticipantDetailsResponseBuilder(_encryptionService);
+                var responseBuilder = new ParticipantDetailsResponseBuilder(_mapper);
                 var response = responseBuilder.BuildResponse(
                     participant,
                     splitTimes,

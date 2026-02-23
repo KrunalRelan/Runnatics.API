@@ -1,4 +1,5 @@
 using Runnatics.Models.Client.Requests.Results;
+using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
 
 namespace Runnatics.Services.Interface
@@ -24,6 +25,14 @@ namespace Runnatics.Services.Interface
         /// Gets detailed results for a specific participant
         /// </summary>
         Task<ParticipantResultResponse?> GetParticipantResultAsync(
+            string eventId,
+            string raceId,
+            string participantId);
+
+        /// <summary>
+        /// Gets comprehensive participant details including performance, rankings, split times, and RFID readings
+        /// </summary>
+        Task<ParticipantDetailsResponse?> GetParticipantDetailsAsync(
             string eventId,
             string raceId,
             string participantId);

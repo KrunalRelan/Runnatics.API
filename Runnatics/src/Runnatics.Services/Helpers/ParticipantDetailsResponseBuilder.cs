@@ -1,6 +1,6 @@
+using AutoMapper;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Data.Entities;
-using Runnatics.Services.Interface;
 
 namespace Runnatics.Services.Helpers
 {
@@ -10,11 +10,11 @@ namespace Runnatics.Services.Helpers
     /// </summary>
     public class ParticipantDetailsResponseBuilder
     {
-        private readonly IEncryptionService _encryptionService;
+        private readonly IMapper _mapper;
 
-        public ParticipantDetailsResponseBuilder(IEncryptionService encryptionService)
+        public ParticipantDetailsResponseBuilder(IMapper mapper)
         {
-            _encryptionService = encryptionService;
+            _mapper = mapper;
         }
 
         public ParticipantDetailsResponse BuildResponse(
@@ -24,27 +24,7 @@ namespace Runnatics.Services.Helpers
             int totalInGender,
             int totalInCategory)
         {
-            var response = new ParticipantDetailsResponse
-            {
-                Id = _encryptionService.Encrypt(participant.Id.ToString()),
-                BibNumber = participant.BibNumber,
-                FirstName = participant.FirstName,
-                LastName = participant.LastName,
-                Gender = participant.Gender,
-                Age = participant.Age,
-                AgeCategory = participant.AgeCategory,
-                Club = null, // Not in current schema
-                Status = participant.Status,
-                Email = participant.Email,
-                Phone = participant.Phone,
-                Country = participant.Country,
-                EventId = _encryptionService.Encrypt(participant.EventId.ToString()),
-                EventName = participant.Event?.Name,
-                RaceId = _encryptionService.Encrypt(participant.RaceId.ToString()),
-                RaceName = participant.Race?.Title,
-                RaceDistance = participant.Race?.Distance,
-                StartTime = participant.Race?.StartTime
-            };
+            var response = _mapper.Map<ParticipantDetailsResponse>(participant);
 
             // Set timing info from result
             if (participant.Result != null)
@@ -57,7 +37,7 @@ namespace Runnatics.Services.Helpers
             // Build split times and calculate performance metrics
             if (splitTimes.Any())
             {
-                var performanceBuilder = new PerformanceMetricsBuilder(_encryptionService);
+                var performanceBuilder = new PerformanceMetricsBuilder(_mapper);
                 performanceBuilder.BuildSplitTimesAndPerformance(response, splitTimes);
             }
 

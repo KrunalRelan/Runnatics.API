@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Results;
+using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
 using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Services.Interface;
@@ -200,6 +201,51 @@ namespace Runnatics.Api.Controller
             if (result == null)
             {
                 return NotFound(new { error = "Participant result not found." });
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Get comprehensive participant details including performance, rankings, split times, and RFID readings
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/participant/{participantId}/details")]
+        [ProducesResponseType(typeof(ResponseBase<ParticipantDetailsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetParticipantDetails(
+            string eventId,
+            string raceId,
+            string participantId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(participantId))
+            {
+                return BadRequest(new { error = "Event ID, Race ID, and Participant ID are required." });
+            }
+
+            var response = new ResponseBase<ParticipantDetailsResponse>();
+            var result = await _service.GetParticipantDetailsAsync(eventId, raceId, participantId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<ParticipantDetailsResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+
+                if (_service.ErrorMessage.Contains("not found"))
+                {
+                    return NotFound(response);
+                }
+
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (result == null)
+            {
+                return NotFound(new { error = "Participant details not found." });
             }
 
             response.Message = result;

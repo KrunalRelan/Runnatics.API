@@ -1,16 +1,16 @@
+using AutoMapper;
 using Runnatics.Models.Client.Helpers;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Data.Entities;
-using Runnatics.Services.Interface;
 
 namespace Runnatics.Services.Helpers
 {
     /// <summary>
     /// Helper class for calculating performance metrics from split times
     /// </summary>
-    public class PerformanceMetricsBuilder(IEncryptionService encryptionService)
+    public class PerformanceMetricsBuilder(IMapper mapper)
     {
-        private readonly IEncryptionService _encryptionService = encryptionService;
+        private readonly IMapper _mapper = mapper;
 
         public void BuildSplitTimesAndPerformance(ParticipantDetailsResponse response, List<SplitTimes> splitTimes)
         {
@@ -25,11 +25,54 @@ namespace Runnatics.Services.Helpers
 
             var metrics = new PerformanceMetrics();
             long cumulativeTimeMs = 0;
+            decimal? previousPace = null;
 
             foreach (var st in splitTimes)
             {
                 var (splitTimeInfo, progressionInfo, segmentPace, segmentSpeed) = ProcessSplitTime(st, metrics, ref cumulativeTimeMs);
-                
+
+                // Populate checkpoint ranks from pre-calculated values
+                splitTimeInfo.OverallRank = st.Rank;
+                splitTimeInfo.GenderRank = st.GenderRank;
+                splitTimeInfo.CategoryRank = st.CategoryRank;
+
+                // Populate pace change info
+                var distanceKm = st.ToCheckpoint?.DistanceFromStart ?? st.Distance ?? 0;
+                progressionInfo.DistanceKm = distanceKm;
+
+                if (distanceKm == 0)
+                {
+                    progressionInfo.PaceChangeDirection = "none";
+                }
+                else if (!previousPace.HasValue)
+                {
+                    progressionInfo.PaceChangeDirection = "first";
+                }
+                else if (segmentPace.HasValue)
+                {
+                    if (segmentPace.Value < previousPace.Value)
+                        progressionInfo.PaceChangeDirection = "improved";
+                    else if (segmentPace.Value > previousPace.Value)
+                        progressionInfo.PaceChangeDirection = "declined";
+                    else
+                        progressionInfo.PaceChangeDirection = "none";
+
+                    if (previousPace.Value > 0)
+                    {
+                        progressionInfo.PaceChangePercent = Math.Round(
+                            ((segmentPace.Value - previousPace.Value) / previousPace.Value) * 100, 1);
+                    }
+                }
+                else
+                {
+                    progressionInfo.PaceChangeDirection = "none";
+                }
+
+                if (segmentPace.HasValue && distanceKm > 0)
+                {
+                    previousPace = segmentPace;
+                }
+
                 response.SplitTimes.Add(splitTimeInfo);
                 response.PaceProgression.Add(progressionInfo);
 
@@ -58,27 +101,25 @@ namespace Runnatics.Services.Helpers
             var (calculatedPace, speed) = CalculatePaceAndSpeed(segmentDistanceKm, segmentTimeMs);
             var effectivePace = st.AveragePace ?? calculatedPace;
 
-            var splitTimeInfo = new SplitTimeInfo
-            {
-                CheckpointId = checkpoint != null ? _encryptionService.Encrypt(checkpoint.Id.ToString()) : null,
-                CheckpointName = checkpoint?.Name,
-                Distance = $"{distanceKm} km",
-                DistanceKm = distanceKm,
-                SplitTime = TimeFormatter.FormatTimeSpan(segmentTimeMs),
-                CumulativeTime = TimeFormatter.FormatTimeSpan(cumulativeTimeMs),
-                Pace = effectivePace.HasValue ? TimeFormatter.FormatPace(effectivePace.Value) : null,
-                PaceValue = effectivePace.HasValue ? Math.Round(effectivePace.Value, 2) : null,
-                Speed = speed.HasValue ? Math.Round(speed.Value, 1) : null
-            };
+            // Map base properties from entity via AutoMapper
+            var splitTimeInfo = _mapper.Map<SplitTimeInfo>(st);
 
-            var progressionInfo = new PaceProgressionInfo
-            {
-                Segment = GetPaceProgressionSegment(checkpoint?.Name, distanceKm),
-                Pace = splitTimeInfo.Pace,
-                PaceValue = splitTimeInfo.PaceValue,
-                Speed = splitTimeInfo.Speed,
-                SplitTime = splitTimeInfo.SplitTime
-            };
+            // Set computed properties
+            splitTimeInfo.SplitTime = TimeFormatter.FormatTimeSpan(segmentTimeMs);
+            splitTimeInfo.CumulativeTime = TimeFormatter.FormatTimeSpan(cumulativeTimeMs);
+            splitTimeInfo.Pace = effectivePace.HasValue ? TimeFormatter.FormatPace(effectivePace.Value) : null;
+            splitTimeInfo.PaceValue = effectivePace.HasValue ? Math.Round(effectivePace.Value, 2) : null;
+            splitTimeInfo.Speed = speed.HasValue ? Math.Round(speed.Value, 1) : null;
+
+            // Map base properties from entity via AutoMapper
+            var progressionInfo = _mapper.Map<PaceProgressionInfo>(st);
+
+            // Set computed properties
+            progressionInfo.Segment = GetPaceProgressionSegment(checkpoint?.Name, distanceKm);
+            progressionInfo.Pace = splitTimeInfo.Pace;
+            progressionInfo.PaceValue = splitTimeInfo.PaceValue;
+            progressionInfo.Speed = splitTimeInfo.Speed;
+            progressionInfo.SplitTime = splitTimeInfo.SplitTime;
 
             return (splitTimeInfo, progressionInfo, effectivePace, speed);
         }

@@ -3,10 +3,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Requests.Results;
+using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
+using Runnatics.Services.Helpers;
 using Runnatics.Services.Interface;
+using ResultsSplitTimeInfo = Runnatics.Models.Client.Responses.Results.SplitTimeInfo;
 
 namespace Runnatics.Services
 {
@@ -771,7 +774,298 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<ParticipantDetailsResponse?> GetParticipantDetailsAsync(
+            string eventId,
+            string raceId,
+            string participantId)
+        {
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+
+            try
+            {
+                // 1. Load participant with navigation properties
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var participant = await participantRepo.GetQuery(p =>
+                    p.Id == decryptedParticipantId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .Include(p => p.Event)
+                    .Include(p => p.Race)
+                    .Include(p => p.Result)
+                    .Include(p => p.ChipAssignments)
+                        .ThenInclude(ca => ca.Chip)
+                    .FirstOrDefaultAsync();
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found";
+                    return null;
+                }
+
+                // 2. Load split times ordered by checkpoint distance
+                var splitTimeRepo = _repository.GetRepository<SplitTimes>();
+                var splitTimes = await splitTimeRepo.GetQuery(st =>
+                    st.ParticipantId == decryptedParticipantId &&
+                    st.EventId == decryptedEventId &&
+                    st.AuditProperties.IsActive &&
+                    !st.AuditProperties.IsDeleted)
+                    .Include(st => st.ToCheckpoint)
+                    .OrderBy(st => st.ToCheckpoint.DistanceFromStart)
+                    .ToListAsync();
+
+                // 3. Get ranking totals for each group
+                var resultsRepo = _repository.GetRepository<Results>();
+
+                var totalFinished = await resultsRepo.CountAsync(r =>
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == "Finished" &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted);
+
+                int totalInGender = 0;
+                if (!string.IsNullOrEmpty(participant.Gender))
+                {
+                    totalInGender = await resultsRepo.GetQuery(r =>
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == "Finished" &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .Include(r => r.Participant)
+                        .CountAsync(r => r.Participant.Gender == participant.Gender);
+                }
+
+                int totalInCategory = 0;
+                if (!string.IsNullOrEmpty(participant.AgeCategory))
+                {
+                    totalInCategory = await resultsRepo.GetQuery(r =>
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == "Finished" &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .Include(r => r.Participant)
+                        .CountAsync(r => r.Participant.AgeCategory == participant.AgeCategory);
+                }
+
+                // 4. Build base response using existing builder
+                var detailsBuilder = new ParticipantDetailsResponseBuilder(_mapper);
+                var response = detailsBuilder.BuildResponse(
+                    participant, splitTimes, totalFinished, totalInGender, totalInCategory);
+
+                // 5. Load checkpoint times from ReadNormalized with dynamically calculated rankings
+                response.CheckpointTimes = await LoadCheckpointTimesAsync(
+                    decryptedParticipantId, decryptedEventId, decryptedRaceId,
+                    participant.Event?.TimeZone);
+
+                // 6. Get EPC from active chip assignment
+                var epc = participant.ChipAssignments
+                    .Where(ca => ca.UnassignedAt == null)
+                    .OrderByDescending(ca => ca.AssignedAt)
+                    .FirstOrDefault()?.Chip?.EPC;
+                response.Epc = epc;
+
+                // 7. Load RFID readings from ReadNormalized
+                response.RfidReadings = await LoadRfidReadingsAsync(
+                    decryptedParticipantId, decryptedEventId, participant.Event?.TimeZone);
+
+                // Set chip ID on each reading from the active chip assignment
+                if (!string.IsNullOrEmpty(epc))
+                {
+                    foreach (var reading in response.RfidReadings)
+                    {
+                        reading.ChipId = epc;
+                    }
+                }
+
+                response.ProcessingNotes = response.RfidReadings
+                    .Where(r => !string.IsNullOrEmpty(r.Notes))
+                    .Select(r => r.Notes!)
+                    .ToList();
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error retrieving participant details: {ex.Message}";
+                _logger.LogError(ex, "Error retrieving participant details for participant {ParticipantId}", participantId);
+                return null;
+            }
+        }
+
         #region Private Helper Methods
+
+        /// <summary>
+        /// Loads checkpoint times from ReadNormalized readings and dynamically calculates
+        /// per-checkpoint rankings by comparing this participant's times against all other
+        /// participants in the race.
+        /// </summary>
+        private async Task<List<CheckpointTimeInfo>> LoadCheckpointTimesAsync(
+            int participantId, int eventId, int raceId, string? eventTimeZone)
+        {
+            var checkpointTimeInfos = new List<CheckpointTimeInfo>();
+
+            // Get all checkpoints for this race ordered by distance
+            var checkpointRepo = _repository.GetRepository<Checkpoint>();
+            var checkpoints = await checkpointRepo.GetQuery(c =>
+                c.RaceId == raceId &&
+                c.EventId == eventId &&
+                c.AuditProperties.IsActive &&
+                !c.AuditProperties.IsDeleted)
+                .OrderBy(c => c.DistanceFromStart)
+                .AsNoTracking()
+                .ToListAsync();
+
+            if (checkpoints.Count == 0)
+                return checkpointTimeInfos;
+
+            // Get ALL normalized readings for this race's participants to calculate rankings
+            var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+            var allReadings = await normalizedRepo.GetQuery(r =>
+                r.EventId == eventId &&
+                r.Participant.RaceId == raceId &&
+                r.AuditProperties.IsActive &&
+                !r.AuditProperties.IsDeleted)
+                .Include(r => r.Participant)
+                .AsNoTracking()
+                .ToListAsync();
+
+            // Group by checkpoint → per participant keep earliest reading, sorted by GunTime
+            var rankedByCheckpoint = allReadings
+                .GroupBy(r => r.CheckpointId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.GroupBy(r => r.ParticipantId)
+                          .Select(pg => pg.OrderBy(r => r.ChipTime).First())
+                          .OrderBy(r => r.GunTime ?? long.MaxValue)
+                          .ToList());
+
+            // Get current participant's gender and category for ranking
+            var currentParticipant = allReadings
+                .FirstOrDefault(r => r.ParticipantId == participantId)?.Participant;
+
+            // Resolve timezone
+            TimeZoneInfo timeZone;
+            try
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZone ?? "India Standard Time");
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            }
+
+            foreach (var checkpoint in checkpoints)
+            {
+                var info = new CheckpointTimeInfo
+                {
+                    CheckpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}",
+                    DistanceKm = checkpoint.DistanceFromStart
+                };
+
+                if (rankedByCheckpoint.TryGetValue(checkpoint.Id, out var sortedReadings))
+                {
+                    var participantReading = sortedReadings
+                        .FirstOrDefault(r => r.ParticipantId == participantId);
+
+                    if (participantReading != null)
+                    {
+                        // Set checkpoint time
+                        var localTime = TimeZoneInfo.ConvertTimeFromUtc(participantReading.ChipTime, timeZone);
+                        info.Time = localTime.ToString("HH:mm:ss");
+
+                        // Overall rank: position among all participants at this checkpoint
+                        info.OverallRank = sortedReadings
+                            .Select((r, idx) => new { r.ParticipantId, Rank = idx + 1 })
+                            .First(x => x.ParticipantId == participantId).Rank;
+
+                        // Gender rank: position among same-gender participants
+                        if (currentParticipant != null && !string.IsNullOrEmpty(currentParticipant.Gender))
+                        {
+                            var genderRank = 1;
+                            foreach (var r in sortedReadings)
+                            {
+                                if (r.ParticipantId == participantId) break;
+                                if (r.Participant.Gender == currentParticipant.Gender) genderRank++;
+                            }
+                            info.GenderRank = genderRank;
+                        }
+
+                        // Category rank: position among same-category participants
+                        if (currentParticipant != null && !string.IsNullOrEmpty(currentParticipant.AgeCategory))
+                        {
+                            var categoryRank = 1;
+                            foreach (var r in sortedReadings)
+                            {
+                                if (r.ParticipantId == participantId) break;
+                                if (r.Participant.AgeCategory == currentParticipant.AgeCategory) categoryRank++;
+                            }
+                            info.CategoryRank = categoryRank;
+                        }
+                    }
+                }
+
+                checkpointTimeInfos.Add(info);
+            }
+
+            return checkpointTimeInfos;
+        }
+
+        /// <summary>
+        /// Loads RFID readings from ReadNormalized table for a participant.
+        /// Includes checkpoint name from Checkpoint table and converts ChipTime from UTC
+        /// to the event's local timezone using the Event.TimeZone column.
+        /// </summary>
+        private async Task<List<RfidReadingDetail>> LoadRfidReadingsAsync(
+            int participantId, int eventId, string? eventTimeZone)
+        {
+            var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+
+            var readings = await normalizedRepo.GetQuery(r =>
+                r.ParticipantId == participantId &&
+                r.EventId == eventId &&
+                r.AuditProperties.IsActive &&
+                !r.AuditProperties.IsDeleted)
+                .Include(r => r.Checkpoint)
+                    .ThenInclude(c => c.Device)
+                .OrderBy(r => r.CheckpointId)
+                .ToListAsync();
+
+            var result = _mapper.Map<List<RfidReadingDetail>>(readings);
+
+            // Resolve timezone from event (IANA id like "Asia/Kolkata")
+            TimeZoneInfo timeZone;
+            try
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZone ?? "India Standard Time");
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            }
+
+            // Set computed fields
+            for (int i = 0; i < readings.Count; i++)
+            {
+                // Convert ChipTime (UTC) to event local time
+                var localTime = TimeZoneInfo.ConvertTimeFromUtc(readings[i].ChipTime, timeZone);
+                result[i].ReadTimeLocal = localTime.ToString("HH:mm:ss");
+
+                // Format gun time and net time
+                if (readings[i].GunTime.HasValue)
+                {
+                    result[i].GunTimeFormatted = TimeFormatter.FormatTimeSpan(readings[i].GunTime.Value);
+                }
+                if (readings[i].NetTime.HasValue)
+                {
+                    result[i].NetTimeFormatted = TimeFormatter.FormatTimeSpan(readings[i].NetTime.Value);
+                }
+            }
+
+            return result;
+        }
 
         private static LeaderboardDisplaySettings BuildDisplaySettings(
             EventSettings? eventSettings,
@@ -824,7 +1118,7 @@ namespace Runnatics.Services
             return display;
         }
 
-        private async Task<List<SplitTimeInfo>> GetParticipantSplitsAsync(int participantId, int eventId)
+        private async Task<List<ResultsSplitTimeInfo>> GetParticipantSplitsAsync(int participantId, int eventId)
         {
             var splitTimeRepo = _repository.GetRepository<SplitTimes>();
             var splits = await splitTimeRepo.GetQuery(st =>
@@ -836,7 +1130,7 @@ namespace Runnatics.Services
                 .OrderBy(st => st.Checkpoint.DistanceFromStart)
                 .ToListAsync();
 
-            var splitInfos = _mapper.Map<List<SplitTimeInfo>>(splits);
+            var splitInfos = _mapper.Map<List<ResultsSplitTimeInfo>>(splits);
 
             // Format times and pace
             for (int i = 0; i < splits.Count; i++)

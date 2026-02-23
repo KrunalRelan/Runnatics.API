@@ -150,6 +150,12 @@ namespace Runnatics.Models.Client.Responses.Participants
         public RankingInfo? Rankings { get; set; }
 
         /// <summary>
+        /// Checkpoint times with ranking data, ordered by distance from start.
+        /// Data sourced from ReadNormalized readings and SplitTimes rankings.
+        /// </summary>
+        public List<CheckpointTimeInfo>? CheckpointTimes { get; set; }
+
+        /// <summary>
         /// Split times at each checkpoint with detailed metrics
         /// </summary>
         public List<SplitTimeInfo>? SplitTimes { get; set; }
@@ -158,6 +164,25 @@ namespace Runnatics.Models.Client.Responses.Participants
         /// Pace progression data for visualization
         /// </summary>
         public List<PaceProgressionInfo>? PaceProgression { get; set; }
+
+        #endregion
+
+        #region RFID Information
+
+        /// <summary>
+        /// RFID chip EPC identifier
+        /// </summary>
+        public string? Epc { get; set; }
+
+        /// <summary>
+        /// Raw RFID tag readings for this participant
+        /// </summary>
+        public List<RfidReadingDetail>? RfidReadings { get; set; }
+
+        /// <summary>
+        /// Processing notes from RFID readings
+        /// </summary>
+        public List<string>? ProcessingNotes { get; set; }
 
         #endregion
     }

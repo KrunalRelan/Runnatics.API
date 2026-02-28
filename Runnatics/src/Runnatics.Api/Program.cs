@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Runnatics.Api.Configuration;
 using Runnatics.Data.EF;
 using Runnatics.Repositories.EF;
 using Runnatics.Repositories.Interface;
@@ -164,6 +165,9 @@ builder.Services.AddScoped<IResultsService, ResultsService>();
 // Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);
 
+// RFID Online Integration (SignalR hubs + online tag ingestion)
+builder.Services.AddRfidOnlineIntegration(builder.Configuration);
+
 // AutoMapper
 builder.Services.AddAutoMapper(typeof(AutoMapperMappingProfile));
 
@@ -211,6 +215,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapRfidHubs();
 app.MapHealthChecks("/health");
 
 // (Optional) seeding

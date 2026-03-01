@@ -318,7 +318,7 @@ public class OnlineTagIngestionService
             ReadTimeLocal = readTimeUtc,       // For webhook, local = UTC (reader sends UTC)
             ReadTimeUtc = readTimeUtc,
             TimeZoneId = "UTC",                // R700 IoT interface always sends UTC
-            ProcessResult = "Success",         // Webhook data is pre-validated by the reader
+            ProcessResult = "Pending",         // Let Phase 1 validate (RSSI check, EPC link, checkpoint assign)
             SourceType = "online_webhook",
             AuditProperties = new Models.Data.Common.AuditProperties
             {

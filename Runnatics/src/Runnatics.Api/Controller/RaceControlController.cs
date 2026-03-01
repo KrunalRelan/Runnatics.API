@@ -3,7 +3,10 @@
 // ============================================================================
 
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Runnatics.Data.EF;
 using Runnatics.Models.Data.Entities;
+using Runnatics.Repositories.Interface;
 using Runnatics.Services;
 
 namespace Runnatics.Controllers;
@@ -13,14 +16,14 @@ namespace Runnatics.Controllers;
 public class DeviceManagementController : ControllerBase
 {
     private readonly RaceReaderService _raceReaderService;
-    private readonly IDeviceRepository _deviceRepo;
+    private readonly IUnitOfWork<RaceSyncDbContext> _repository;
 
     public DeviceManagementController(
         RaceReaderService raceReaderService,
-        IDeviceRepository deviceRepo)
+        IUnitOfWork<RaceSyncDbContext> repository)
     {
         _raceReaderService = raceReaderService;
-        _deviceRepo = deviceRepo;
+        _repository = repository;
     }
 
     [HttpPost("register")]
@@ -42,35 +45,24 @@ public class DeviceManagementController : ControllerBase
     public async Task<ActionResult<List<Device>>> GetAll(
         [FromQuery] int tenantId)
     {
-        var devices = await _deviceRepo.GetAllByTenant(tenantId);
+        var devices = await _repository.GetRepository<Device>()
+            .GetQuery(d =>
+                d.TenantId == tenantId &&
+                d.AuditProperties.IsActive &&
+                !d.AuditProperties.IsDeleted)
+            .AsNoTracking()
+            .ToListAsync();
         return Ok(devices);
     }
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<Device>> GetById(int id)
     {
-        var device = await _deviceRepo.GetById(id);
+        var device = await _repository.GetRepository<Device>().GetByIdAsync(id);
         return device == null ? NotFound() : Ok(device);
     }
-
-    [HttpPost("assign")]
-    public async Task<IActionResult> AssignToCheckpoint(
-        [FromBody] AssignDeviceToCheckpointRequest request)
-    {
-        var assignment = new RaceCheckpointDevice
-        {
-            RaceId = request.RaceId,
-            CheckpointId = request.CheckpointId,
-            DeviceId = request.DeviceId,
-            Mode = request.Mode,
-            SortOrder = request.SortOrder,
-            TenantId = request.TenantId
-        };
-
-        await _deviceRepo.CreateAssignment(assignment);
-        return Ok(assignment);
-    }
 }
+
 
 // ============================================================================
 // File: Controllers/RaceControlController.cs

@@ -129,6 +129,30 @@ public class OnlineTagIngestionService
 
         var eventId = checkpoint.EventId;
 
+        // ── Step 2b: Look up event timezone for local time conversion ──
+        // Your offline flow (ParseSqliteFileAsync) converts timestamps using the
+        // user-provided TimeZoneId. Online mode gets the timezone from the Event table.
+        // This ensures ReadTimeLocal matches what the offline flow would produce.
+        var eventRepo = _repository.GetRepository<Event>();
+        var eventEntity = await eventRepo.GetQuery(e => e.Id == eventId)
+            .AsNoTracking()
+            .FirstOrDefaultAsync();
+
+        var eventTimeZoneId = eventEntity?.TimeZone ?? "UTC";
+        TimeZoneInfo eventTimeZone;
+        try
+        {
+            eventTimeZone = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZoneId);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            _logger.LogWarning(
+                "Event {EventId} has unknown timezone '{TimeZone}', falling back to UTC",
+                eventId, eventTimeZoneId);
+            eventTimeZone = TimeZoneInfo.Utc;
+            eventTimeZoneId = "UTC";
+        }
+
         // ── Step 3: Get or create the UploadBatch for this device + session ──
         // We create one UploadBatch per device per day for online mode.
         // This groups all webhook readings from a device into one batch,
@@ -140,14 +164,23 @@ public class OnlineTagIngestionService
         var readings = new List<RawRFIDReading>();
         var userId = _userContext.UserId;
 
+        // CRITICAL: Use the MAC string (Device.DeviceId), NOT device.Id.ToString().
+        // This must match what your offline flow stores — the MAC extracted from .db filename.
+        // Phase 1.5 resolves devices by looking up this string in Device.DeviceId/Device.Name.
+        var deviceIdForReadings = !string.IsNullOrEmpty(device.DeviceId)
+            ? device.DeviceId
+            : !string.IsNullOrEmpty(device.Name)
+                ? device.Name
+                : device.Id.ToString();
+
         foreach (var tagEvent in payload.TagInventoryEvents)
         {
             if (string.IsNullOrEmpty(tagEvent.Epc))
                 continue;
 
             var reading = MapWebhookEventToRawReading(
-                tagEvent, batch.Id, device.DeviceId ?? device.Id.ToString(),
-                userId);
+                tagEvent, batch.Id, deviceIdForReadings,
+                userId, eventTimeZone, eventTimeZoneId);
 
             if (reading != null)
                 readings.Add(reading);
@@ -184,8 +217,8 @@ public class OnlineTagIngestionService
         await _repository.SaveChangesAsync();
 
         _logger.LogDebug(
-            "Webhook ingested: {Count} readings from {DeviceName} into batch {BatchId}",
-            readings.Count, device.Name, batch.Id);
+            "Webhook ingested: {Count} readings from {DeviceName} (DeviceId={DeviceId}, MAC={Mac}) into batch {BatchId}",
+            readings.Count, device.Name, deviceIdForReadings, device.DeviceId, batch.Id);
 
         // ── Step 6: Push live crossing events to React ──
         // This is the ONLINE-ONLY addition — immediate visual feedback.
@@ -219,7 +252,20 @@ public class OnlineTagIngestionService
     {
         var batchRepo = _repository.GetRepository<UploadBatch>();
         var today = DateTime.UtcNow.Date;
-        var deviceId = device.DeviceId ?? device.Id.ToString();
+
+        // CRITICAL: Must store the MAC string (Device.DeviceId), NOT device.Id.ToString().
+        // Phase 1.5 (AssignCheckpointsForLoopRaceAsync) resolves devices via a lookup
+        // built from Device.DeviceId (MAC) and Device.Name. If we store the integer ID
+        // (e.g., "1016"), Phase 1.5 can't resolve it and skips ALL readings → 0 assignments
+        // → 0 normalized readings → all DNF.
+        //
+        // Your offline flow stores the MAC extracted from the .db filename (e.g., "00162512dbb0").
+        // We must do the same here.
+        var deviceId = !string.IsNullOrEmpty(device.DeviceId)
+            ? device.DeviceId
+            : !string.IsNullOrEmpty(device.Name)
+                ? device.Name
+                : device.Id.ToString();
 
         // Look for an existing online batch for this device today
         var existingBatch = await batchRepo.GetQuery(b =>
@@ -278,9 +324,14 @@ public class OnlineTagIngestionService
     /// Maps an R700 webhook tag event to a RawRFIDReading entity.
     /// Output matches EXACTLY what ParseSqliteFileAsync produces (lines 1709-1730),
     /// so the downstream pipeline treats it identically.
+    ///
+    /// Timezone conversion mirrors ParseSqliteFileAsync lines 1696-1707:
+    ///   readTimeUtc  = the actual UTC time from the R700
+    ///   readTimeLocal = converted to the event's timezone (same as offline .db flow)
     /// </summary>
     private RawRFIDReading? MapWebhookEventToRawReading(
-        R700TagInventoryEvent evt, int batchId, string deviceId, int userId)
+        R700TagInventoryEvent evt, int batchId, string deviceId, int userId,
+        TimeZoneInfo eventTimeZone, string timeZoneId)
     {
         if (string.IsNullOrEmpty(evt.Epc))
             return null;
@@ -297,6 +348,11 @@ public class OnlineTagIngestionService
         {
             readTimeUtc = DateTime.UtcNow;
         }
+
+        // Convert UTC to event local time — mirrors ParseSqliteFileAsync line 1697:
+        //   var tz = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        //   readTimeLocal = TimeZoneInfo.ConvertTimeFromUtc(readTimeUtc, tz);
+        var readTimeLocal = TimeZoneInfo.ConvertTimeFromUtc(readTimeUtc, eventTimeZone);
 
         // Convert to millisecond timestamp — same format as your .db files
         var timestampMs = ((DateTimeOffset)readTimeUtc).ToUnixTimeMilliseconds();
@@ -315,10 +371,10 @@ public class OnlineTagIngestionService
             Antenna = evt.AntennaPort,
             RssiDbm = rssiDbm,
             Channel = evt.Channel,
-            ReadTimeLocal = readTimeUtc,       // For webhook, local = UTC (reader sends UTC)
-            ReadTimeUtc = readTimeUtc,
-            TimeZoneId = "UTC",                // R700 IoT interface always sends UTC
-            ProcessResult = "Pending",         // Let Phase 1 validate (RSSI check, EPC link, checkpoint assign)
+            ReadTimeLocal = readTimeLocal,     // Converted to event timezone (e.g., Asia/Kolkata)
+            ReadTimeUtc = readTimeUtc,         // Original UTC from R700
+            TimeZoneId = timeZoneId,           // Event's timezone ID (e.g., "Asia/Kolkata")
+            ProcessResult = "Pending",          // Must be "Pending" so Phase 1 validates RSSI and assigns checkpoints
             SourceType = "online_webhook",
             AuditProperties = new Models.Data.Common.AuditProperties
             {

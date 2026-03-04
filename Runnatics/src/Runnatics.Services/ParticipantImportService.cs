@@ -516,6 +516,24 @@ namespace Runnatics.Services
                     "Found {TotalResults} results for {TotalParticipants} participants",
                     results.Count, participantIds.Count);
 
+                // Resolve the event's display timezone once before the participant loop
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventTimeZoneId = await eventRepo.GetQuery(e => e.Id == eventId)
+                    .AsNoTracking()
+                    .Select(e => e.TimeZone)
+                    .FirstOrDefaultAsync() ?? "UTC";
+
+                TimeZoneInfo displayTimeZone;
+                try
+                {
+                    displayTimeZone = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZoneId);
+                }
+                catch (TimeZoneNotFoundException)
+                {
+                    _logger.LogWarning("Event {EventId} has unknown timezone '{TZ}', falling back to UTC", eventId, eventTimeZoneId);
+                    displayTimeZone = TimeZoneInfo.Utc;
+                }
+
                 // Populate checkpoint times, chip IDs, and results for each participant
                 foreach (var participant in participants)
                 {
@@ -586,17 +604,15 @@ namespace Runnatics.Services
                         .GroupBy(r => r.CheckpointId)
                         .ToDictionary(g => g.Key, g => g.OrderBy(r => r.ChipTime).First()); // Keep earliest if multiple
 
-                    // Add checkpoint times (converted to IST)
-                    var istTimeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                    // Add checkpoint times (converted to event's timezone)
                     foreach (var checkpoint in checkpoints)
                     {
                         var checkpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}";
 
                         if (readingsByCheckpoint.TryGetValue(checkpoint.Id, out var reading))
                         {
-                            // Convert UTC to IST and format time as HH:mm:ss
-                            var istTime = TimeZoneInfo.ConvertTimeFromUtc(reading.ChipTime, istTimeZone);
-                            participant.CheckpointTimes[checkpointName] = istTime.ToString("HH:mm:ss");
+                            var localTime = TimeZoneInfo.ConvertTimeFromUtc(reading.ChipTime, displayTimeZone);
+                            participant.CheckpointTimes[checkpointName] = localTime.ToString("HH:mm:ss");
                         }
                         else
                         {

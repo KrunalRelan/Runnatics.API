@@ -4,11 +4,13 @@
 //          Updated for int IDs, TenantId, and multi-checkpoint-per-device.
 // ============================================================================
 
+using AutoMapper;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Hubs;
+using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 
@@ -20,17 +22,20 @@ public class RaceReaderService
     private readonly IUnitOfWork<RaceSyncDbContext> _repository;
     private readonly IHubContext<RaceHub> _raceHub;
     private readonly ILogger<RaceReaderService> _logger;
+    private readonly IMapper _mapper;
 
     public RaceReaderService(
         R700CommunicationService r700,
         IUnitOfWork<RaceSyncDbContext> repository,
         IHubContext<RaceHub> raceHub,
-        ILogger<RaceReaderService> logger)
+        ILogger<RaceReaderService> logger,
+        IMapper mapper)
     {
         _r700 = r700;
         _repository = repository;
         _raceHub = raceHub;
         _logger = logger;
+        _mapper = mapper;
     }
 
     // ── DEVICE REGISTRATION ──
@@ -64,32 +69,29 @@ public class RaceReaderService
 
         if (existing != null)
         {
-            existing.Hostname = request.Hostname;
-            existing.IpAddress = status.Reader.IpAddress;
-            existing.FirmwareVersion = status.Reader.Firmware;
-            existing.ReaderModel = status.Reader.Model;
+            _mapper.Map(request, existing);
+            _mapper.Map(status.Reader, existing);
             existing.IsOnline = true;
             existing.LastSeenAt = DateTime.UtcNow;
-
-            if (!string.IsNullOrWhiteSpace(request.DeviceName))
-                existing.Name = request.DeviceName;
+            existing.AuditProperties.IsActive = true;
+            existing.AuditProperties.IsDeleted = false;
+            existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
 
             await deviceRepo.UpdateAsync(existing);
             await _repository.SaveChangesAsync();
             return MapToResponse(existing);
         }
 
-        var device = new Device
+        var device = _mapper.Map<Device>(request);
+        _mapper.Map(status.Reader, device);
+        device.DeviceId = macRaw;
+        device.IsOnline = true;
+        device.LastSeenAt = DateTime.UtcNow;
+        device.AuditProperties = new AuditProperties
         {
-            DeviceId = macRaw,
-            Name = request.DeviceName,
-            Hostname = request.Hostname,
-            IpAddress = status.Reader.IpAddress,
-            ReaderModel = status.Reader.Model ?? "Impinj R700",
-            FirmwareVersion = status.Reader.Firmware,
-            IsOnline = true,
-            LastSeenAt = DateTime.UtcNow,
-            TenantId = request.TenantId
+            CreatedDate = DateTime.UtcNow,
+            IsActive = true,
+            IsDeleted = false
         };
 
         await deviceRepo.AddAsync(device);

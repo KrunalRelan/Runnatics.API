@@ -1,72 +1,12 @@
 // ============================================================================
-// File: Controllers/DeviceManagementController.cs
+// File: Controllers/RaceControlController.cs
 // ============================================================================
 
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Runnatics.Data.EF;
 using Runnatics.Models.Data.Entities;
-using Runnatics.Repositories.Interface;
 using Runnatics.Services;
 
 namespace Runnatics.Controllers;
-
-[ApiController]
-[Route("api/devices")]
-public class DeviceManagementController : ControllerBase
-{
-    private readonly RaceReaderService _raceReaderService;
-    private readonly IUnitOfWork<RaceSyncDbContext> _repository;
-
-    public DeviceManagementController(
-        RaceReaderService raceReaderService,
-        IUnitOfWork<RaceSyncDbContext> repository)
-    {
-        _raceReaderService = raceReaderService;
-        _repository = repository;
-    }
-
-    [HttpPost("register")]
-    public async Task<ActionResult<RegisterDeviceResponse>> Register(
-        [FromBody] RegisterDeviceRequest request)
-    {
-        try
-        {
-            var result = await _raceReaderService.RegisterDevice(request);
-            return Ok(result);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
-
-    [HttpGet]
-    public async Task<ActionResult<List<Device>>> GetAll(
-        [FromQuery] int tenantId)
-    {
-        var devices = await _repository.GetRepository<Device>()
-            .GetQuery(d =>
-                d.TenantId == tenantId &&
-                d.AuditProperties.IsActive &&
-                !d.AuditProperties.IsDeleted)
-            .AsNoTracking()
-            .ToListAsync();
-        return Ok(devices);
-    }
-
-    [HttpGet("{id:int}")]
-    public async Task<ActionResult<Device>> GetById(int id)
-    {
-        var device = await _repository.GetRepository<Device>().GetByIdAsync(id);
-        return device == null ? NotFound() : Ok(device);
-    }
-}
-
-
-// ============================================================================
-// File: Controllers/RaceControlController.cs
-// ============================================================================
 
 [ApiController]
 [Route("api/race-control")]

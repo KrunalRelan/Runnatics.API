@@ -365,6 +365,34 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name));
 
+            // RegisterDeviceRequest → Device (name, hostname, tenantId on create/update)
+            CreateMap<RegisterDeviceRequest, Device>()
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.DeviceName))
+                .ForMember(dest => dest.Hostname, opt => opt.MapFrom(src => src.Hostname))
+                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.IpAddress, opt => opt.Ignore())
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderModel, opt => opt.Ignore())
+                .ForMember(dest => dest.IsOnline, opt => opt.Ignore())
+                .ForMember(dest => dest.LastSeenAt, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore());
+
+            // R700ReaderInfo → Device (reader hardware details on create/update)
+            CreateMap<R700ReaderInfo, Device>()
+                .ForMember(dest => dest.IpAddress, opt => opt.MapFrom(src => src.IpAddress))
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.Firmware))
+                .ForMember(dest => dest.ReaderModel, opt => opt.MapFrom(src => src.Model))
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.Name, opt => opt.Ignore())
+                .ForMember(dest => dest.TenantId, opt => opt.Ignore())
+                .ForMember(dest => dest.Hostname, opt => opt.Ignore())
+                .ForMember(dest => dest.IsOnline, opt => opt.Ignore())
+                .ForMember(dest => dest.LastSeenAt, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore());
+
             CreateMap<CheckpointRequest, Checkpoint>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.EventId, opt => opt.Ignore())

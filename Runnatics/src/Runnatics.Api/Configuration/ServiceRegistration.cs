@@ -52,7 +52,7 @@ public static class ServiceRegistration
 
     public static WebApplication MapRfidHubs(this WebApplication app)
     {
-        app.MapHub<RaceHub>("/hubs/race");
+        app.MapHub<RaceHub>("/hubs/race").RequireCors("SignalR");
         return app;
     }
 }

@@ -56,7 +56,7 @@ namespace Runnatics.Models.Data.Entities
         public DateTime? ProcessedAt { get; set; }
 
         [MaxLength(20)]
-        public string SourceType { get; set; } = "file_upload"; // file_upload, live_sync, manual
+        public string SourceType { get; set; } = "file_upload"; // file_upload, online_webhook
 
         public string? Notes { get; set; }
 

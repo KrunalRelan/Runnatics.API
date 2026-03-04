@@ -128,6 +128,15 @@ builder.Services.AddCors(options =>
             .AllowAnyMethod();
         // NO .AllowCredentials() here, because that conflicts with AllowAnyOrigin
     });
+
+    // SignalR requires AllowCredentials — must specify origin explicitly (no wildcard)
+    options.AddPolicy("SignalR", policy =>
+    {
+        policy.WithOrigins("http://localhost:3000")  // React dev URL
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
 });
 
 // HttpContext accessor

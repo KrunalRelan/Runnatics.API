@@ -370,6 +370,7 @@ namespace Runnatics.Services
                             x.Participant,
                             Status = r != null ? r.Status : null,
                             OverallRank = r != null ? r.OverallRank : (int?)null,
+                            GunTime = r != null ? r.GunTime : (long?)null,
                             // Sort priority: Finished=0, DNF=1, DNS=2, No result=3
                             StatusOrder = r == null ? 3 :
                                 r.Status == "Finished" ? 0 :
@@ -377,10 +378,10 @@ namespace Runnatics.Services
                                 r.Status == "DNS" ? 2 : 3
                         });
 
-                // Apply sorting: Status priority first, then by OverallRank within Finished, then by Bib for others
+                // Apply sorting: Status priority first, then by GunTime asc within each group, then by Bib
                 var orderedQuery = joinedQuery
                     .OrderBy(x => x.StatusOrder)
-                    .ThenBy(x => x.OverallRank ?? int.MaxValue)
+                    .ThenBy(x => x.GunTime ?? long.MaxValue)
                     .ThenBy(x => x.Participant.BibNumber);
 
                 // Get total count for pagination

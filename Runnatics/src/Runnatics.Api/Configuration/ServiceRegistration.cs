@@ -5,6 +5,7 @@ using Runnatics.Configuration;
 using Runnatics.Hubs;
 using Runnatics.Models.Client.Configuration;
 using Runnatics.Services;
+using BibMappingHub = Runnatics.Hubs.BibMappingHub;
 
 namespace Runnatics.Configuration;
 
@@ -53,6 +54,7 @@ public static class ServiceRegistration
     public static WebApplication MapRfidHubs(this WebApplication app)
     {
         app.MapHub<RaceHub>("/hubs/race").RequireCors("SignalR");
+        app.MapHub<BibMappingHub>("/hubs/bib-mapping").RequireCors("SignalR");
         return app;
     }
 }

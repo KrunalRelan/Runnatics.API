@@ -1,0 +1,82 @@
+{
+  "name": "runnatics-dotnet",
+  "version": "1.0.0",
+  "description": "Claude Code plugin for Runnatics.API — a .NET 10 race timing management system with N-Layer architecture, EF Core, SignalR, and multi-tenant support.",
+  "author": "Runnatics",
+  "repository": "https://github.com/KrunalRelan/Runnatics.API",
+
+  "architecture": {
+    "style": "N-Layer",
+    "layers": {
+      "Domain":         "Runnatics.Models.Data — Entities, AuditProperties, PagingList",
+      "Application":    "Runnatics.Services / Runnatics.Services.Interface — Business logic, AutoMapper, SignalR hubs",
+      "Infrastructure": "Runnatics.Data.EF / Runnatics.Repositories.EF / Runnatics.Infrastructure — DbContext, GenericRepository, UnitOfWork, EncryptionService",
+      "API":            "Runnatics.Api — Controllers, Program.cs, ServiceRegistration"
+    },
+    "orm": "EF Core with IEntityTypeConfiguration — NO migrations, use Database.EnsureCreated()",
+    "database": "Azure SQL",
+    "realtime": "SignalR (RaceHub at /hubs/race)",
+    "auth": "JWT Bearer with multi-tenant claims (tenantId, sub, role)",
+    "patterns": [
+      "Generic Repository (IGenericRepository<T> / GenericRepository<T>)",
+      "Unit of Work (IUnitOfWork<C> / UnitOfWork<C>)",
+      "Owned Entity (AuditProperties on every entity)",
+      "ID Encryption (IEncryptionService — all public IDs are AES-encrypted strings)",
+      "AutoMapper Profiles with IdEncryptor/IdDecryptor converters",
+      "ResponseBase<T> wrapper for all API responses",
+      "ServiceBase<T> with HasError/ErrorMessage pattern"
+    ]
+  },
+
+  "agents": [
+    { "name": "ef-core-agent",  "file": "agents/ef-core-agent.md" },
+    { "name": "backend-agent",  "file": "agents/backend-agent.md" },
+    { "name": "sql-agent",      "file": "agents/sql-agent.md" }
+  ],
+
+  "commands": [
+    { "name": "new-feature", "file": "commands/new-feature.md" },
+    { "name": "review",      "file": "commands/review.md" }
+  ],
+
+  "skills": [
+    { "name": "entity-config", "file": "skills/entity-config/SKILL.md" },
+    { "name": "api-endpoint",  "file": "skills/api-endpoint/SKILL.md" }
+  ],
+
+  "hooks": "hooks/hooks.json",
+
+  "scripts": {
+    "format-backend":  "scripts/format-backend.sh",
+    "guard-sql":       "scripts/guard-sql.sh",
+    "session-start":   "scripts/session-start.sh"
+  },
+
+  "context": {
+    "shared_memory": ".claude/CONTEXT.md",
+    "rule": "Every agent MUST read .claude/CONTEXT.md before starting and write to it after completing any task."
+  },
+
+  "git": {
+    "branch_convention": "feature/{FeatureName}",
+    "main_branch": "master"
+  },
+
+  "key_files": {
+    "dbcontext":        "Runnatics/src/Runnatics.Data.EF/RaceSyncDbContext.cs",
+    "entity_configs":   "Runnatics/src/Runnatics.Data.EF/Config/",
+    "entities":         "Runnatics/src/Runnatics.Models.Data/Entities/",
+    "audit_properties": "Runnatics/src/Runnatics.Models.Data/Common/AuditProperties.cs",
+    "unit_of_work":     "Runnatics/src/Runnatics.Repositories.Interface/IUnitOfWork.cs",
+    "generic_repo":     "Runnatics/src/Runnatics.Repositories.Interface/IGenericRepository.cs",
+    "encryption":       "Runnatics/src/Runnatics.Services/EncryptionService.cs",
+    "mapper_profile":   "Runnatics/src/Runnatics.Services/Mappings/AutoMapperMappingProfile.cs",
+    "program_cs":       "Runnatics/src/Runnatics.Api/Program.cs",
+    "controllers":      "Runnatics/src/Runnatics.Api/Controller/",
+    "services":         "Runnatics/src/Runnatics.Services/",
+    "service_ifaces":   "Runnatics/src/Runnatics.Services.Interface/",
+    "race_hub":         "Runnatics/src/Runnatics.Services/Hubs/RaceHub.cs",
+    "requests":         "Runnatics/src/Runnatics.Models.Client/Requests/",
+    "responses":        "Runnatics/src/Runnatics.Models.Client/Responses/"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "description": "Runnatics plugin hooks — automated guards and session initialization",
+
+  "hooks": [
+    {
+      "name": "session-start",
+      "event": "on_session_start",
+      "description": "Initialize context, verify build, and display project status on session start",
+      "command": "bash runnatics-plugin/scripts/session-start.sh",
+      "timeout_ms": 30000
+    },
+    {
+      "name": "guard-no-ef-migrations",
+      "event": "pre_commit",
+      "description": "Block commits that contain EF Core migration files",
+      "command": "bash runnatics-plugin/scripts/guard-sql.sh",
+      "timeout_ms": 10000
+    },
+    {
+      "name": "format-backend",
+      "event": "pre_commit",
+      "description": "Run dotnet format on staged .cs files before commit",
+      "command": "bash runnatics-plugin/scripts/format-backend.sh",
+      "timeout_ms": 60000
+    }
+  ]
+}

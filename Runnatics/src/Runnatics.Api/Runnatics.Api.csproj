@@ -17,7 +17,15 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+	  <Reference Include="GReaderApi">
+		  <HintPath>lib\GReaderApi.dll</HintPath>
+		  
+	  </Reference>
+	  <None Include="lib\GReaderApi.dll">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </None>
   </ItemGroup>
 
   <ItemGroup>
@@ -29,7 +37,6 @@
     <ProjectReference Include="..\Runnatics.Infrastructure.Interface\Runnatics.Infrastructure.Interface.csproj" />
     <ProjectReference Include="..\Runnatics.Models.Client\Runnatics.Models.Client.csproj" />
   </ItemGroup>
-
   <ItemGroup>
     <Folder Include="Hubs\" />
   </ItemGroup>

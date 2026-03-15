@@ -174,7 +174,7 @@ public class WebhookSimulatorController : ControllerBase
             }
 
             var device = devices[checkpoint.DeviceId];
-            var deviceMac = device.DeviceId ?? "";
+            var deviceMac = device.DeviceMacAddress ?? "";
             var hostname = device.Hostname ?? $"simulated-{device.Id}";
 
             // Format MAC with colons for the webhook payload (R700 sends colons)

@@ -109,7 +109,7 @@ public class TestDataSeederController : ControllerBase
             {
                 var device = new Device
                 {
-                    DeviceId = mac,
+                    DeviceMacAddress = mac,
                     Name = name,
                     Hostname = hostname,     // NEW: Online mode uses this
                     IsOnline = false,
@@ -235,7 +235,7 @@ public class TestDataSeederController : ControllerBase
                 devices = devices.Select(d => new
                 {
                     d.Id,
-                    d.DeviceId,
+                    d.DeviceMacAddress,
                     d.Name,
                     d.Hostname
                 }),

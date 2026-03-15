@@ -371,7 +371,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Hostname, opt => opt.MapFrom(src => src.Hostname))
                 .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceMacAddress, opt => opt.Ignore())
                 .ForMember(dest => dest.IpAddress, opt => opt.Ignore())
                 .ForMember(dest => dest.FirmwareVersion, opt => opt.Ignore())
                 .ForMember(dest => dest.ReaderModel, opt => opt.Ignore())
@@ -385,7 +385,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.Firmware))
                 .ForMember(dest => dest.ReaderModel, opt => opt.MapFrom(src => src.Model))
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceMacAddress, opt => opt.Ignore())
                 .ForMember(dest => dest.Name, opt => opt.Ignore())
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore())
                 .ForMember(dest => dest.Hostname, opt => opt.Ignore())
@@ -463,7 +463,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name ?? $"Checkpoint {src.Id}"))
                 .ForMember(dest => dest.DistanceFromStart, opt => opt.MapFrom(src => src.DistanceFromStart))
                 .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory))
-                .ForMember(dest => dest.DeviceId, opt => opt.MapFrom(src => src.Device != null ? src.Device.DeviceId : string.Empty))
+                .ForMember(dest => dest.DeviceId, opt => opt.MapFrom(src => src.Device != null ? src.Device.DeviceMacAddress : string.Empty))
                 .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty));
 
             // Participant to RaceParticipantResultResponse (basic mapping, times calculated in service)

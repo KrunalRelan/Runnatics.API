@@ -62,7 +62,7 @@ public class RaceReaderService
         var deviceRepo = _repository.GetRepository<Device>();
 
         var existing = await deviceRepo.GetQuery(d =>
-                d.DeviceId == macRaw &&
+                d.DeviceMacAddress == macRaw &&
                 d.AuditProperties.IsActive &&
                 !d.AuditProperties.IsDeleted)
             .FirstOrDefaultAsync();
@@ -84,7 +84,7 @@ public class RaceReaderService
 
         var device = _mapper.Map<Device>(request);
         _mapper.Map(status.Reader, device);
-        device.DeviceId = macRaw;
+        device.DeviceMacAddress = macRaw;
         device.IsOnline = true;
         device.LastSeenAt = DateTime.UtcNow;
         device.AuditProperties = new AuditProperties
@@ -358,7 +358,7 @@ public class RaceReaderService
         {
             DeviceId = device.Id,
             Hostname = device.Hostname ?? "",
-            MacAddress = device.DeviceId ?? "",
+            MacAddress = device.DeviceMacAddress ?? "",
             IpAddress = device.IpAddress,
             FirmwareVersion = device.FirmwareVersion,
             ReaderModel = device.ReaderModel ?? "",

@@ -60,6 +60,24 @@ namespace Runnatics.Services
 
                 var eventId = race.EventId;
 
+                // Resolve the event's display timezone for response times
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventTimeZoneId = await eventRepo
+                    .GetQuery(e => e.Id == eventId)
+                    .AsNoTracking()
+                    .Select(e => e.TimeZone)
+                    .FirstOrDefaultAsync(cancellationToken) ?? "Asia/Kolkata";
+
+                TimeZoneInfo displayTz;
+                try
+                {
+                    displayTz = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZoneId);
+                }
+                catch (TimeZoneNotFoundException)
+                {
+                    displayTz = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+                }
+
                 // Check if EPC is already assigned to another participant in this event
                 var existingEpcAssignment = await assignmentRepo
                     .GetQuery(a => a.Chip.EPC == request.Epc
@@ -163,18 +181,14 @@ namespace Runnatics.Services
                     "BIB mapping created: EPC={Epc}, BIB={Bib}, ParticipantId={ParticipantId}, ChipId={ChipId}, EventId={EventId}",
                     request.Epc, request.BibNumber, participant.Id, chip.Id, eventId);
 
-                return new BibMappingResponse
+                assignment.Chip = chip;
+                assignment.Participant = participant;
+
+                return _mapper.Map<BibMappingResponse>(assignment, opts =>
                 {
-                    ChipId = _encryptionService.Encrypt(chip.Id.ToString()),
-                    ParticipantId = _encryptionService.Encrypt(participant.Id.ToString()),
-                    RaceId = request.RaceId,
-                    EventId = _encryptionService.Encrypt(eventId.ToString()),
-                    BibNumber = request.BibNumber,
-                    Epc = request.Epc,
-                    ParticipantName = participant.FullName,
-                    AssignedAt = assignment.AssignedAt,
-                    CreatedAt = assignment.AuditProperties.CreatedDate
-                };
+                    opts.Items["DisplayTz"] = displayTz;
+                    opts.Items["RaceId"] = request.RaceId;
+                });
             }
             catch (Exception ex)
             {
@@ -201,8 +215,27 @@ namespace Runnatics.Services
                     return [];
                 }
 
+                // Resolve the event's display timezone
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventTimeZoneId = await eventRepo
+                    .GetQuery(e => e.Id == race.EventId)
+                    .AsNoTracking()
+                    .Select(e => e.TimeZone)
+                    .FirstOrDefaultAsync(cancellationToken) ?? "Asia/Kolkata";
+
+                TimeZoneInfo displayTz;
+                try
+                {
+                    displayTz = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZoneId);
+                }
+                catch (TimeZoneNotFoundException)
+                {
+                    _logger.LogWarning("Event {EventId} has unknown timezone '{TZ}', falling back to Asia/Kolkata", race.EventId, eventTimeZoneId);
+                    displayTz = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+                }
+
                 var assignmentRepo = _repository.GetRepository<ChipAssignment>();
-                var assignments = await assignmentRepo
+                var rawAssignments = await assignmentRepo
                     .GetQuery(
                         a => a.EventId == race.EventId
                             && a.Participant.RaceId == decryptedRaceId
@@ -210,21 +243,13 @@ namespace Runnatics.Services
                             && !a.AuditProperties.IsDeleted,
                         includeNavigationProperties: true)
                     .AsNoTracking()
-                    .Select(a => new BibMappingResponse
-                    {
-                        ChipId = _encryptionService.Encrypt(a.ChipId.ToString()),
-                        ParticipantId = _encryptionService.Encrypt(a.ParticipantId.ToString()),
-                        RaceId = encryptedRaceId,
-                        EventId = _encryptionService.Encrypt(a.EventId.ToString()),
-                        BibNumber = a.Participant.BibNumber ?? "",
-                        Epc = a.Chip.EPC,
-                        ParticipantName = a.Participant.FirstName + " " + a.Participant.LastName,
-                        AssignedAt = a.AssignedAt,
-                        CreatedAt = a.AuditProperties.CreatedDate
-                    })
                     .ToListAsync(cancellationToken);
 
-                return assignments;
+                return _mapper.Map<List<BibMappingResponse>>(rawAssignments, opts =>
+                {
+                    opts.Items["DisplayTz"] = displayTz;
+                    opts.Items["RaceId"] = encryptedRaceId;
+                });
             }
             catch (Exception ex)
             {

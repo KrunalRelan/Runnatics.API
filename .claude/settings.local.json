@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(cd:*)",
+      "Read(//tmp/**)",
+      "Bash(dotnet add:*)",
+      "Bash(dotnet run:*)",
+      "Bash(echo:*)"
+    ]
+  }
+}

@@ -11,6 +11,7 @@ using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Client.Responses.Results;
+using Runnatics.Models.Client.Responses.BibMapping;
 using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
@@ -352,8 +353,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.RaceId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.RaceId))
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
                 .ForMember(dest => dest.DistanceFromStart, opt => opt.MapFrom(src => src.DistanceFromStart))
-                // FIX: Using NullableIdEncryptor for DeviceId since it's now nullable
-                .ForMember(dest => dest.DeviceId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.DeviceId))
+                .ForMember(dest => dest.DeviceId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.DeviceId))
                 .ForMember(dest => dest.ParentDeviceId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.ParentDeviceId))
                 .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory))
                 // Device names from navigation properties (consolidated from duplicate mapping)
@@ -365,6 +365,34 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name));
 
+            // RegisterDeviceRequest → Device (name, hostname, tenantId on create/update)
+            CreateMap<RegisterDeviceRequest, Device>()
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.DeviceName))
+                .ForMember(dest => dest.Hostname, opt => opt.MapFrom(src => src.Hostname))
+                .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.IpAddress, opt => opt.Ignore())
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.Ignore())
+                .ForMember(dest => dest.ReaderModel, opt => opt.Ignore())
+                .ForMember(dest => dest.IsOnline, opt => opt.Ignore())
+                .ForMember(dest => dest.LastSeenAt, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore());
+
+            // R700ReaderInfo → Device (reader hardware details on create/update)
+            CreateMap<R700ReaderInfo, Device>()
+                .ForMember(dest => dest.IpAddress, opt => opt.MapFrom(src => src.IpAddress))
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.Firmware))
+                .ForMember(dest => dest.ReaderModel, opt => opt.MapFrom(src => src.Model))
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.Name, opt => opt.Ignore())
+                .ForMember(dest => dest.TenantId, opt => opt.Ignore())
+                .ForMember(dest => dest.Hostname, opt => opt.Ignore())
+                .ForMember(dest => dest.IsOnline, opt => opt.Ignore())
+                .ForMember(dest => dest.LastSeenAt, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore());
+
             CreateMap<CheckpointRequest, Checkpoint>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.EventId, opt => opt.Ignore())
@@ -373,22 +401,10 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.ParentDeviceId, opt => opt.Ignore())
                 .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory));
 
-            //CreateMap<Checkpoint, CheckpointResponse>()
-            //    .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
-            //    .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
-            //    .ForMember(dest => dest.RaceId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.RaceId))
-            //    .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
-            //    .ForMember(dest => dest.DistanceFromStart, opt => opt.MapFrom(src => src.DistanceFromStart))
-            //    .ForMember(dest => dest.DeviceId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.DeviceId))
-            //    .ForMember(dest => dest.ParentDeviceId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.ParentDeviceId))
-            //    .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory))
-            //    .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty))
-            //    .ForMember(dest => dest.ParentDeviceName, opt => opt.MapFrom(src => src.ParentDevice != null ? src.ParentDevice.Name : string.Empty));
-
-            // Map device names from navigation properties
-            CreateMap<Checkpoint, CheckpointResponse>()
-                .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty))
-                .ForMember(dest => dest.ParentDeviceName, opt => opt.MapFrom(src => src.ParentDevice != null ? src.ParentDevice.Name : string.Empty));
+            // NOTE: Duplicate CreateMap<Checkpoint, CheckpointResponse> removed.
+            // The consolidated mapping at line 349 already includes DeviceName and ParentDeviceName.
+            // A second CreateMap for the same types causes AutoMapper to override the first (last-wins),
+            // which was dropping all IdEncryptor mappings and causing 500 errors.
 
             #endregion Checkpoint
 
@@ -497,7 +513,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.AveragePaceFormatted, opt => opt.Ignore()) // Calculated in service
                 .ForMember(dest => dest.Splits, opt => opt.Ignore()); // Loaded separately in service
 
-            CreateMap<SplitTimes, SplitTimeInfo>()
+            CreateMap<SplitTimes, Runnatics.Models.Client.Responses.Results.SplitTimeInfo>()
                 .ForMember(dest => dest.CheckpointId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.CheckpointId))
                 .ForMember(dest => dest.CheckpointName, opt => opt.MapFrom(src => src.Checkpoint.Name ?? $"CP{src.Checkpoint.DistanceFromStart}km"))
                 .ForMember(dest => dest.DistanceKm, opt => opt.MapFrom(src => src.Checkpoint.DistanceFromStart))
@@ -512,6 +528,98 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.CategoryRank, opt => opt.MapFrom(src => src.CategoryRank));
 
             #endregion Leaderboard Mappings
+
+            #region Participant Details Mappings
+
+            CreateMap<Participant, ParticipantDetailsResponse>()
+                .ForMember(d => d.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(d => d.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
+                .ForMember(d => d.EventName, opt => opt.MapFrom(src => src.Event != null ? src.Event.Name : null))
+                .ForMember(d => d.RaceId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.RaceId))
+                .ForMember(d => d.RaceName, opt => opt.MapFrom(src => src.Race != null ? src.Race.Title : null))
+                .ForMember(d => d.RaceDistance, opt => opt.MapFrom(src => src.Race != null ? src.Race.Distance : null))
+                .ForMember(d => d.StartTime, opt => opt.MapFrom(src => src.Race != null ? src.Race.StartTime : null))
+                .ForMember(d => d.Club, opt => opt.Ignore())
+                .ForMember(d => d.ChipTime, opt => opt.Ignore())
+                .ForMember(d => d.GunTime, opt => opt.Ignore())
+                .ForMember(d => d.FinishTime, opt => opt.Ignore())
+                .ForMember(d => d.Performance, opt => opt.Ignore())
+                .ForMember(d => d.Rankings, opt => opt.Ignore())
+                .ForMember(d => d.CheckpointTimes, opt => opt.Ignore())
+                .ForMember(d => d.SplitTimes, opt => opt.Ignore())
+                .ForMember(d => d.PaceProgression, opt => opt.Ignore())
+                .ForMember(d => d.Epc, opt => opt.Ignore())
+                .ForMember(d => d.RfidReadings, opt => opt.Ignore())
+                .ForMember(d => d.ProcessingNotes, opt => opt.Ignore());
+
+            CreateMap<SplitTimes, Runnatics.Models.Client.Responses.Participants.SplitTimeInfo>()
+                .ForMember(d => d.CheckpointId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.ToCheckpointId))
+                .ForMember(d => d.CheckpointName, opt => opt.MapFrom(src => src.ToCheckpoint != null ? src.ToCheckpoint.Name : null))
+                .ForMember(d => d.DistanceKm, opt => opt.MapFrom(src => src.ToCheckpoint != null ? (decimal?)src.ToCheckpoint.DistanceFromStart : src.Distance))
+                .ForMember(d => d.Distance, opt => opt.MapFrom(src => src.ToCheckpoint != null ? $"{src.ToCheckpoint.DistanceFromStart} km" : null))
+                .ForMember(d => d.OverallRank, opt => opt.MapFrom(src => src.Rank))
+                .ForMember(d => d.GenderRank, opt => opt.MapFrom(src => src.GenderRank))
+                .ForMember(d => d.CategoryRank, opt => opt.MapFrom(src => src.CategoryRank))
+                .ForMember(d => d.SplitTime, opt => opt.Ignore())
+                .ForMember(d => d.CumulativeTime, opt => opt.Ignore())
+                .ForMember(d => d.Pace, opt => opt.Ignore())
+                .ForMember(d => d.PaceValue, opt => opt.Ignore())
+                .ForMember(d => d.Speed, opt => opt.Ignore());
+
+            CreateMap<SplitTimes, PaceProgressionInfo>()
+                .ForMember(d => d.DistanceKm, opt => opt.MapFrom(src => src.ToCheckpoint != null ? (decimal?)src.ToCheckpoint.DistanceFromStart : src.Distance))
+                .ForMember(d => d.Segment, opt => opt.Ignore())
+                .ForMember(d => d.Pace, opt => opt.Ignore())
+                .ForMember(d => d.PaceValue, opt => opt.Ignore())
+                .ForMember(d => d.Speed, opt => opt.Ignore())
+                .ForMember(d => d.SplitTime, opt => opt.Ignore())
+                .ForMember(d => d.PaceChangeDirection, opt => opt.Ignore())
+                .ForMember(d => d.PaceChangePercent, opt => opt.Ignore());
+
+            CreateMap<ReadNormalized, RfidReadingDetail>()
+                .ForMember(d => d.ReadingId, opt => opt.MapFrom(src => src.Id))
+                .ForMember(d => d.ReadTimeUtc, opt => opt.MapFrom(src => src.ChipTime))
+                .ForMember(d => d.ReadTimeLocal, opt => opt.Ignore()) // Converted in service using event timezone
+                .ForMember(d => d.CheckpointName, opt => opt.MapFrom(src =>
+                    src.Checkpoint != null ? src.Checkpoint.Name : null))
+                .ForMember(d => d.DeviceName, opt => opt.MapFrom(src =>
+                    src.Checkpoint != null && src.Checkpoint.Device != null
+                        ? src.Checkpoint.Device.Name
+                        : null))
+                .ForMember(d => d.GunTimeMs, opt => opt.MapFrom(src => src.GunTime))
+                .ForMember(d => d.GunTimeFormatted, opt => opt.Ignore()) // Formatted in service
+                .ForMember(d => d.NetTimeMs, opt => opt.MapFrom(src => src.NetTime))
+                .ForMember(d => d.NetTimeFormatted, opt => opt.Ignore()) // Formatted in service
+                .ForMember(d => d.ChipId, opt => opt.Ignore()) // Set in service from ChipAssignment
+                .ForMember(d => d.IsManualEntry, opt => opt.MapFrom(src => src.IsManualEntry))
+                .ForMember(d => d.Notes, opt => opt.MapFrom(src => src.ManualEntryReason));
+
+            #endregion Participant Details Mappings
+
+            #region BibMapping mappings
+
+            CreateMap<ChipAssignment, BibMappingResponse>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.ChipId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.ChipId))
+                .ForMember(dest => dest.ParticipantId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.ParticipantId))
+                .ForMember(dest => dest.EventId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventId))
+                .ForMember(dest => dest.Epc, opt => opt.MapFrom(src => src.Chip.EPC))
+                .ForMember(dest => dest.BibNumber, opt => opt.MapFrom(src => src.Participant.BibNumber ?? string.Empty))
+                .ForMember(dest => dest.ParticipantName, opt => opt.MapFrom(src => src.Participant.FullName))
+                .ForMember(dest => dest.RaceId, opt => opt.MapFrom((src, dest, destMember, ctx) =>
+                    ctx.Items.TryGetValue("RaceId", out var raceId) ? (string)raceId! : string.Empty))
+                .ForMember(dest => dest.AssignedAt, opt => opt.MapFrom((src, dest, destMember, ctx) =>
+                {
+                    var tz = ctx.Items.TryGetValue("DisplayTz", out var tzObj) ? (TimeZoneInfo)tzObj! : TimeZoneInfo.Utc;
+                    return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(src.AssignedAt, DateTimeKind.Utc), tz);
+                }))
+                .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom((src, dest, destMember, ctx) =>
+                {
+                    var tz = ctx.Items.TryGetValue("DisplayTz", out var tzObj) ? (TimeZoneInfo)tzObj! : TimeZoneInfo.Utc;
+                    return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(src.AuditProperties.CreatedDate, DateTimeKind.Utc), tz);
+                }));
+
+            #endregion BibMapping mappings
         }
     }
 }

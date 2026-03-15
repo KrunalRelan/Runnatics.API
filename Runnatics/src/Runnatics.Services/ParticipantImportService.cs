@@ -10,6 +10,7 @@ using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
+using Runnatics.Services.Helpers;
 using System.Linq.Expressions;
 using System.Text;
 
@@ -369,6 +370,7 @@ namespace Runnatics.Services
                             x.Participant,
                             Status = r != null ? r.Status : null,
                             OverallRank = r != null ? r.OverallRank : (int?)null,
+                            GunTime = r != null ? r.GunTime : (long?)null,
                             // Sort priority: Finished=0, DNF=1, DNS=2, No result=3
                             StatusOrder = r == null ? 3 :
                                 r.Status == "Finished" ? 0 :
@@ -376,10 +378,10 @@ namespace Runnatics.Services
                                 r.Status == "DNS" ? 2 : 3
                         });
 
-                // Apply sorting: Status priority first, then by OverallRank within Finished, then by Bib for others
+                // Apply sorting: Status priority first, then by GunTime asc within each group, then by Bib
                 var orderedQuery = joinedQuery
                     .OrderBy(x => x.StatusOrder)
-                    .ThenBy(x => x.OverallRank ?? int.MaxValue)
+                    .ThenBy(x => x.GunTime ?? long.MaxValue)
                     .ThenBy(x => x.Participant.BibNumber);
 
                 // Get total count for pagination
@@ -515,6 +517,24 @@ namespace Runnatics.Services
                     "Found {TotalResults} results for {TotalParticipants} participants",
                     results.Count, participantIds.Count);
 
+                // Resolve the event's display timezone once before the participant loop
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventTimeZoneId = await eventRepo.GetQuery(e => e.Id == eventId)
+                    .AsNoTracking()
+                    .Select(e => e.TimeZone)
+                    .FirstOrDefaultAsync() ?? "UTC";
+
+                TimeZoneInfo displayTimeZone;
+                try
+                {
+                    displayTimeZone = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZoneId);
+                }
+                catch (TimeZoneNotFoundException)
+                {
+                    _logger.LogWarning("Event {EventId} has unknown timezone '{TZ}', falling back to UTC", eventId, eventTimeZoneId);
+                    displayTimeZone = TimeZoneInfo.Utc;
+                }
+
                 // Populate checkpoint times, chip IDs, and results for each participant
                 foreach (var participant in participants)
                 {
@@ -585,17 +605,15 @@ namespace Runnatics.Services
                         .GroupBy(r => r.CheckpointId)
                         .ToDictionary(g => g.Key, g => g.OrderBy(r => r.ChipTime).First()); // Keep earliest if multiple
 
-                    // Add checkpoint times (converted to IST)
-                    var istTimeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                    // Add checkpoint times (converted to event's timezone)
                     foreach (var checkpoint in checkpoints)
                     {
                         var checkpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}";
 
                         if (readingsByCheckpoint.TryGetValue(checkpoint.Id, out var reading))
                         {
-                            // Convert UTC to IST and format time as HH:mm:ss
-                            var istTime = TimeZoneInfo.ConvertTimeFromUtc(reading.ChipTime, istTimeZone);
-                            participant.CheckpointTimes[checkpointName] = istTime.ToString("HH:mm:ss");
+                            var localTime = TimeZoneInfo.ConvertTimeFromUtc(reading.ChipTime, displayTimeZone);
+                            participant.CheckpointTimes[checkpointName] = localTime.ToString("HH:mm:ss");
                         }
                         else
                         {
@@ -703,7 +721,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task EditParticipant(string participantId, ParticipantRequest editParticipant)
+        public async Task EditParticipant(String participantId, ParticipantRequest editParticipant)
         {
             try
             {
@@ -787,7 +805,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task DeleteParicipant(string participantId)
+        public async Task DeleteParicipant(String participantId)
         {
             try
             {
@@ -838,7 +856,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<List<Category>> GetCategories(string eventId, string raceId)
+        public async Task<List<Category>> GetCategories(String eventId, String raceId)
         {
             try
             {
@@ -1594,5 +1612,95 @@ namespace Runnatics.Services
              { "CreatedAt", "AuditProperties.CreatedDate" },
              { "UpdatedAt", "AuditProperties.UpdatedDate" }
         };
+
+        /// <summary>
+        /// Get detailed participant information including performance, rankings, split times and pace progression
+        /// </summary>
+        public async Task<ParticipantDetailsResponse?> GetParticipantDetails(string eventId, string raceId, string participantId)
+        {
+            try
+            {
+                var tenantId = _userContext.TenantId;
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+
+                _logger.LogInformation(
+                    "Getting participant details for ParticipantId: {ParticipantId}, EventId: {EventId}, RaceId: {RaceId}",
+                    decryptedParticipantId, decryptedEventId, decryptedRaceId);
+
+                // Get participant with related data
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var participant = await participantRepo.GetQuery(p =>
+                    p.Id == decryptedParticipantId &&
+                    p.EventId == decryptedEventId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.TenantId == tenantId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .Include(p => p.Event)
+                    .Include(p => p.Race)
+                    .Include(p => p.Result)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found";
+                    _logger.LogWarning("Participant {ParticipantId} not found for Event {EventId}", 
+                        decryptedParticipantId, decryptedEventId);
+                    return null;
+                }
+
+                // Get split times with checkpoint info
+                var splitTimeRepo = _repository.GetRepository<SplitTimes>();
+                var splitTimes = await splitTimeRepo.GetQuery(st =>
+                    st.ParticipantId == decryptedParticipantId &&
+                    !st.AuditProperties.IsDeleted)
+                    .Include(st => st.ToCheckpoint)
+                    .OrderBy(st => st.ToCheckpoint.DistanceFromStart)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // Get total counts for rankings
+                var resultRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                var totalParticipantsInRace = await resultRepo.CountAsync(r =>
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == "Finished" &&
+                    !r.AuditProperties.IsDeleted);
+
+                var totalInGender = await resultRepo.CountAsync(r =>
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == "Finished" &&
+                    r.Participant.Gender == participant.Gender &&
+                    !r.AuditProperties.IsDeleted);
+
+                var totalInCategory = await resultRepo.CountAsync(r =>
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == "Finished" &&
+                    r.Participant.AgeCategory == participant.AgeCategory &&
+                    !r.AuditProperties.IsDeleted);
+
+                // Build response using helper
+                var responseBuilder = new ParticipantDetailsResponseBuilder(_mapper);
+                var response = responseBuilder.BuildResponse(
+                    participant,
+                    splitTimes,
+                    totalParticipantsInRace,
+                    totalInGender,
+                    totalInCategory);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error getting participant details: {ex.Message}";
+                _logger.LogError(ex, "Error getting participant details for {ParticipantId}", participantId);
+                return null;
+            }
+        }
     }
 }

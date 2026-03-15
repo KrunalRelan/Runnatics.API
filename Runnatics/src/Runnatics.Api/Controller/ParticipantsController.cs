@@ -255,6 +255,51 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Get detailed participant information including performance, rankings, split times and pace progression
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/participant/{participantId}/details")]
+        [ProducesResponseType(typeof(ResponseBase<ParticipantDetailsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetParticipantDetails(
+            [FromRoute] string eventId,
+            [FromRoute] string raceId,
+            [FromRoute] string participantId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(participantId))
+            {
+                return BadRequest(new { error = "Event ID, Race ID, and Participant ID are required." });
+            }
+
+            var response = new ResponseBase<ParticipantDetailsResponse>();
+            var result = await _service.GetParticipantDetails(eventId, raceId, participantId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<ParticipantDetailsResponse>.ErrorData()
+                {
+                    Message = _service.ErrorMessage
+                };
+
+                if (_service.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                {
+                    return NotFound(response);
+                }
+
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            if (result == null)
+            {
+                return NotFound(new { error = "Participant not found." });
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
         /// Add participants with bib numbers in a specified range
         /// </summary>
         [HttpPost("{eventId}/{raceId}/add-participant-range")]

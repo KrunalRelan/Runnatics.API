@@ -51,6 +51,8 @@ namespace Runnatics.Models.Data.Entities
         public virtual Event Event { get; set; } = null!;
         public virtual Participant Participant { get; set; } = null!;
         public virtual Checkpoint Checkpoint { get; set; } = null!;
+        public virtual Checkpoint FromCheckpoint { get; set; } = null!;
+        public virtual Checkpoint ToCheckpoint { get; set; } = null!;
         public virtual ReadNormalized? ReadNormalized { get; set; }
     }
 }

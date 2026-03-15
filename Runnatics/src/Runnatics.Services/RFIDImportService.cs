@@ -2888,10 +2888,27 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                // EPC → Participant lookup
-                var epcToParticipant = chipAssignments
-                    .Where(ca => ca.Chip != null && !string.IsNullOrEmpty(ca.Chip.EPC))
-                    .ToDictionary(ca => ca.Chip.EPC, ca => ca.Participant);
+                // EPC → Participant lookup (guard against duplicate active assignments for the same chip)
+                var epcToParticipant = new Dictionary<string, Participant>();
+                foreach (var ca in chipAssignments.Where(ca => ca.Chip != null && !string.IsNullOrEmpty(ca.Chip.EPC)))
+                {
+                    if (epcToParticipant.ContainsKey(ca.Chip.EPC))
+                    {
+                        // Same chip assigned to multiple participants without being unassigned first.
+                        // Keep the most recently assigned one.
+                        var existing = chipAssignments.First(x => x.Chip?.EPC == ca.Chip.EPC && x.Participant.Id == epcToParticipant[ca.Chip.EPC].Id);
+                        if (ca.AssignedAt > existing.AssignedAt)
+                            epcToParticipant[ca.Chip.EPC] = ca.Participant;
+                        _logger.LogWarning(
+                            "Duplicate active ChipAssignment for EPC {Epc}: assigned to Participants {P1} and {P2}. " +
+                            "Using most recent (Participant {Winner}). Resolve data integrity issue in ChipAssignments.",
+                            ca.Chip.EPC, epcToParticipant[ca.Chip.EPC].Id, ca.Participant.Id, epcToParticipant[ca.Chip.EPC].Id);
+                    }
+                    else
+                    {
+                        epcToParticipant[ca.Chip.EPC] = ca.Participant;
+                    }
+                }
 
                 _logger.LogInformation("Loaded {Count} EPC→Participant mappings", epcToParticipant.Count);
 
@@ -2905,9 +2922,12 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                var deviceSerialToId = devices
-                    .Where(d => !string.IsNullOrEmpty(d.DeviceId))
-                    .ToDictionary(d => d.DeviceId!, d => d.Id);
+                var deviceSerialToId = new Dictionary<string, int>();
+                foreach (var d in devices.Where(d => !string.IsNullOrEmpty(d.DeviceId)))
+                {
+                    if (!deviceSerialToId.TryAdd(d.DeviceId!, d.Id))
+                        _logger.LogWarning("Duplicate DeviceId {DeviceId} found across Device records. Using first occurrence.", d.DeviceId);
+                }
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 var allCheckpoints = await checkpointRepo.GetQuery(cp =>

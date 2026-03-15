@@ -2,12 +2,15 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Runnatics.Configuration;
 using Runnatics.Data.EF;
 using Runnatics.Repositories.EF;
 using Runnatics.Repositories.Interface;
+using FluentValidation;
 using Runnatics.Services;
 using Runnatics.Services.Interface;
 using Runnatics.Services.Mappings;
+using Runnatics.Services.Validators;
 using System.Text;
 using System.Text.Json.Serialization;
 
@@ -127,6 +130,15 @@ builder.Services.AddCors(options =>
             .AllowAnyMethod();
         // NO .AllowCredentials() here, because that conflicts with AllowAnyOrigin
     });
+
+    // SignalR requires AllowCredentials — must specify origin explicitly (no wildcard)
+    options.AddPolicy("SignalR", policy =>
+    {
+        policy.WithOrigins("http://localhost:3000", "http://localhost:5173")  // React dev URLs
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
 });
 
 // HttpContext accessor
@@ -160,9 +172,28 @@ builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<ICertificatesService, CertificatesService>();
 builder.Services.AddScoped<IRFIDImportService, RFIDImportService>();
 builder.Services.AddScoped<IResultsService, ResultsService>();
+builder.Services.AddScoped<IBibMappingService, BibMappingService>();
+
+// FluentValidation
+builder.Services.AddValidatorsFromAssemblyContaining<CreateBibMappingValidator>();
+
+// RFID Reader Background Service
+// Development: mock service fires fake EPCs every 10s (no hardware needed)
+// Production: real GReaderApi TCP connection to physical reader
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddHostedService<MockRfidReaderService>();
+}
+else
+{
+    builder.Services.AddHostedService<RfidReaderService>();
+}
 
 // Add Encryption Service
 builder.Services.AddEncryptionService(builder.Configuration);
+
+// RFID Online Integration (SignalR hubs + online tag ingestion)
+builder.Services.AddRfidOnlineIntegration(builder.Configuration);
 
 // AutoMapper
 builder.Services.AddAutoMapper(typeof(AutoMapperMappingProfile));
@@ -211,6 +242,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapRfidHubs();
 app.MapHealthChecks("/health");
 
 // (Optional) seeding

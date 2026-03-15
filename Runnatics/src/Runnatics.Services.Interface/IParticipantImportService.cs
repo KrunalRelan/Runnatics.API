@@ -36,5 +36,10 @@ namespace Runnatics.Services.Interface
         Task<List<Category>> GetCategories(string eventId, string raceId);
 
         Task<AddParticipantRangeResponse> AddParticipantRangeAsync(string eventId, string raceId, AddParticipantRangeRequest request);
+
+        /// <summary>
+        /// Get detailed participant information including performance, rankings, split times and pace progression
+        /// </summary>
+        Task<ParticipantDetailsResponse?> GetParticipantDetails(string eventId, string raceId, string participantId);
     }
 }

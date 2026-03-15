@@ -1,4 +1,5 @@
-﻿using Runnatics.Models.Client.Responses;
+﻿using Runnatics.Models.Client.Requests.Devices;
+using Runnatics.Models.Client.Responses;
 
 namespace Runnatics.Services.Interface
 {
@@ -6,9 +7,9 @@ namespace Runnatics.Services.Interface
     {
         Task<List<DevicesResponse>> GetAllDevices();
 
-        Task<bool> Create(string name);
+        Task<bool> Create(DeviceRequest request);
 
-        Task<bool> Update(string deviceId, string name);
+        Task<bool> Update(string deviceId, DeviceRequest request);
 
         Task<bool> Delete(string deviceId);
 

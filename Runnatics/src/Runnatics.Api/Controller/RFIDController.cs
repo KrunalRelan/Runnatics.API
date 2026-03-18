@@ -331,7 +331,7 @@ namespace Runnatics.Api.Controller
             {
                 response.Error = new ResponseBase<AssignCheckpointsResponse>.ErrorData
                 {
-                    Message = _service.ErrorMessage ?? result.ErrorMessage
+                    Message = _service.ErrorMessage ?? result.ErrorMessage ?? "An error occurred"
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
@@ -365,7 +365,7 @@ namespace Runnatics.Api.Controller
             {
                 response.Error = new ResponseBase<CreateSplitTimesResponse>.ErrorData
                 {
-                    Message = _service.ErrorMessage ?? result.ErrorMessage
+                    Message = _service.ErrorMessage ?? result.ErrorMessage ?? "An error occurred"
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }

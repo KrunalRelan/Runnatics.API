@@ -14,7 +14,8 @@ namespace Runnatics.Data.EF.Config
              .ValueGeneratedOnAdd();
 
             // Properties
-            builder.Property(e => e.DeviceMacAddress)
+            builder.Property(e => e.DeviceId)
+                .HasColumnName("DeviceMacAddress")
                 .HasMaxLength(100)
                 .IsRequired(false);
 

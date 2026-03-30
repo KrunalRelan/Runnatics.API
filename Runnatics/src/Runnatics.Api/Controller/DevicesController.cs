@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
+using Runnatics.Models.Client.Requests.Devices;
 using Runnatics.Models.Client.Responses;
 using Runnatics.Services;
 using Runnatics.Services.Interface;
@@ -15,15 +16,15 @@ namespace Runnatics.Api.Controller
         private readonly IDevicesService _service = service;
 
         /// <summary>
-        /// Create event organizer
+        /// Create device
         /// </summary>
         [HttpPost("create")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        public async Task<IActionResult> Create([FromBody] string name)
+        public async Task<IActionResult> Create([FromBody] DeviceRequest request)
         {
             try
             {
-                var result = await _service.Create(name);
+                var result = await _service.Create(request);
 
                 if (!result)
                 {
@@ -34,7 +35,7 @@ namespace Runnatics.Api.Controller
             }
             catch
             {
-                return StatusCode(500, new { error = "An error occurred while creating event organizer." });
+                return StatusCode(500, new { error = "An error occurred while creating device." });
             }
         }
 
@@ -43,11 +44,11 @@ namespace Runnatics.Api.Controller
         /// </summary>
         [HttpPut("{deviceId}/update")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        public async Task<IActionResult> Update([FromRoute] string deviceId, [FromBody] string name)
+        public async Task<IActionResult> Update([FromRoute] string deviceId, [FromBody] DeviceRequest request)
         {
             try
             {
-                var result = await _service.Update(deviceId, name);
+                var result = await _service.Update(deviceId, request);
 
                 if (!result)
                 {

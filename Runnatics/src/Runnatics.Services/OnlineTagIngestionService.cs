@@ -167,8 +167,8 @@ public class OnlineTagIngestionService
         // CRITICAL: Use the MAC string (Device.DeviceId), NOT device.Id.ToString().
         // This must match what your offline flow stores — the MAC extracted from .db filename.
         // Phase 1.5 resolves devices by looking up this string in Device.DeviceId/Device.Name.
-        var deviceIdForReadings = !string.IsNullOrEmpty(device.DeviceId)
-            ? device.DeviceId
+        var deviceIdForReadings = !string.IsNullOrEmpty(device.DeviceMacAddress)
+            ? device.DeviceMacAddress
             : !string.IsNullOrEmpty(device.Name)
                 ? device.Name
                 : device.Id.ToString();
@@ -218,7 +218,7 @@ public class OnlineTagIngestionService
 
         _logger.LogDebug(
             "Webhook ingested: {Count} readings from {DeviceName} (DeviceId={DeviceId}, MAC={Mac}) into batch {BatchId}",
-            readings.Count, device.Name, deviceIdForReadings, device.DeviceId, batch.Id);
+            readings.Count, device.Name, deviceIdForReadings, device.DeviceMacAddress, batch.Id);
 
         // ── Step 6: Push live crossing events to React ──
         // This is the ONLINE-ONLY addition — immediate visual feedback.
@@ -261,8 +261,8 @@ public class OnlineTagIngestionService
         //
         // Your offline flow stores the MAC extracted from the .db filename (e.g., "00162512dbb0").
         // We must do the same here.
-        var deviceId = !string.IsNullOrEmpty(device.DeviceId)
-            ? device.DeviceId
+        var deviceId = !string.IsNullOrEmpty(device.DeviceMacAddress)
+            ? device.DeviceMacAddress
             : !string.IsNullOrEmpty(device.Name)
                 ? device.Name
                 : device.Id.ToString();
@@ -505,7 +505,7 @@ public class OnlineTagIngestionService
         if (!string.IsNullOrEmpty(macNormalized))
         {
             var device = await deviceRepo.GetQuery(d =>
-                    d.DeviceId == macNormalized &&
+                    d.DeviceMacAddress == macNormalized &&
                     d.TenantId == tenantId &&
                     d.AuditProperties.IsActive &&
                     !d.AuditProperties.IsDeleted)

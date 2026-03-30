@@ -1,15 +1,25 @@
-﻿namespace Runnatics.Models.Client.Responses
+using System.ComponentModel.DataAnnotations;
+
+namespace Runnatics.Models.Client.Requests.Devices
 {
-    public class DevicesResponse
+    public class DeviceRequest
     {
-        public string Id { get; set; } = string.Empty;
+        [Required]
+        [MaxLength(100)]
         public string Name { get; set; } = string.Empty;
+
         public string? DeviceMacAddress { get; set; }
+
+        [MaxLength(100)]
         public string? Hostname { get; set; }
+
+        [MaxLength(45)]
         public string? IpAddress { get; set; }
+
+        [MaxLength(50)]
         public string? FirmwareVersion { get; set; }
+
+        [MaxLength(50)]
         public string? ReaderModel { get; set; }
-        public bool IsOnline { get; set; }
-        public DateTime? LastSeenAt { get; set; }
     }
 }

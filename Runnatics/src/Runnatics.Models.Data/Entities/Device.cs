@@ -8,7 +8,7 @@ namespace Runnatics.Models.Data.Entities
         [Key]
         public int Id { get; set; }
 
-        public string? DeviceId { get; set; }
+        public string? DeviceMacAddress { get; set; }
 
         [Required]
         [MaxLength(100)]

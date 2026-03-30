@@ -1,13 +1,12 @@
-﻿using AutoMapper;
-using Azure.Core;
+using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
+using Runnatics.Models.Client.Requests.Devices;
 using Runnatics.Models.Client.Responses;
 using Runnatics.Models.Data.Common;
 using Runnatics.Models.Data.Entities;
-using Runnatics.Models.Data.EventOrganizers;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
 
@@ -27,19 +26,17 @@ namespace Runnatics.Services
         protected readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
 
-        public async Task<bool> Create(string name)
+        public async Task<bool> Create(DeviceRequest request)
         {
             try
             {
                 var tenantId = _userContext.TenantId;
                 var userId = _userContext.UserId;
 
-                // Get Device repository
                 var deviceRepo = _repository.GetRepository<Device>();
 
-                // Check if device exists and belongs to the organization
                 var existingDevice = await deviceRepo
-                    .GetQuery(e => e.Name == name
+                    .GetQuery(e => e.Name == request.Name
                         && !e.AuditProperties.IsDeleted
                         && e.AuditProperties.IsActive)
                     .FirstOrDefaultAsync();
@@ -47,13 +44,11 @@ namespace Runnatics.Services
                 if (existingDevice != null)
                 {
                     ErrorMessage = "Device already exists.";
-                    _logger.LogError("Device already exists: with {name}:", name);
+                    _logger.LogError("Device already exists with name: {Name}", request.Name);
                     return false;
                 }
 
-                // Create new event organizer
-                var createDevice = new Device();
-                createDevice.Name = name;
+                var createDevice = _mapper.Map<Device>(request);
                 createDevice.TenantId = tenantId;
                 createDevice.AuditProperties = new AuditProperties
                 {
@@ -69,7 +64,6 @@ namespace Runnatics.Services
                 _logger.LogInformation("Device created for tenant: {TenantId} by user: {UserId}",
                     createDevice.TenantId, userId);
 
-                var toReturn = _mapper.Map<DevicesResponse>(createDevice);
                 return true;
             }
             catch (Exception ex)
@@ -92,9 +86,9 @@ namespace Runnatics.Services
                 var decryptedDeviceId = Convert.ToInt32(_encryptionService.Decrypt(deviceId));
 
                 var existing = await deviceRepo.GetQuery(
-                                    d => d.Id == decryptedDeviceId && 
-                                    d.TenantId == tenantId && 
-                                    d.AuditProperties.IsActive && 
+                                    d => d.Id == decryptedDeviceId &&
+                                    d.TenantId == tenantId &&
+                                    d.AuditProperties.IsActive &&
                                     !d.AuditProperties.IsDeleted)
                     .FirstOrDefaultAsync();
 
@@ -133,9 +127,9 @@ namespace Runnatics.Services
 
                 var deviceRepo = _repository.GetRepository<Device>();
                 var list = await deviceRepo.GetQuery(
-                        d => d.TenantId == tenantId && 
-                        d.AuditProperties.IsActive 
-                        && !d.AuditProperties.IsDeleted)
+                        d => d.TenantId == tenantId &&
+                        d.AuditProperties.IsActive &&
+                        !d.AuditProperties.IsDeleted)
                     .ToListAsync();
 
                 return _mapper.Map<List<DevicesResponse>>(list);
@@ -158,11 +152,11 @@ namespace Runnatics.Services
 
                 var deviceRepo = _repository.GetRepository<Device>();
                 var existing = await deviceRepo.GetQuery(
-                            d => d.Id == decryptedDeviceId && 
-                            d.TenantId == tenantId && 
-                            d.AuditProperties.IsActive && 
+                            d => d.Id == decryptedDeviceId &&
+                            d.TenantId == tenantId &&
+                            d.AuditProperties.IsActive &&
                             !d.AuditProperties.IsDeleted)
-                            .FirstOrDefaultAsync();
+                    .FirstOrDefaultAsync();
 
                 if (existing == null)
                 {
@@ -180,7 +174,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<bool> Update(string deviceId, string name)
+        public async Task<bool> Update(string deviceId, DeviceRequest request)
         {
             try
             {
@@ -205,7 +199,12 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                existing.Name = name;
+                existing.Name = request.Name;
+                existing.DeviceMacAddress = request.DeviceMacAddress;
+                existing.Hostname = request.Hostname;
+                existing.IpAddress = request.IpAddress;
+                existing.FirmwareVersion = request.FirmwareVersion;
+                existing.ReaderModel = request.ReaderModel;
                 existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 existing.AuditProperties.UpdatedBy = userId;
 

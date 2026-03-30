@@ -2,6 +2,7 @@ using AutoMapper;
 using Runnatics.API.Models.Requests;
 using Runnatics.Models.Client.Requests;
 using Runnatics.Models.Client.Requests.CheckPoints;
+using Runnatics.Models.Client.Requests.Devices;
 using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Requests.Races;
@@ -320,10 +321,24 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dst => dst.CategoryName, opt => opt.MapFrom(src => src.AgeCategory));
             #endregion
 
-            #region
+            #region Device mappings
             CreateMap<Device, DevicesResponse>()
-                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
-                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name));
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
+                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name))
+                .ForMember(dest => dest.DeviceMacAddress, opt => opt.MapFrom(src => src.DeviceMacAddress))
+                .ForMember(dest => dest.Hostname, opt => opt.MapFrom(src => src.Hostname))
+                .ForMember(dest => dest.IpAddress, opt => opt.MapFrom(src => src.IpAddress))
+                .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.FirmwareVersion))
+                .ForMember(dest => dest.ReaderModel, opt => opt.MapFrom(src => src.ReaderModel))
+                .ForMember(dest => dest.IsOnline, opt => opt.MapFrom(src => src.IsOnline))
+                .ForMember(dest => dest.LastSeenAt, opt => opt.MapFrom(src => src.LastSeenAt));
+
+            CreateMap<DeviceRequest, Device>()
+                .ForMember(dest => dest.Id, opt => opt.Ignore())
+                .ForMember(dest => dest.TenantId, opt => opt.Ignore())
+                .ForMember(dest => dest.IsOnline, opt => opt.Ignore())
+                .ForMember(dest => dest.LastSeenAt, opt => opt.Ignore())
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore());
 
             #endregion
 
@@ -360,18 +375,13 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty))
                 .ForMember(dest => dest.ParentDeviceName, opt => opt.MapFrom(src => src.ParentDevice != null ? src.ParentDevice.Name : string.Empty));
 
-            // Device mapping
-            CreateMap<Device, DevicesResponse>()
-                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))
-                .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name));
-
-            // RegisterDeviceRequest → Device (name, hostname, tenantId on create/update)
+            // RegisterDeviceRequest
             CreateMap<RegisterDeviceRequest, Device>()
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.DeviceName))
                 .ForMember(dest => dest.Hostname, opt => opt.MapFrom(src => src.Hostname))
                 .ForMember(dest => dest.TenantId, opt => opt.MapFrom(src => src.TenantId))
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceMacAddress, opt => opt.Ignore())
                 .ForMember(dest => dest.IpAddress, opt => opt.Ignore())
                 .ForMember(dest => dest.FirmwareVersion, opt => opt.Ignore())
                 .ForMember(dest => dest.ReaderModel, opt => opt.Ignore())
@@ -385,7 +395,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.FirmwareVersion, opt => opt.MapFrom(src => src.Firmware))
                 .ForMember(dest => dest.ReaderModel, opt => opt.MapFrom(src => src.Model))
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
+                .ForMember(dest => dest.DeviceMacAddress, opt => opt.Ignore())
                 .ForMember(dest => dest.Name, opt => opt.Ignore())
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore())
                 .ForMember(dest => dest.Hostname, opt => opt.Ignore())
@@ -451,7 +461,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Name, opt => opt.MapFrom(src => src.Name ?? $"Checkpoint {src.Id}"))
                 .ForMember(dest => dest.DistanceFromStart, opt => opt.MapFrom(src => src.DistanceFromStart))
                 .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory))
-                .ForMember(dest => dest.DeviceId, opt => opt.MapFrom(src => src.Device != null ? src.Device.DeviceId : string.Empty))
+                .ForMember(dest => dest.DeviceId, opt => opt.MapFrom(src => src.Device != null ? src.Device.DeviceMacAddress : string.Empty))
                 .ForMember(dest => dest.DeviceName, opt => opt.MapFrom(src => src.Device != null ? src.Device.Name : string.Empty));
 
             // Participant to RaceParticipantResultResponse (basic mapping, times calculated in service)

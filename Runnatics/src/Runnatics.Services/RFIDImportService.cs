@@ -451,7 +451,7 @@ namespace Runnatics.Services
                 // Look up the Device record by serial number to find associated checkpoint(s)
                 var deviceRepo = _repository.GetRepository<Device>();
                 var device = await deviceRepo.GetQuery(d =>
-                    d.DeviceId == deviceSerial &&
+                    d.DeviceMacAddress == deviceSerial &&
                     d.AuditProperties.IsActive &&
                     !d.AuditProperties.IsDeleted)
                     .AsNoTracking()
@@ -861,7 +861,7 @@ namespace Runnatics.Services
                 // Find device by name and tenant
                 var deviceRepo = _repository.GetRepository<Device>();
                 var device = await deviceRepo.GetQuery(d =>
-                    d.DeviceId == deviceName &&
+                    d.DeviceMacAddress == deviceName &&
                     d.TenantId == tenantId &&
                     d.AuditProperties.IsActive &&
                     !d.AuditProperties.IsDeleted)
@@ -905,7 +905,7 @@ namespace Runnatics.Services
                 // Update request with discovered device info
                 // Note: ExpectedCheckpointId is left null - it will be determined during processing
                 // based on EPC → Participant → RaceId → Checkpoint chain
-                request.DeviceId = device.DeviceId;
+                request.DeviceId = device.DeviceMacAddress;
 
                 _logger.LogInformation(
                     "Auto-detection complete. Delegating to event-level upload with EventId: {EventId} (RaceId: NULL). " +
@@ -1020,7 +1020,7 @@ namespace Runnatics.Services
                     // Check if this is a loop race scenario (device mapped to multiple checkpoints)
                     var deviceRepo = _repository.GetRepository<Device>();
                     var device = await deviceRepo.GetQuery(d =>
-                        d.DeviceId == importBatch.DeviceId &&
+                        d.DeviceMacAddress == importBatch.DeviceId &&
                         d.AuditProperties.IsActive &&
                         !d.AuditProperties.IsDeleted)
                         .AsNoTracking()
@@ -1123,7 +1123,7 @@ namespace Runnatics.Services
                         // Get device and check for multiple checkpoints
                         var deviceRepo = _repository.GetRepository<Device>();
                         var device = await deviceRepo.GetQuery(d =>
-                            d.DeviceId == importBatch.DeviceId &&
+                            d.DeviceMacAddress == importBatch.DeviceId &&
                             d.AuditProperties.IsActive &&
                             !d.AuditProperties.IsDeleted)
                             .AsNoTracking()
@@ -2923,10 +2923,10 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 var deviceSerialToId = new Dictionary<string, int>();
-                foreach (var d in devices.Where(d => !string.IsNullOrEmpty(d.DeviceId)))
+                foreach (var d in devices.Where(d => !string.IsNullOrEmpty(d.DeviceMacAddress)))
                 {
-                    if (!deviceSerialToId.TryAdd(d.DeviceId!, d.Id))
-                        _logger.LogWarning("Duplicate DeviceId {DeviceId} found across Device records. Using first occurrence.", d.DeviceId);
+                    if (!deviceSerialToId.TryAdd(d.DeviceMacAddress!, d.Id))
+                        _logger.LogWarning("Duplicate DeviceId {DeviceId} found across Device records. Using first occurrence.", d.DeviceMacAddress);
                 }
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
@@ -3776,8 +3776,8 @@ namespace Runnatics.Services
                 var deviceLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 foreach (var device in devices)
                 {
-                    if (!string.IsNullOrEmpty(device.DeviceId))
-                        deviceLookup[device.DeviceId] = device.Id;    // MAC: "0016251292a1" → 12
+                    if (!string.IsNullOrEmpty(device.DeviceMacAddress))
+                        deviceLookup[device.DeviceMacAddress] = device.Id;    // MAC: "0016251292a1" → 12
                     if (!string.IsNullOrEmpty(device.Name))
                         deviceLookup[device.Name] = device.Id;         // Name: "Box 16" → 12
                 }

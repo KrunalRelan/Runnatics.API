@@ -36,6 +36,12 @@ namespace Runnatics.Data.EF
         public DbSet<CertificateTemplate> CertificateTemplates { get; set; }
         public DbSet<CertificateField> CertificateFields { get; set; }
 
+        // Support Query Entities
+        public DbSet<SupportQueryStatus> SupportQueryStatuses { get; set; }
+        public DbSet<SupportQueryType> SupportQueryTypes { get; set; }
+        public DbSet<SupportQuery> SupportQueries { get; set; }
+        public DbSet<SupportQueryComment> SupportQueryComments { get; set; }
+
         // RFID Entities
         public DbSet<UploadBatch> UploadBatches { get; set; }
         public DbSet<RawRFIDReading> RawRFIDReadings { get; set; }
@@ -72,7 +78,13 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new DeviceConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateTemplateConfiguration());
             modelBuilder.ApplyConfiguration(new CertificateFieldConfiguration());
-            
+
+            // Support Query Configurations
+            modelBuilder.ApplyConfiguration(new SupportQueryStatusConfiguration());
+            modelBuilder.ApplyConfiguration(new SupportQueryTypeConfiguration());
+            modelBuilder.ApplyConfiguration(new SupportQueryConfiguration());
+            modelBuilder.ApplyConfiguration(new SupportQueryCommentConfiguration());
+
             // RFID Configurations
             modelBuilder.ApplyConfiguration(new UploadBatchConfiguration());
             modelBuilder.ApplyConfiguration(new RawRFIDReadingConfiguration());

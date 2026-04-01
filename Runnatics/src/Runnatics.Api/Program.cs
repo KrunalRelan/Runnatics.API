@@ -161,6 +161,7 @@ builder.Services.AddScoped(typeof(IUnitOfWork<>), typeof(UnitOfWork<>));
 builder.Services.AddScoped(typeof(IUnitOfWorkFactory<>), typeof(UnitOfWorkFactory<>));
 
 // Services
+builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddScoped<IEventsService, EventsService>();
 builder.Services.AddScoped<IEventOrganizerService, EventOrganizerService>();
@@ -173,6 +174,7 @@ builder.Services.AddScoped<ICertificatesService, CertificatesService>();
 builder.Services.AddScoped<IRFIDImportService, RFIDImportService>();
 builder.Services.AddScoped<IResultsService, ResultsService>();
 builder.Services.AddScoped<IBibMappingService, BibMappingService>();
+builder.Services.AddScoped<ISupportQueryService, SupportQueryService>();
 
 // FluentValidation
 builder.Services.AddValidatorsFromAssemblyContaining<CreateBibMappingValidator>();

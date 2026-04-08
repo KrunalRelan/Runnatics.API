@@ -72,3 +72,20 @@ FORMAT:
 - **Decisions made**: ...
 - **Pending**: ...
 -->
+
+### 2026-04-08 — backend-agent — Generate & Download Participant Certificate
+
+- **What was built**: `GET /api/certificates/participant/{participantId}/download` — generates a filled PNG certificate for a participant using SkiaSharp
+- **Files modified**:
+  - `Runnatics.Services/Runnatics.Services.csproj` — added SkiaSharp 2.88.8 + SkiaSharp.NativeAssets.Linux 2.88.8
+  - `Runnatics.Services.Interface/ICertificatesService.cs` — added `GenerateParticipantCertificateAsync`
+  - `Runnatics.Services/CertificatesService.cs` — added IHttpClientFactory to constructor; new public method + 6 private helpers
+  - `Runnatics.Api/Controller/CertificatesController.cs` — added `DownloadParticipantCertificate` action
+- **Decisions made**:
+  - Template selection: race-specific → IsDefault → event-wide (RaceId = null) — mirrors `GetTemplateByRaceAsync`
+  - `Results.FinishTime` (ms) → ChipTime; `Results.GunTime` (ms) → GunTime; formatted as `HH:MM:SS` via TotalHours
+  - `RaceCategory` = `Race.Title`; `Category` = `Participant.AgeCategory`
+  - `Photo` field skipped — no photo property on `Participant`; `CustomText` renders `field.Content` verbatim
+  - Background: base64 `BackgroundImageData` preferred over URL (fetched via IHttpClientFactory)
+  - All IDs accept encrypted strings via existing `TryParseOrDecrypt`
+- **Pending**: Photo field support requires adding a photo URL property to the Participant entity

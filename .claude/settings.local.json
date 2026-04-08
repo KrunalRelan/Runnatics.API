@@ -6,7 +6,9 @@
       "Read(//tmp/**)",
       "Bash(dotnet add:*)",
       "Bash(dotnet run:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet build:*)"
     ]
   }
 }

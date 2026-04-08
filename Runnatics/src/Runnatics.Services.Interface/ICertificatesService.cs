@@ -11,5 +11,11 @@ namespace Runnatics.Services.Interface
         Task<List<CertificateTemplateResponse>> GetTemplatesByEventAsync(string eventId);
         Task<CertificateTemplateResponse?> GetTemplateByRaceAsync(string eventId, string raceId);
         Task<bool> DeleteTemplateAsync(string id);
+
+        /// <summary>
+        /// Generates a filled certificate PNG for the given participant using the
+        /// race-specific template (or event default) and returns the raw bytes.
+        /// </summary>
+        Task<byte[]?> GenerateParticipantCertificateAsync(string participantId, string raceId, string eventId);
     }
 }

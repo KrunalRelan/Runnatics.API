@@ -23,7 +23,7 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-        options.JsonSerializerOptions.PropertyNameCaseInsensitive = true; // Allow camelCase input
+        options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
     });
 
 // Swagger
@@ -42,11 +42,8 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Ensure unique schema Ids for types that share the same simple name across namespaces
-    // Use the full name (namespace + type) which prevents collisions like EventStatus in different assemblies
     c.CustomSchemaIds(type => (type.FullName ?? type.Name).Replace('+', '.'));
 
-    // Add JWT Bearer token support in Swagger
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
@@ -119,22 +116,26 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization();
 
-// 🚨 DEV-ONLY: ultra-relaxed CORS to prove it’s not CORS
+// CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("DevCors", policy =>
+    options.AddPolicy("AllowFrontend", policy =>
     {
-        policy
-            .AllowAnyOrigin()   // no origin restriction at all
+        var frontendUrl = builder.Configuration["AppSettings:FrontendUrl"] ?? "http://localhost:5173";
+        policy.WithOrigins(
+                frontendUrl,
+                "http://localhost:3000",
+                "http://localhost:5173"
+            )
             .AllowAnyHeader()
-            .AllowAnyMethod();
-        // NO .AllowCredentials() here, because that conflicts with AllowAnyOrigin
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 
-    // SignalR requires AllowCredentials — must specify origin explicitly (no wildcard)
     options.AddPolicy("SignalR", policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "http://localhost:5173")  // React dev URLs
+        var frontendUrl = builder.Configuration["AppSettings:FrontendUrl"] ?? "http://localhost:5173";
+        policy.WithOrigins(frontendUrl, "http://localhost:3000", "http://localhost:5173")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -180,13 +181,12 @@ builder.Services.AddScoped<ISupportQueryService, SupportQueryService>();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateBibMappingValidator>();
 
 // RFID Reader Background Service
-// Development: mock service fires fake EPCs every 10s (no hardware needed)
-// Production: real GReaderApi TCP connection to physical reader
 if (builder.Environment.IsDevelopment())
 {
     builder.Services.AddHostedService<MockRfidReaderService>();
 }
-else
+// In Production, only register if explicitly enabled via config
+else if (builder.Configuration.GetValue<bool>("R700Settings:Enabled", false))
 {
     builder.Services.AddHostedService<RfidReaderService>();
 }
@@ -215,15 +215,16 @@ builder.Services.AddHttpClient();
 
 var app = builder.Build();
 
-// Pipeline
+// Swagger — enabled in all environments
+app.UseSwagger();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Runnatics API V1");
+    c.RoutePrefix = string.Empty;
+});
+
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Runnatics API V1");
-        c.RoutePrefix = string.Empty;
-    });
     app.UseDeveloperExceptionPage();
 }
 else
@@ -232,13 +233,10 @@ else
     app.UseHsts();
 }
 
-// ❗ For now, disable HTTPS redirection to avoid preflight redirects in dev
-// app.UseHttpsRedirection();
-
+app.UseHttpsRedirection();
 app.UseRouting();
 
-// ✅ CORS: after routing, before auth
-app.UseCors("DevCors");
+app.UseCors("AllowFrontend");
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -247,14 +245,12 @@ app.MapControllers();
 app.MapRfidHubs();
 app.MapHealthChecks("/health");
 
-// (Optional) seeding
 if (app.Environment.IsDevelopment())
 {
     using var scope = app.Services.CreateScope();
     try
     {
         var context = scope.ServiceProvider.GetRequiredService<RaceSyncDbContext>();
-        // context.Database.EnsureCreated();
     }
     catch (Exception ex)
     {

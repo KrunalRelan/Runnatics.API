@@ -125,7 +125,8 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(
                 frontendUrl,
                 "http://localhost:3000",
-                "http://localhost:5173"
+                "http://localhost:5173",
+                "https://victorious-flower-0a6608b1e.2.azurestaticapps.net"
             )
             .AllowAnyHeader()
             .AllowAnyMethod()
@@ -134,8 +135,9 @@ builder.Services.AddCors(options =>
 
     options.AddPolicy("SignalR", policy =>
     {
-        var frontendUrl = builder.Configuration["AppSettings:FrontendUrl"] ?? "http://localhost:5173";
-        policy.WithOrigins(frontendUrl, "http://localhost:3000", "http://localhost:5173")
+        var frontendUrl = builder.Configuration["AppSettings:FrontendUrl"] ?? "http://localhost:3000";
+        policy.WithOrigins(frontendUrl, "http://localhost:3000", "http://localhost:5173",
+                "https://victorious-flower-0a6608b1e.2.azurestaticapps.net")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();

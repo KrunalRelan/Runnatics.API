@@ -220,6 +220,50 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Generate and download a participant certificate as a PNG
+        /// </summary>
+        /// <remarks>
+        /// Template selection: race-specific template is preferred; falls back to the event's
+        /// default template, then any event-wide template (RaceId is null).
+        /// </remarks>
+        [HttpGet("participant/{participantId}/download")]
+        [Authorize]
+        [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> DownloadParticipantCertificate(
+            string participantId,
+            [FromQuery] string raceId,
+            [FromQuery] string eventId)
+        {
+            if (string.IsNullOrEmpty(participantId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(eventId))
+            {
+                return BadRequest(new { error = "participantId, raceId, and eventId are all required." });
+            }
+
+            var pngBytes = await _certificatesService.GenerateParticipantCertificateAsync(participantId, raceId, eventId);
+
+            if (_certificatesService.HasError)
+            {
+                if (_certificatesService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return NotFound(new { error = _certificatesService.ErrorMessage });
+                }
+
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _certificatesService.ErrorMessage });
+            }
+
+            if (pngBytes == null || pngBytes.Length == 0)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = "Failed to generate certificate." });
+            }
+
+            return File(pngBytes, "image/png", $"certificate_{participantId}.png");
+        }
+
+        /// <summary>
         /// Delete a certificate template
         /// </summary>
         [HttpDelete("templates/{id}")]

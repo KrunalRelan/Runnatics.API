@@ -6,8 +6,10 @@ using Runnatics.Data.EF;
 using Runnatics.Models.Client.Requests.Certificates;
 using Runnatics.Models.Client.Responses.Certificates;
 using Runnatics.Models.Data.Entities;
+using Runnatics.Models.Data.Enumerations;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
+using SkiaSharp;
 
 namespace Runnatics.Services
 {
@@ -16,12 +18,14 @@ namespace Runnatics.Services
         IMapper mapper,
         ILogger<CertificatesService> logger,
         IUserContextService userContext,
-        IEncryptionService encryptionService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), ICertificatesService
+        IEncryptionService encryptionService,
+        IHttpClientFactory httpClientFactory) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), ICertificatesService
     {
         private readonly IMapper _mapper = mapper;
         private readonly ILogger<CertificatesService> _logger = logger;
         private readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
+        private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
 
         private static Expression<Func<CertificateTemplate, bool>> IsActiveFilter =>
             t => t.AuditProperties.IsActive && !t.AuditProperties.IsDeleted;
@@ -375,6 +379,273 @@ namespace Runnatics.Services
                 ErrorMessage = "Error deleting certificate template.";
                 return false;
             }
+        }
+
+        // ── Certificate Generation ────────────────────────────────────────────
+
+        public async Task<byte[]?> GenerateParticipantCertificateAsync(string participantId, string raceId, string eventId)
+        {
+            try
+            {
+                var decryptedParticipantId = TryParseOrDecrypt(participantId, nameof(participantId));
+                var decryptedRaceId        = TryParseOrDecrypt(raceId,        nameof(raceId));
+                var decryptedEventId       = TryParseOrDecrypt(eventId,       nameof(eventId));
+
+                // 1. Fetch participant with event, race and result navigation data
+                var participantRepo = _repository.GetRepository<Participant>();
+                var participant = await participantRepo
+                    .GetQuery(p => p.Id == decryptedParticipantId
+                                && p.RaceId == decryptedRaceId
+                                && p.EventId == decryptedEventId
+                                && p.AuditProperties.IsActive
+                                && !p.AuditProperties.IsDeleted)
+                    .Include(p => p.Event)
+                    .Include(p => p.Race)
+                    .Include(p => p.Result)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found.";
+                    return null;
+                }
+
+                if (participant.Result == null)
+                {
+                    _logger.LogWarning(
+                        "No result record for participant {ParticipantId}; timing fields will be empty.",
+                        decryptedParticipantId);
+                }
+
+                // 2. Resolve template: race-specific → event default → any event-wide
+                var template = await ResolveTemplateForRaceAsync(decryptedEventId, decryptedRaceId);
+                if (template == null)
+                {
+                    ErrorMessage = "No certificate template found for this event.";
+                    return null;
+                }
+
+                // 3. Load background image bytes (base64 data or URL)
+                var backgroundBytes = await ResolveBackgroundImageAsync(template);
+
+                // 4. Build field value dictionary
+                var fieldData = BuildFieldData(participant, participant.Result, participant.Race, participant.Event);
+
+                // 5. Render to PNG
+                return RenderToPng(template, fieldData, backgroundBytes);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating certificate for participant {ParticipantId}", participantId);
+                ErrorMessage = "Error generating certificate.";
+                return null;
+            }
+        }
+
+        // ── Certificate generation helpers ────────────────────────────────────
+
+        /// <summary>
+        /// Resolves the best-matching template entity (race-specific → default → event-wide).
+        /// Mirrors the fallback logic in GetTemplateByRaceAsync but returns the raw entity.
+        /// </summary>
+        private async Task<CertificateTemplate?> ResolveTemplateForRaceAsync(int eventId, int raceId)
+        {
+            var templateRepo = _repository.GetRepository<CertificateTemplate>();
+
+            // 1. Race-specific template
+            var template = await templateRepo
+                .GetQuery(t => t.EventId == eventId && t.RaceId == raceId)
+                .Where(IsActiveFilter)
+                .Include(t => t.Fields.Where(f => f.AuditProperties.IsActive && !f.AuditProperties.IsDeleted))
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            if (template != null) return template;
+
+            // 2. Default event template
+            template = await templateRepo
+                .GetQuery(t => t.EventId == eventId && t.IsDefault)
+                .Where(IsActiveFilter)
+                .Include(t => t.Fields.Where(f => f.AuditProperties.IsActive && !f.AuditProperties.IsDeleted))
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            if (template != null) return template;
+
+            // 3. Any event-wide template (no specific race)
+            return await templateRepo
+                .GetQuery(t => t.EventId == eventId && t.RaceId == null)
+                .Where(IsActiveFilter)
+                .Include(t => t.Fields.Where(f => f.AuditProperties.IsActive && !f.AuditProperties.IsDeleted))
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+        }
+
+        /// <summary>
+        /// Returns background image bytes from base64 data or by fetching the URL.
+        /// Returns null if neither is available or decoding fails.
+        /// </summary>
+        private async Task<byte[]?> ResolveBackgroundImageAsync(CertificateTemplate template)
+        {
+            if (!string.IsNullOrWhiteSpace(template.BackgroundImageData))
+            {
+                try
+                {
+                    var base64 = StripBase64DataUrlPrefix(template.BackgroundImageData);
+                    return Convert.FromBase64String(base64);
+                }
+                catch (FormatException ex)
+                {
+                    _logger.LogWarning(ex, "BackgroundImageData for template {TemplateId} is not valid base64", template.Id);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(template.BackgroundImageUrl))
+            {
+                try
+                {
+                    using var client = _httpClientFactory.CreateClient();
+                    return await client.GetByteArrayAsync(template.BackgroundImageUrl);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to fetch background image URL for template {TemplateId}", template.Id);
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Maps participant / result / race / event data to the CertificateFieldType dictionary
+        /// that the renderer uses to substitute placeholder values.
+        /// </summary>
+        private static Dictionary<CertificateFieldType, string> BuildFieldData(
+            Participant participant,
+            Results? result,
+            Race race,
+            Event evt)
+        {
+            var chipTime = result?.FinishTime.HasValue == true
+                ? TimeSpan.FromMilliseconds(result.FinishTime.Value)
+                : (TimeSpan?)null;
+
+            var gunTime = result?.GunTime.HasValue == true
+                ? TimeSpan.FromMilliseconds(result.GunTime.Value)
+                : (TimeSpan?)null;
+
+            return new Dictionary<CertificateFieldType, string>
+            {
+                [CertificateFieldType.ParticipantName] = participant.FullName.Trim(),
+                [CertificateFieldType.ChipTime]        = chipTime.HasValue ? FormatTimeSpan(chipTime.Value) : "--:--:--",
+                [CertificateFieldType.GunTime]         = gunTime.HasValue  ? FormatTimeSpan(gunTime.Value)  : "--:--:--",
+                [CertificateFieldType.BibNumber]       = participant.BibNumber  ?? string.Empty,
+                [CertificateFieldType.GenderRank]      = result?.GenderRank?.ToString()  ?? "-",
+                [CertificateFieldType.OverallRank]     = result?.OverallRank?.ToString() ?? "-",
+                [CertificateFieldType.CategoryRank]    = result?.CategoryRank?.ToString() ?? "-",
+                [CertificateFieldType.RaceCategory]    = race.Title,
+                [CertificateFieldType.Category]        = participant.AgeCategory ?? string.Empty,
+                [CertificateFieldType.Gender]          = participant.Gender ?? string.Empty,
+                [CertificateFieldType.TimeHrs]         = chipTime.HasValue ? ((int)chipTime.Value.TotalHours).ToString("D2") : "--",
+                [CertificateFieldType.TimeMins]        = chipTime.HasValue ? chipTime.Value.Minutes.ToString("D2") : "--",
+                [CertificateFieldType.TimeSecs]        = chipTime.HasValue ? chipTime.Value.Seconds.ToString("D2") : "--",
+                [CertificateFieldType.Distance]        = race.Distance.HasValue ? $"{race.Distance.Value:0.##} KM" : string.Empty,
+                [CertificateFieldType.EventName]       = evt.Name,
+                [CertificateFieldType.EventDate]       = evt.EventDate.ToString("dd MMMM yyyy"),
+            };
+        }
+
+        /// <summary>
+        /// Renders the certificate template to a PNG using SkiaSharp.
+        /// Each field's (XCoordinate, YCoordinate) is treated as the text baseline origin.
+        /// The Photo field type is skipped — the Participant entity has no photo property.
+        /// </summary>
+        private static byte[] RenderToPng(
+            CertificateTemplate template,
+            Dictionary<CertificateFieldType, string> fieldData,
+            byte[]? backgroundBytes)
+        {
+            using var bitmap = new SKBitmap(template.Width, template.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+            using var canvas = new SKCanvas(bitmap);
+
+            canvas.Clear(SKColors.White);
+
+            // Draw background image
+            if (backgroundBytes != null)
+            {
+                using var bgBitmap = SKBitmap.Decode(backgroundBytes);
+                if (bgBitmap != null)
+                {
+                    canvas.DrawBitmap(bgBitmap, SKRect.Create(0, 0, template.Width, template.Height));
+                }
+            }
+
+            // Draw each field
+            foreach (var field in template.Fields)
+            {
+                // Photo requires a participant image asset — not available on the entity; skip
+                if (field.FieldType == CertificateFieldType.Photo)
+                    continue;
+
+                // CustomText renders field.Content verbatim; all other types look up the data dict
+                var text = field.FieldType == CertificateFieldType.CustomText
+                    ? (field.Content ?? string.Empty)
+                    : fieldData.GetValueOrDefault(field.FieldType, string.Empty);
+
+                if (string.IsNullOrEmpty(text)) continue;
+
+                var weight = string.Equals(field.FontWeight, "bold", StringComparison.OrdinalIgnoreCase)
+                    ? SKFontStyleWeight.Bold
+                    : SKFontStyleWeight.Normal;
+
+                var slant = string.Equals(field.FontStyle, "italic", StringComparison.OrdinalIgnoreCase)
+                    ? SKFontStyleSlant.Italic
+                    : SKFontStyleSlant.Upright;
+
+                using var typeface = SKTypeface.FromFamilyName(field.Font, weight, SKFontStyleWidth.Normal, slant)
+                                  ?? SKTypeface.Default;
+
+                var textAlign = field.Alignment?.ToLowerInvariant() switch
+                {
+                    "center" => SKTextAlign.Center,
+                    "right"  => SKTextAlign.Right,
+                    _        => SKTextAlign.Left
+                };
+
+#pragma warning disable CS0618 // TextAlign is deprecated in SkiaSharp 3.x but is correct for 2.88.x
+                using var paint = new SKPaint
+                {
+                    Color       = ParseSkiaColor(field.FontColor),
+                    TextSize    = field.FontSize,
+                    IsAntialias = true,
+                    Typeface    = typeface,
+                    TextAlign   = textAlign
+                };
+#pragma warning restore CS0618
+
+                canvas.DrawText(text, field.XCoordinate, field.YCoordinate, paint);
+            }
+
+            using var image   = SKImage.FromBitmap(bitmap);
+            using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+            return encoded.ToArray();
+        }
+
+        private static string FormatTimeSpan(TimeSpan ts) =>
+            $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
+
+        private static SKColor ParseSkiaColor(string? colorHex)
+        {
+            if (string.IsNullOrWhiteSpace(colorHex)) return SKColors.Black;
+            var hex = colorHex.StartsWith('#') ? colorHex : $"#{colorHex}";
+            return SKColor.TryParse(hex, out var parsed) ? parsed : SKColors.Black;
+        }
+
+        private static string StripBase64DataUrlPrefix(string input)
+        {
+            var commaIdx = input.IndexOf(',');
+            return commaIdx >= 0 ? input[(commaIdx + 1)..] : input;
         }
 
         #region Helpers

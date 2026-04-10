@@ -7,6 +7,7 @@
       "Bash(dotnet add:*)",
       "Bash(dotnet run:*)",
       "Bash(echo:*)",
+      "Bash(dotnet restore:*)",
       "Bash(dotnet build:*)"
     ]
   }

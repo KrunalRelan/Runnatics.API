@@ -89,3 +89,38 @@ FORMAT:
   - Background: base64 `BackgroundImageData` preferred over URL (fetched via IHttpClientFactory)
   - All IDs accept encrypted strings via existing `TryParseOrDecrypt`
 - **Pending**: Photo field support requires adding a photo URL property to the Participant entity
+### 2026-03-31 — backend-agent — SupportQuery / Contact Us Feature
+
+- **Branch**: `feature/OnlineReadingsFlow` (existing branch)
+- **What was built**: Full support query feature — public Contact Us submission, admin list/detail/update/comment/email/delete endpoints
+- **Files created**:
+  - `db/scripts/SupportQuery_CreateTables_20260331.sql` — 4 tables + status seed data
+  - `Runnatics.Models.Data/Entities/SupportQueryStatus.cs`
+  - `Runnatics.Models.Data/Entities/SupportQueryType.cs`
+  - `Runnatics.Models.Data/Entities/SupportQuery.cs`
+  - `Runnatics.Models.Data/Entities/SupportQueryComment.cs`
+  - `Runnatics.Data.EF/Config/SupportQueryStatusConfiguration.cs`
+  - `Runnatics.Data.EF/Config/SupportQueryTypeConfiguration.cs`
+  - `Runnatics.Data.EF/Config/SupportQueryConfiguration.cs`
+  - `Runnatics.Data.EF/Config/SupportQueryCommentConfiguration.cs`
+  - `Runnatics.Models.Client/Requests/Support/ContactUsRequestDto.cs`
+  - `Runnatics.Models.Client/Requests/Support/AddCommentRequestDto.cs`
+  - `Runnatics.Models.Client/Requests/Support/UpdateQueryRequestDto.cs`
+  - `Runnatics.Models.Client/Responses/Support/SupportQueryListItemDto.cs`
+  - `Runnatics.Models.Client/Responses/Support/SupportQueryDetailDto.cs`
+  - `Runnatics.Models.Client/Responses/Support/SupportQueryCommentDto.cs`
+  - `Runnatics.Models.Client/Responses/Support/SupportQueryCountsDto.cs`
+  - `Runnatics.Services.Interface/ISupportQueryService.cs`
+  - `Runnatics.Services/SupportQueryService.cs`
+  - `Runnatics.Api/Controller/SupportQueryController.cs`
+- **Files modified**:
+  - `Runnatics.Data.EF/RaceSyncDbContext.cs` — added 4 DbSets + 4 ApplyConfiguration calls
+  - `Runnatics.Services.Interface/IEmailService.cs` — added `SendAsync(string to, string subject, string body)`
+  - `Runnatics.Api/Program.cs` — registered `ISupportQueryService → SupportQueryService`
+- **Decisions made**:
+  - SupportQuery/SupportQueryComment entities do NOT use AuditProperties owned type — these are support tickets with a simpler schema (CreatedAt/UpdatedAt directly on entity), as per explicit SQL spec
+  - `AssignedToUserId = 0` in UpdateQueryRequestDto is treated as "unassign" (sets to null)
+  - `LastUpdated` relative label is computed in service layer (days → hours → minutes)
+  - `DeleteCommentAsync` is a hard delete (uses `repo.DeleteAsync(id)`) since comments have no AuditProperties
+  - Admin user ID in AddComment is extracted from JWT `sub` claim in the controller
+- **Pending**: IEmailService `SendAsync` implementation needs to be added to the concrete email service class

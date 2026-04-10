@@ -28,5 +28,13 @@ namespace Runnatics.Services.Interface
         /// <param name="firstName">User first name</param>
         /// <param name="organizationName">Organization name</param>
         Task<bool> SendWelcomeEmailAsync(string email, string firstName, string organizationName);
+
+        /// <summary>
+        /// Send a generic email
+        /// </summary>
+        /// <param name="to">Recipient email address</param>
+        /// <param name="subject">Email subject</param>
+        /// <param name="body">Email body (plain text or HTML)</param>
+        Task<bool> SendAsync(string to, string subject, string body);
     }
 }

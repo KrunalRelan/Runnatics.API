@@ -121,13 +121,16 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        var frontendUrl = builder.Configuration["AppSettings:FrontendUrl"] ?? "http://localhost:5173";
-        policy.WithOrigins(
-                frontendUrl,
-                "http://localhost:3000",
-                "http://localhost:5173",
+        var origins = builder.Environment.IsDevelopment()
+            ? new[] { "http://localhost:3000", "http://localhost:5173" }
+            : new[]
+            {
+                builder.Configuration["AppSettings:FrontendUrl"] ?? "https://racetik.com",
+                "https://racetik.com",
                 "https://victorious-flower-0a6608b1e.2.azurestaticapps.net"
-            )
+            };
+
+        policy.WithOrigins(origins)
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
@@ -135,9 +138,16 @@ builder.Services.AddCors(options =>
 
     options.AddPolicy("SignalR", policy =>
     {
-        var frontendUrl = builder.Configuration["AppSettings:FrontendUrl"] ?? "http://localhost:3000";
-        policy.WithOrigins(frontendUrl, "http://localhost:3000", "http://localhost:5173",
-                "https://victorious-flower-0a6608b1e.2.azurestaticapps.net")
+        var origins = builder.Environment.IsDevelopment()
+            ? new[] { "http://localhost:3000", "http://localhost:5173" }
+            : new[]
+            {
+                builder.Configuration["AppSettings:FrontendUrl"] ?? "https://racetik.com",
+                "https://racetik.com",
+                "https://victorious-flower-0a6608b1e.2.azurestaticapps.net"
+            };
+
+        policy.WithOrigins(origins)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();

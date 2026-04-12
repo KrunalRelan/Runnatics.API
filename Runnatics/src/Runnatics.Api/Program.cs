@@ -75,6 +75,11 @@ builder.Services.AddDbContextPool<RaceSyncDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("RunnaticsDB"), sqlOptions =>
     {
         sqlOptions.CommandTimeout(30);
+        sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(10),
+            errorNumbersToAdd: null
+        );
     });
 
     options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);

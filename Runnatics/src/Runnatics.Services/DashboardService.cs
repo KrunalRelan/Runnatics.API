@@ -32,10 +32,24 @@ namespace Runnatics.Services
                 var eventrepo = _repository.GetRepository<Event>();
                 var totalEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId && e.AuditProperties.IsActive 
                                                                                          && !e.AuditProperties.IsDeleted);
-                var totalActiveEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId && e.AuditProperties.IsActive && e.EventDate > DateTime.UtcNow);
-                var totalcompletedEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId && 
-                                                                           e.AuditProperties.IsActive && 
-                                                                           e.EventDate < DateTime.UtcNow);
+                var today = DateTime.UtcNow.Date;
+                var tomorrow = today.AddDays(1);
+
+                var totalActiveEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId
+                    && e.AuditProperties.IsActive
+                    && !e.AuditProperties.IsDeleted
+                    && e.EventDate >= today
+                    && e.EventDate < tomorrow);
+
+                var totalUpcomingEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId
+                    && e.AuditProperties.IsActive
+                    && !e.AuditProperties.IsDeleted
+                    && e.EventDate >= tomorrow);
+
+                var totalcompletedEvents = await eventrepo.CountAsync(e => e.TenantId == tenantId
+                    && e.AuditProperties.IsActive
+                    && !e.AuditProperties.IsDeleted
+                    && e.EventDate < today);
 
                 var participantrepo = _repository.GetRepository<Participant>();
                 var totalParticipants = await participantrepo.CountAsync(e => e.TenantId == tenantId);
@@ -45,7 +59,7 @@ namespace Runnatics.Services
                     TotalEvents = totalEvents,
                     TotalParticipants = totalParticipants,
                     ActiveEvents = totalActiveEvents,
-                    UpcomingEvents = totalActiveEvents,
+                    UpcomingEvents = totalUpcomingEvents,
                     CompletedEvents = totalcompletedEvents,
                 };
 

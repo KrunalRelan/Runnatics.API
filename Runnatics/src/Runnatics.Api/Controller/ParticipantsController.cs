@@ -209,6 +209,8 @@ namespace Runnatics.Api.Controller
 
             if (_service.HasError)
             {
+                if (_service.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                    return NotFound(_service.ErrorMessage);
                 return StatusCode((int)HttpStatusCode.InternalServerError, _service.ErrorMessage);
             }
 
@@ -228,6 +230,8 @@ namespace Runnatics.Api.Controller
 
             if (_service.HasError)
             {
+                if (_service.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                    return NotFound(_service.ErrorMessage);
                 return StatusCode((int)HttpStatusCode.InternalServerError, _service.ErrorMessage);
             }
 

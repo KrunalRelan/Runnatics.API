@@ -64,13 +64,34 @@ public class TestDataSeederController : ControllerBase
             IsDeleted = false
         };
 
-        await _repository.BeginTransactionAsync();
+        Event? evt = null;
+        Race? race = null;
+        List<Device> devices = new();
+        List<Checkpoint> checkpoints = new();
+        object[]? participantResults = null;
+        DateTime raceStartTime = default;
 
         try
         {
+        var runnerData = new[]
+        {
+            ("Arun",    "Sharma",   "001", "418000A95101"),
+            ("Priya",   "Kaur",     "002", "418000A95102"),
+            ("Vikram",  "Singh",    "003", "418000A95103"),
+            ("Meera",   "Patel",    "004", "418000A95104"),
+            ("Rajesh",  "Kumar",    "005", "418000A95105"),
+            ("Anita",   "Devi",     "006", "418000A95106"),
+            ("Sunil",   "Verma",    "007", "418000A95107"),
+            ("Neha",    "Gupta",    "008", "418000A95108"),
+            ("Harpreet","Dhillon",  "042", "418000A95119"),
+            ("Deepak",  "Malhotra", "099", "418000A95199"),
+        };
+
+        await _repository.ExecuteInTransactionAsync(async () =>
+        {
             // ── EVENT ──
             var eventRepo = _repository.GetRepository<Event>();
-            var evt = new Event
+            evt = new Event
             {
                 Name = "Test Marathon 2026",
                 TenantId = tenantId,
@@ -81,9 +102,8 @@ public class TestDataSeederController : ControllerBase
 
             // ── RACE ──
             var raceRepo = _repository.GetRepository<Race>();
-            // Set StartTime to 30 minutes ago so simulated readings fall after it
-            var raceStartTime = DateTime.UtcNow.AddMinutes(-30);
-            var race = new Race
+            raceStartTime = DateTime.UtcNow.AddMinutes(-30);
+            race = new Race
             {
                 EventId = evt.Id,
                 Description = "Half Marathon 21.1km",
@@ -95,7 +115,6 @@ public class TestDataSeederController : ControllerBase
             await _repository.SaveChangesAsync();
 
             // ── DEVICES ──
-            // These MACs match what the simulator sends in webhook payloads
             var deviceRepo = _repository.GetRepository<Device>();
             var deviceData = new[]
             {
@@ -104,14 +123,13 @@ public class TestDataSeederController : ControllerBase
                 ("0016251292a1", "Box 3 - 10km Turn",    "impinj-13-5f-25"),
             };
 
-            var devices = new List<Device>();
             foreach (var (mac, name, hostname) in deviceData)
             {
                 var device = new Device
                 {
                     DeviceMacAddress = mac,
                     Name = name,
-                    Hostname = hostname,     // NEW: Online mode uses this
+                    Hostname = hostname,
                     IsOnline = false,
                     TenantId = tenantId,
                     AuditProperties = audit
@@ -122,20 +140,16 @@ public class TestDataSeederController : ControllerBase
             await _repository.SaveChangesAsync();
 
             // ── CHECKPOINTS ──
-            // Loop course: Device 0 serves Start AND Finish
-            //              Device 1 serves 5km AND 15km (return)
-            //              Device 2 serves 10km turnaround only
             var checkpointRepo = _repository.GetRepository<Checkpoint>();
             var checkpointData = new[]
             {
                 ("Start",           0.0m,  devices[0].Id, (int?)null),
                 ("5km",             5.0m,  devices[1].Id, (int?)null),
                 ("10km Turnaround", 10.0m, devices[2].Id, (int?)null),
-                ("15km (Return)",   15.0m, devices[1].Id, (int?)null),     // Same device as 5km!
-                ("Finish",          21.1m, devices[0].Id, (int?)null),     // Same device as Start!
+                ("15km (Return)",   15.0m, devices[1].Id, (int?)null),
+                ("Finish",          21.1m, devices[0].Id, (int?)null),
             };
 
-            var checkpoints = new List<Checkpoint>();
             foreach (var (name, distance, deviceId, parentDeviceId) in checkpointData)
             {
                 var cp = new Checkpoint
@@ -158,21 +172,7 @@ public class TestDataSeederController : ControllerBase
             var chipRepo = _repository.GetRepository<Chip>();
             var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
 
-            var runnerData = new[]
-            {
-                ("Arun",    "Sharma",   "001", "418000A95101"),
-                ("Priya",   "Kaur",     "002", "418000A95102"),
-                ("Vikram",  "Singh",    "003", "418000A95103"),
-                ("Meera",   "Patel",    "004", "418000A95104"),
-                ("Rajesh",  "Kumar",    "005", "418000A95105"),
-                ("Anita",   "Devi",     "006", "418000A95106"),
-                ("Sunil",   "Verma",    "007", "418000A95107"),
-                ("Neha",    "Gupta",    "008", "418000A95108"),
-                ("Harpreet","Dhillon",  "042", "418000A95119"),
-                ("Deepak",  "Malhotra", "099", "418000A95199"),
-            };
-
-            var participantResults = new List<object>();
+            var results = new List<object>();
             foreach (var (first, last, bib, epc) in runnerData)
             {
                 var participant = new Participant
@@ -208,7 +208,7 @@ public class TestDataSeederController : ControllerBase
                 };
                 await chipAssignmentRepo.AddAsync(assignment);
 
-                participantResults.Add(new
+                results.Add(new
                 {
                     participantId = participant.Id,
                     name = $"{first} {last}",
@@ -217,50 +217,49 @@ public class TestDataSeederController : ControllerBase
                     chipId = chip.Id
                 });
             }
-            await _repository.SaveChangesAsync();
-            await _repository.CommitTransactionAsync();
+            participantResults = results.ToArray();
+        });
 
-            _logger.LogInformation(
-                "Test data seeded: Event {EventId}, Race {RaceId}, " +
-                "{DeviceCount} devices, {CheckpointCount} checkpoints, " +
-                "{ParticipantCount} participants",
-                evt.Id, race.Id, devices.Count, checkpoints.Count, runnerData.Length);
+        _logger.LogInformation(
+            "Test data seeded: Event {EventId}, Race {RaceId}, " +
+            "{DeviceCount} devices, {CheckpointCount} checkpoints, " +
+            "{ParticipantCount} participants",
+            evt!.Id, race!.Id, devices.Count, checkpoints.Count, runnerData.Length);
 
-            return Ok(new
+        return Ok(new
+        {
+            message = "Test data seeded successfully",
+            eventId = evt.Id,
+            raceId = race.Id,
+            raceStartTime,
+            devices = devices.Select(d => new
             {
-                message = "Test data seeded successfully",
-                eventId = evt.Id,
-                raceId = race.Id,
-                raceStartTime,
-                devices = devices.Select(d => new
-                {
-                    d.Id,
-                    d.DeviceMacAddress,
-                    d.Name,
-                    d.Hostname
-                }),
-                checkpoints = checkpoints.Select((cp, i) => new
-                {
-                    cp.Id,
-                    cp.Name,
-                    distance = checkpointData[i].Item2,
-                    deviceId = checkpointData[i].Item3,
-                    isSharedDevice = checkpointData[i].Item3 == devices[0].Id
-                                     || checkpointData[i].Item3 == devices[1].Id
-                }),
-                participants = participantResults,
-                nextSteps = new[]
-                {
-                    $"POST /api/test/simulate-race?eventId={evt.Id}&raceId={race.Id}",
-                    $"POST /api/test/process-pipeline?eventId={evt.Id}&raceId={race.Id}",
-                    $"GET  /api/test/verify-ingestion?eventId={evt.Id}",
-                    $"POST /api/test/full-test?eventId={evt.Id}&raceId={race.Id}"
-                }
-            });
+                d.Id,
+                d.DeviceMacAddress,
+                d.Name,
+                d.Hostname
+            }),
+            checkpoints = checkpoints.Select((cp, i) => new
+            {
+                cp.Id,
+                cp.Name,
+                distance = checkpointData[i].Item2,
+                deviceId = checkpointData[i].Item3,
+                isSharedDevice = checkpointData[i].Item3 == devices[0].Id
+                                 || checkpointData[i].Item3 == devices[1].Id
+            }),
+            participants = participantResults,
+            nextSteps = new[]
+            {
+                $"POST /api/test/simulate-race?eventId={evt.Id}&raceId={race.Id}",
+                $"POST /api/test/process-pipeline?eventId={evt.Id}&raceId={race.Id}",
+                $"GET  /api/test/verify-ingestion?eventId={evt.Id}",
+                $"POST /api/test/full-test?eventId={evt.Id}&raceId={race.Id}"
+            }
+        });
         }
         catch (Exception ex)
         {
-            await _repository.RollbackTransactionAsync();
             _logger.LogError(ex, "Failed to seed test data");
             return StatusCode(500, new { error = ex.Message });
         }

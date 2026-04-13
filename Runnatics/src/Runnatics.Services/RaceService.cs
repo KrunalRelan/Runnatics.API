@@ -100,47 +100,39 @@ namespace Runnatics.Services
                     return false;
                 }
 
-                await _repository.BeginTransactionAsync();
+                Race? race = null;
 
                 try
                 {
-                    // Map race basic properties
-                    var race = _mapper.Map<Race>(request);
-                    race.EventId = eventId;
-                    race.AuditProperties = CreateAuditProperties(currentUserId);
-
-                    // Handle RaceSettings
-                    if (request.RaceSettings != null)
+                    await _repository.ExecuteInTransactionAsync(async () =>
                     {
-                        race.RaceSettings = CreateRaceSettings(request.RaceSettings, currentUserId);
-                    }
+                        // Map race basic properties
+                        race = _mapper.Map<Race>(request);
+                        race.EventId = eventId;
+                        race.AuditProperties = CreateAuditProperties(currentUserId);
 
-                    // Handle LeaderboardSettings - Create ONLY if override is enabled
-                    if (request.LeaderboardSettings != null)
-                    {
-                        race.LeaderboardSettings = _mapper.Map<LeaderboardSettings>(request.LeaderboardSettings);
-                        race.LeaderboardSettings.EventId = eventId;
-                        race.LeaderboardSettings.OverrideSettings = request.OverrideSettings ?? false;
-                        race.LeaderboardSettings.AuditProperties = CreateAuditProperties(currentUserId);
-                    }
-                    // If request.LeaderboardSettings is null, race.LeaderboardSettings stays null
-                    // This means the race will use event-level settings (fallback)
+                        // Handle RaceSettings
+                        if (request.RaceSettings != null)
+                        {
+                            race.RaceSettings = CreateRaceSettings(request.RaceSettings, currentUserId);
+                        }
 
-                    // Add race to repository
-                    var raceRepo = _repository.GetRepository<Race>();
-                    await raceRepo.AddAsync(race);
+                        // Handle LeaderboardSettings - Create ONLY if override is enabled
+                        if (request.LeaderboardSettings != null)
+                        {
+                            race.LeaderboardSettings = _mapper.Map<LeaderboardSettings>(request.LeaderboardSettings);
+                            race.LeaderboardSettings.EventId = eventId;
+                            race.LeaderboardSettings.OverrideSettings = request.OverrideSettings ?? false;
+                            race.LeaderboardSettings.AuditProperties = CreateAuditProperties(currentUserId);
+                        }
 
-                    // Save everything in one transaction
-                    // EF Core will:
-                    // 1. Insert Race record
-                    // 2. Automatically insert LeaderboardSettings (if not null) with correct RaceId
-                    await _repository.SaveChangesAsync();
-
-                    await _repository.CommitTransactionAsync();
+                        var raceRepo = _repository.GetRepository<Race>();
+                        await raceRepo.AddAsync(race);
+                    });
 
                     _logger.LogInformation(
                         "Race created successfully. RaceId: {RaceId}, EventId: {EventId}, HasCustomLeaderboard: {HasCustom}, CreatedBy: {UserId}",
-                        race.Id,
+                        race!.Id,
                         race.EventId,
                         race.LeaderboardSettings != null,
                         currentUserId);
@@ -149,7 +141,6 @@ namespace Runnatics.Services
                 }
                 catch (Exception exInner)
                 {
-                    await _repository.RollbackTransactionAsync();
                     _logger.LogError(exInner, "Error creating race for EventId: {EventId}. Error: {Error}",
                         eventId, exInner.Message);
                     ErrorMessage = "Error creating race.";

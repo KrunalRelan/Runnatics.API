@@ -224,9 +224,7 @@ namespace Runnatics.Services
                 var notFoundBibs = new List<string>();
                 var errors = new List<string>();
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     var rowNumber = 2; // Start from 2 (after header)
                     foreach (var (epc, bib) in records)
@@ -308,19 +306,11 @@ namespace Runnatics.Services
                         successCount++;
                         rowNumber++;
                     }
+                });
 
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
-
-                    _logger.LogInformation(
-                        "EPC mapping upload completed. Success: {Success}, Errors: {Errors}, Not Found: {NotFound}",
-                        successCount, errorCount, notFoundBibs.Count);
-                }
-                catch
-                {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                _logger.LogInformation(
+                    "EPC mapping upload completed. Success: {Success}, Errors: {Errors}, Not Found: {NotFound}",
+                    successCount, errorCount, notFoundBibs.Count);
 
                 response.TotalRecords = totalRecords;
                 response.SuccessCount = successCount;
@@ -1110,9 +1100,7 @@ namespace Runnatics.Services
                 var readingsToUpdate = new List<RawRFIDReading>();
                 var assignmentsToAdd = new List<ReadingCheckpointAssignment>();
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     // **LOOP RACE HANDLING**: Check if device has multiple checkpoints
                     bool isLoopRace = false;
@@ -1429,18 +1417,11 @@ namespace Runnatics.Services
                     importBatch.ProcessingCompletedAt = DateTime.UtcNow;
                     await batchRepo.UpdateAsync(importBatch);
 
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
+                });
 
-                    _logger.LogInformation(
-                        "RFID processing completed. Success: {Success}, Errors: {Errors}, Unlinked: {Unlinked}",
-                        successCount, errorCount, unlinkedEPCs.Count);
-                }
-                catch
-                {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                _logger.LogInformation(
+                    "RFID processing completed. Success: {Success}, Errors: {Errors}, Unlinked: {Unlinked}",
+                    successCount, errorCount, unlinkedEPCs.Count);
 
                 response.SuccessCount = successCount;
                 response.ErrorCount = errorCount;
@@ -2230,9 +2211,7 @@ namespace Runnatics.Services
                         .ToList();
                 }
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     // TRUE BULK INSERT - Single DB roundtrip
                     if (normalizedReadings.Count > 0)
@@ -2240,28 +2219,21 @@ namespace Runnatics.Services
                         await normalizedRepo.BulkInsertAsync(normalizedReadings);
                         _logger.LogInformation("Bulk inserted {Count} normalized readings", normalizedReadings.Count);
                     }
+                });
 
-                    await _repository.CommitTransactionAsync();
+                response.NormalizedReadings = normalizedReadings.Count;
+                response.DuplicatesRemoved = duplicateCount;
+                response.Status = "Completed";
 
-                    response.NormalizedReadings = normalizedReadings.Count;
-                    response.DuplicatesRemoved = duplicateCount;
-                    response.Status = "Completed";
+                var endTime = DateTime.UtcNow;
+                response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
 
-                    var endTime = DateTime.UtcNow;
-                    response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
+                _logger.LogInformation(
+                    "Deduplication completed. Normalized: {Normalized}, Duplicates: {Duplicates}, " +
+                    "Monotonic violations removed: {Violations}, Time: {Time}ms",
+                    normalizedReadings.Count, duplicateCount, invalidReadings.Count, response.ProcessingTimeMs);
 
-                    _logger.LogInformation(
-                        "Deduplication completed. Normalized: {Normalized}, Duplicates: {Duplicates}, " +
-                        "Monotonic violations removed: {Violations}, Time: {Time}ms",
-                        normalizedReadings.Count, duplicateCount, invalidReadings.Count, response.ProcessingTimeMs);
-
-                    return response;
-                }
-                catch
-                {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                return response;
             }
             catch (Exception ex)
             {
@@ -2458,12 +2430,11 @@ namespace Runnatics.Services
                     r.RaceId == decryptedRaceId)
                     .ToDictionaryAsync(r => r.ParticipantId, r => r);
 
-                await _repository.BeginTransactionAsync();
+                var resultsToAdd = new List<Results>();
+                var resultsToUpdate = new List<Results>();
 
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    var resultsToAdd = new List<Results>();
-                    var resultsToUpdate = new List<Results>();
 
                     // =====================================================================
                     // 1. Process FINISHED participants — ranked by GunTime ascending
@@ -2620,47 +2591,40 @@ namespace Runnatics.Services
                     // Calculate category rankings (only for Finished)
                     var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
 
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
+                });
 
-                    // Build response
-                    var genderStats = finishReadings
-                        .Where(r => finishedParticipantIds.Contains(r.ParticipantId))
-                        .GroupBy(r => r.Participant?.Gender?.ToLower() ?? "other")
-                        .ToDictionary(g => g.Key, g => g.Count());
+                // Build response
+                var genderStats = finishReadings
+                    .Where(r => finishedParticipantIds.Contains(r.ParticipantId))
+                    .GroupBy(r => r.Participant?.Gender?.ToLower() ?? "other")
+                    .ToDictionary(g => g.Key, g => g.Count());
 
-                    response.TotalFinishers = finishedParticipantIds.Count;
-                    response.ResultsCreated = resultsToAdd.Count;
-                    response.ResultsUpdated = resultsToUpdate.Count;
-                    response.DNFCount = dnfParticipantIds.Count;
-                    response.DNSCount = dnsParticipantIds.Count;
-                    response.CategoriesProcessed = categoriesProcessed;
-                    response.GenderStats = new GenderBreakdown
-                    {
-                        MaleFinishers = genderStats.GetValueOrDefault("male", 0),
-                        FemaleFinishers = genderStats.GetValueOrDefault("female", 0),
-                        OtherFinishers = genderStats.GetValueOrDefault("other", 0)
-                    };
-                    response.Status = "Completed";
-                    response.Message = $"Results: {finishedParticipantIds.Count} Finished, " +
-                        $"{dnfParticipantIds.Count} DNF, {dnsParticipantIds.Count} DNS";
-
-                    var endTime = DateTime.UtcNow;
-                    response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
-
-                    _logger.LogInformation(
-                        "Race results complete — Finished: {Finished} (ranked), DNF: {DNF}, DNS: {DNS}, " +
-                        "Created: {Created}, Updated: {Updated}, Time: {Time}ms",
-                        finishedParticipantIds.Count, dnfParticipantIds.Count, dnsParticipantIds.Count,
-                        resultsToAdd.Count, resultsToUpdate.Count, response.ProcessingTimeMs);
-
-                    return response;
-                }
-                catch
+                response.TotalFinishers = finishedParticipantIds.Count;
+                response.ResultsCreated = resultsToAdd.Count;
+                response.ResultsUpdated = resultsToUpdate.Count;
+                response.DNFCount = dnfParticipantIds.Count;
+                response.DNSCount = dnsParticipantIds.Count;
+                response.CategoriesProcessed = categoriesProcessed;
+                response.GenderStats = new GenderBreakdown
                 {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                    MaleFinishers = genderStats.GetValueOrDefault("male", 0),
+                    FemaleFinishers = genderStats.GetValueOrDefault("female", 0),
+                    OtherFinishers = genderStats.GetValueOrDefault("other", 0)
+                };
+                response.Status = "Completed";
+                response.Message = $"Results: {finishedParticipantIds.Count} Finished, " +
+                    $"{dnfParticipantIds.Count} DNF, {dnsParticipantIds.Count} DNS";
+
+                var endTime = DateTime.UtcNow;
+                response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
+
+                _logger.LogInformation(
+                    "Race results complete — Finished: {Finished} (ranked), DNF: {DNF}, DNS: {DNS}, " +
+                    "Created: {Created}, Updated: {Updated}, Time: {Time}ms",
+                    finishedParticipantIds.Count, dnfParticipantIds.Count, dnsParticipantIds.Count,
+                    resultsToAdd.Count, resultsToUpdate.Count, response.ProcessingTimeMs);
+
+                return response;
             }
             catch (Exception ex)
             {
@@ -3000,9 +2964,7 @@ namespace Runnatics.Services
                     "Processing {EpcCount} unique EPCs ({TotalReadings} readings)...",
                     readingsByEpc.Count, allReadings.Count);
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     foreach (var epcGroup in readingsByEpc)
                     {
@@ -3138,57 +3100,50 @@ namespace Runnatics.Services
                             eventLevelBatches.Count);
                     }
 
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
+                });
 
-                    // ================================================================
-                    // 8. BUILD RESPONSE
-                    // ================================================================
-                    response.TotalBatches = pendingBatches.Count;
-                    response.SuccessfulBatches = pendingBatches.Count;
-                    response.FailedBatches = 0;
-                    response.TotalProcessedReadings = successCount;
-                    response.Status = errorCount > 0 ? "CompletedWithErrors" : "Completed";
-                    response.Message = string.Format(
-                        "Processed {0} readings across {1} batches. " +
-                        "Simple assignments: {2}, Deferred to Phase 1.5: {3}, Unlinked EPCs: {4}",
-                        allReadings.Count, pendingBatches.Count,
-                        simpleAssignments, deferredAssignments, unlinkedEPCs.Count);
+                // ================================================================
+                // 8. BUILD RESPONSE
+                // ================================================================
+                response.TotalBatches = pendingBatches.Count;
+                response.SuccessfulBatches = pendingBatches.Count;
+                response.FailedBatches = 0;
+                response.TotalProcessedReadings = successCount;
+                response.Status = errorCount > 0 ? "CompletedWithErrors" : "Completed";
+                response.Message = string.Format(
+                    "Processed {0} readings across {1} batches. " +
+                    "Simple assignments: {2}, Deferred to Phase 1.5: {3}, Unlinked EPCs: {4}",
+                    allReadings.Count, pendingBatches.Count,
+                    simpleAssignments, deferredAssignments, unlinkedEPCs.Count);
 
-                    // Per-batch results for the response
-                    var readingCountByBatch = allReadings
-                        .GroupBy(r => r.BatchId)
-                        .ToDictionary(g => g.Key, g => g.Count());
+                // Per-batch results for the response
+                var readingCountByBatch = allReadings
+                    .GroupBy(r => r.BatchId)
+                    .ToDictionary(g => g.Key, g => g.Count());
 
-                    foreach (var batch in pendingBatches)
-                    {
-                        var batchReadingCount = readingCountByBatch.GetValueOrDefault(batch.Id, 0);
-                        response.BatchResults.Add(new BatchProcessResult
-                        {
-                            BatchId = _encryptionService.Encrypt(batch.Id.ToString()),
-                            FileName = batch.OriginalFileName,
-                            DeviceId = batch.DeviceId,
-                            Status = "Completed",
-                            SuccessCount = batchReadingCount
-                        });
-                    }
-
-                    _logger.LogInformation(
-                        "═══ Phase 1 COMPLETE ═══ " +
-                        "Total={Total}, Success={Success}, Errors={Errors}, " +
-                        "SimpleAssign={Simple}, DeferredToPhase15={Deferred}, " +
-                        "UnlinkedEPCs={Unlinked}, NoMapping={NoMap}",
-                        allReadings.Count, successCount, errorCount,
-                        simpleAssignments, deferredAssignments,
-                        unlinkedEPCs.Count, noCheckpointCount);
-
-                    return response;
-                }
-                catch
+                foreach (var batch in pendingBatches)
                 {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
+                    var batchReadingCount = readingCountByBatch.GetValueOrDefault(batch.Id, 0);
+                    response.BatchResults.Add(new BatchProcessResult
+                    {
+                        BatchId = _encryptionService.Encrypt(batch.Id.ToString()),
+                        FileName = batch.OriginalFileName,
+                        DeviceId = batch.DeviceId,
+                        Status = "Completed",
+                        SuccessCount = batchReadingCount
+                    });
                 }
+
+                _logger.LogInformation(
+                    "═══ Phase 1 COMPLETE ═══ " +
+                    "Total={Total}, Success={Success}, Errors={Errors}, " +
+                    "SimpleAssign={Simple}, DeferredToPhase15={Deferred}, " +
+                    "UnlinkedEPCs={Unlinked}, NoMapping={NoMap}",
+                    allReadings.Count, successCount, errorCount,
+                    simpleAssignments, deferredAssignments,
+                    unlinkedEPCs.Count, noCheckpointCount);
+
+                return response;
             }
             catch (Exception ex)
             {
@@ -3216,9 +3171,9 @@ namespace Runnatics.Services
                 Status = "Processing"
             };
 
-            await _repository.BeginTransactionAsync();
-
             try
+            {
+            await _repository.ExecuteInTransactionAsync(async () =>
             {
                 _logger.LogInformation(
                     "Starting data cleanup for Event {EventId}, Race {RaceId}. KeepUploads: {KeepUploads}",
@@ -3359,23 +3314,21 @@ namespace Runnatics.Services
                     }
                 }
 
-                await _repository.SaveChangesAsync();
-                await _repository.CommitTransactionAsync();
+            });
 
-                response.Status = "Success";
-                response.Message = keepUploads
-                    ? "Cleared processed data. Upload batches preserved and ready for reprocessing."
-                    : "Cleared all data including uploads. Race is now empty.";
+            response.Status = "Success";
+            response.Message = keepUploads
+                ? "Cleared processed data. Upload batches preserved and ready for reprocessing."
+                : "Cleared all data including uploads. Race is now empty.";
 
-                _logger.LogInformation(
-                    "Data cleanup completed for Event {EventId}, Race {RaceId}. {Summary}",
-                    decryptedEventId, decryptedRaceId, response.Summary);
+            _logger.LogInformation(
+                "Data cleanup completed for Event {EventId}, Race {RaceId}. {Summary}",
+                decryptedEventId, decryptedRaceId, response.Summary);
 
-                return response;
+            return response;
             }
             catch (Exception ex)
             {
-                await _repository.RollbackTransactionAsync();
                 ErrorMessage = $"Error clearing data: {ex.Message}";
                 _logger.LogError(ex, "Error clearing processed data for Event {EventId}, Race {RaceId}",
                     decryptedEventId, decryptedRaceId);
@@ -3405,8 +3358,6 @@ namespace Runnatics.Services
                 Status = "Processing",
                 TotalParticipantsRequested = decryptedParticipantIds.Count
             };
-
-            await _repository.BeginTransactionAsync();
 
             try
             {
@@ -3438,70 +3389,67 @@ namespace Runnatics.Services
                 {
                     response.Status = "Failed";
                     response.Message = "No valid participants found to reprocess";
-                    await _repository.RollbackTransactionAsync();
                     return response;
                 }
 
                 var validParticipantIds = participants.Select(p => p.Id).ToList();
-
-                // 1. Delete their Results
                 var resultsRepo = _repository.GetRepository<Results>();
-                var results = await resultsRepo.GetQuery(r => validParticipantIds.Contains(r.ParticipantId))
-                    .ToListAsync();
 
-                if (results.Count > 0)
+                // Phase 1: Clear and reset participant data
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    await resultsRepo.DeleteRangeAsync(results.Select(r => r.Id).ToList());
-                    response.ResultsCleared = results.Count;
-                }
-
-                // 2. Delete their ReadNormalized
-                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-                var normalized = await normalizedRepo.GetQuery(rn =>
-                    validParticipantIds.Contains(rn.ParticipantId))
-                    .ToListAsync();
-
-                var readingIds = normalized.Where(n => n.RawReadId.HasValue)
-                    .Select(n => n.RawReadId!.Value)
-                    .ToList();
-
-                if (normalized.Count > 0)
-                {
-                    await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
-                    response.ReadingsCleared = normalized.Count;
-                }
-
-                // 3. Reset their RawRFIDReading (if we have the IDs)
-                if (readingIds.Count > 0)
-                {
-                    var readingRepo = _repository.GetRepository<RawRFIDReading>();
-                    var readings = await readingRepo.GetQuery(r => readingIds.Contains(r.Id))
+                    // 1. Delete their Results
+                    var results = await resultsRepo.GetQuery(r => validParticipantIds.Contains(r.ParticipantId))
                         .ToListAsync();
 
-                    foreach (var reading in readings)
+                    if (results.Count > 0)
                     {
-                        reading.ProcessResult = "Pending";
-                        reading.ProcessedAt = null;
+                        await resultsRepo.DeleteRangeAsync(results.Select(r => r.Id).ToList());
+                        response.ResultsCleared = results.Count;
                     }
-                    await readingRepo.UpdateRangeAsync(readings);
-                }
 
-                await _repository.SaveChangesAsync();
-                await _repository.CommitTransactionAsync();
+                    // 2. Delete their ReadNormalized
+                    var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                    var normalized = await normalizedRepo.GetQuery(rn =>
+                        validParticipantIds.Contains(rn.ParticipantId))
+                        .ToListAsync();
+
+                    var readingIds = normalized.Where(n => n.RawReadId.HasValue)
+                        .Select(n => n.RawReadId!.Value)
+                        .ToList();
+
+                    if (normalized.Count > 0)
+                    {
+                        await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
+                        response.ReadingsCleared = normalized.Count;
+                    }
+
+                    // 3. Reset their RawRFIDReading (if we have the IDs)
+                    if (readingIds.Count > 0)
+                    {
+                        var readingRepo = _repository.GetRepository<RawRFIDReading>();
+                        var readings = await readingRepo.GetQuery(r => readingIds.Contains(r.Id))
+                            .ToListAsync();
+
+                        foreach (var reading in readings)
+                        {
+                            reading.ProcessResult = "Pending";
+                            reading.ProcessedAt = null;
+                        }
+                        await readingRepo.UpdateRangeAsync(readings);
+                    }
+                });
 
                 // Now reprocess using the complete workflow
                 _logger.LogInformation("Reprocessing {Count} participants...", participants.Count);
 
                 var processResult = await ProcessCompleteWorkflowAsync(eventId, raceId);
 
-                // CRITICAL FIX: After reprocessing, recalculate ALL rankings
-                // This ensures rankings are correct across all participants
+                // Phase 2: Recalculate ALL rankings
                 _logger.LogInformation("Recalculating rankings for all participants after reprocessing...");
 
-                await _repository.BeginTransactionAsync();
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    // Recalculate overall rankings for entire race
                     var allResults = await resultsRepo.GetQuery(r =>
                         r.EventId == decryptedEventId &&
                         r.RaceId == decryptedRaceId &&
@@ -3523,22 +3471,11 @@ namespace Runnatics.Services
                         _logger.LogInformation("Recalculated overall rankings for {Count} participants", rankUpdates.Count);
                     }
 
-                    // Recalculate gender rankings for entire race
                     await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
 
-                    // Recalculate category rankings for entire race
                     var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
-
                     _logger.LogInformation("Recalculated rankings across {Categories} categories", categoriesProcessed);
-
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
-                }
-                catch
-                {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                });
 
                 response.Status = processResult.Status;
                 response.ParticipantsReprocessed = participants.Count;
@@ -3556,7 +3493,6 @@ namespace Runnatics.Services
             }
             catch (Exception ex)
             {
-                await _repository.RollbackTransactionAsync();
                 ErrorMessage = $"Error reprocessing participants: {ex.Message}";
                 _logger.LogError(ex, "Error reprocessing participants");
                 response.Status = "Failed";
@@ -3602,9 +3538,7 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     // 1. Get readings for this batch
                     var readingRepo = _repository.GetRepository<RawRFIDReading>();
@@ -3650,28 +3584,20 @@ namespace Runnatics.Services
                     batch.ProcessingCompletedAt = null;
                     await batchRepo.UpdateAsync(batch);
 
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
-
                     _logger.LogInformation(
                         "Cleared data for batch {BatchId}. Readings reset: {Count}",
                         decryptedBatchId, readings.Count);
+                });
 
-                    // 6. Now reprocess using existing method
-                    var processRequest = new ProcessRFIDImportRequest
-                    {
-                        EventId = eventId,
-                        RaceId = raceId,
-                        UploadBatchId = uploadBatchId
-                    };
-
-                    return await ProcessRFIDStagingDataAsync(processRequest);
-                }
-                catch
+                // 6. Now reprocess using existing method
+                var processRequest = new ProcessRFIDImportRequest
                 {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                    EventId = eventId,
+                    RaceId = raceId,
+                    UploadBatchId = uploadBatchId
+                };
+
+                return await ProcessRFIDStagingDataAsync(processRequest);
             }
             catch (Exception ex)
             {

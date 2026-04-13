@@ -130,9 +130,7 @@ namespace Runnatics.Services
                 var splitTimes = new List<SplitTimes>();
                 var checkpointSummaries = new Dictionary<int, CheckpointSummary>();
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     foreach (var participantData in participantReadings)
                     {
@@ -196,13 +194,13 @@ namespace Runnatics.Services
 
                             var summary = checkpointSummaries[reading.CheckpointId];
                             summary.ParticipantCount++;
-                            
+
                             if (!summary.FastestTimeMs.HasValue || splitTimeMs < summary.FastestTimeMs.Value)
                             {
                                 summary.FastestTimeMs = splitTimeMs;
                                 summary.FastestTimeFormatted = FormatTime(splitTimeMs);
                             }
-                            
+
                             if (!summary.SlowestTimeMs.HasValue || splitTimeMs > summary.SlowestTimeMs.Value)
                             {
                                 summary.SlowestTimeMs = splitTimeMs;
@@ -220,33 +218,23 @@ namespace Runnatics.Services
                     if (splitTimes.Any())
                     {
                         await splitTimeRepo.AddRangeAsync(splitTimes);
-                        await _repository.SaveChangesAsync();
-
-                        // Calculate rankings at each checkpoint
                         await CalculateSplitTimeRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                     }
+                });
 
-                    await _repository.CommitTransactionAsync();
+                response.TotalSplitTimesCreated = splitTimes.Count;
+                response.CheckpointsProcessed = checkpointSummaries.Count;
+                response.CheckpointSummaries = checkpointSummaries.Values.OrderBy(c => c.DistanceKm).ToList();
+                response.Status = "Completed";
 
-                    response.TotalSplitTimesCreated = splitTimes.Count;
-                    response.CheckpointsProcessed = checkpointSummaries.Count;
-                    response.CheckpointSummaries = checkpointSummaries.Values.OrderBy(c => c.DistanceKm).ToList();
-                    response.Status = "Completed";
+                var endTime = DateTime.UtcNow;
+                response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
 
-                    var endTime = DateTime.UtcNow;
-                    response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
+                _logger.LogInformation(
+                    "Split time calculation completed. Participants: {Participants}, Splits: {Splits}, Time: {Time}ms",
+                    response.ParticipantsWithSplits, response.TotalSplitTimesCreated, response.ProcessingTimeMs);
 
-                    _logger.LogInformation(
-                        "Split time calculation completed. Participants: {Participants}, Splits: {Splits}, Time: {Time}ms",
-                        response.ParticipantsWithSplits, response.TotalSplitTimesCreated, response.ProcessingTimeMs);
-
-                    return response;
-                }
-                catch
-                {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                return response;
             }
             catch (Exception ex)
             {
@@ -341,9 +329,7 @@ namespace Runnatics.Services
 
                 var results = new List<Results>();
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     // Create results for finishers
                     foreach (var split in finishSplits.OrderBy(fs => fs.SplitTimeMs))
@@ -355,7 +341,7 @@ namespace Runnatics.Services
                             RaceId = decryptedRaceId,
                             FinishTime = split.SplitTimeMs,
                             GunTime = split.SplitTimeMs,
-                            NetTime = split.SplitTimeMs, // TODO: Calculate actual net time
+                            NetTime = split.SplitTimeMs,
                             Status = "Finished",
                             IsOfficial = request.MarkAsOfficial,
                             AuditProperties = new Models.Data.Common.AuditProperties
@@ -397,44 +383,34 @@ namespace Runnatics.Services
                     if (results.Any())
                     {
                         await resultsRepo.AddRangeAsync(results);
-                        await _repository.SaveChangesAsync();
-
-                        // Calculate rankings
                         await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                     }
+                });
 
-                    await _repository.CommitTransactionAsync();
-
-                    // Get fastest and slowest times
-                    var finishedResults = results.Where(r => r.Status == "Finished" && r.FinishTime.HasValue).ToList();
-                    if (finishedResults.Any())
-                    {
-                        response.FastestFinishTimeMs = finishedResults.Min(r => r.FinishTime);
-                        response.SlowestFinishTimeMs = finishedResults.Max(r => r.FinishTime);
-                        
-                        if (response.FastestFinishTimeMs.HasValue)
-                            response.FastestFinishTimeFormatted = FormatTime(response.FastestFinishTimeMs.Value);
-                        
-                        if (response.SlowestFinishTimeMs.HasValue)
-                            response.SlowestFinishTimeFormatted = FormatTime(response.SlowestFinishTimeMs.Value);
-                    }
-
-                    response.Status = "Completed";
-
-                    var endTime = DateTime.UtcNow;
-                    response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
-
-                    _logger.LogInformation(
-                        "Results calculation completed. Finishers: {Finishers}, DNF: {DNF}, Time: {Time}ms",
-                        response.Finishers, response.DNF, response.ProcessingTimeMs);
-
-                    return response;
-                }
-                catch
+                // Get fastest and slowest times
+                var finishedResults = results.Where(r => r.Status == "Finished" && r.FinishTime.HasValue).ToList();
+                if (finishedResults.Any())
                 {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
+                    response.FastestFinishTimeMs = finishedResults.Min(r => r.FinishTime);
+                    response.SlowestFinishTimeMs = finishedResults.Max(r => r.FinishTime);
+
+                    if (response.FastestFinishTimeMs.HasValue)
+                        response.FastestFinishTimeFormatted = FormatTime(response.FastestFinishTimeMs.Value);
+
+                    if (response.SlowestFinishTimeMs.HasValue)
+                        response.SlowestFinishTimeFormatted = FormatTime(response.SlowestFinishTimeMs.Value);
                 }
+
+                response.Status = "Completed";
+
+                var endTime = DateTime.UtcNow;
+                response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
+
+                _logger.LogInformation(
+                    "Results calculation completed. Finishers: {Finishers}, DNF: {DNF}, Time: {Time}ms",
+                    response.Finishers, response.DNF, response.ProcessingTimeMs);
+
+                return response;
             }
             catch (Exception ex)
             {

@@ -15,6 +15,7 @@ namespace Runnatics.Repositories.Interface
         Task BeginTransactionAsync();
         Task CommitTransactionAsync();
         Task RollbackTransactionAsync();
+        Task ExecuteInTransactionAsync(Func<Task> operation);
 
         // Multi-tenant context
         void SetTenantId(int TenantId);

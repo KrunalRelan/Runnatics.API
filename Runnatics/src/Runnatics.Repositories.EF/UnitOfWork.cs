@@ -152,6 +152,26 @@ namespace Runnatics.Repositories.EF
             return _tenantId;
         }
 
+        public async Task ExecuteInTransactionAsync(Func<Task> operation)
+        {
+            var strategy = _context.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+                try
+                {
+                    await operation();
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+                }
+                catch
+                {
+                    await transaction.RollbackAsync();
+                    throw;
+                }
+            });
+        }
+
         public async Task<PagingList<O>> ExecuteStoredProcedure<I, O>(string storedProcedureName, I input, string? output = null) where O : class
         {
             var repository = GetRepository<O>();

@@ -697,27 +697,15 @@ namespace Runnatics.Services
                     IsActive = true,
                     IsDeleted = false
                 };
-                await _repository.BeginTransactionAsync();
-
-                var entity = await participantRepo.AddAsync(participant);
-
-                await _repository.SaveChangesAsync();
-
-                await _repository.CommitTransactionAsync();
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    await participantRepo.AddAsync(participant);
+                });
             }
             catch (Exception ex)
             {
                 ErrorMessage = $"Error inserting participants: {ex.Message}";
                 _logger.LogError(ex, "Error while inserting the participant {bibnumber}", addParticipant.BibNumber);
-                try
-                {
-                    await _repository.RollbackTransactionAsync();
-                }
-                catch (Exception rollbackEx)
-                {
-                    _logger.LogWarning(rollbackEx, "Rollback failed or there was no active transaction to rollback.");
-                    this.ErrorMessage = "Rollback failed.";
-                }
             }
         }
 
@@ -760,18 +748,16 @@ namespace Runnatics.Services
                         IsActive = true,
                         IsDeleted = false
                     };
-                    await _repository.BeginTransactionAsync();
-
-                    await participantRepo.AddAsync(newParticipant);
-                    //delete the existing record
                     existingParticipant.AuditProperties.UpdatedDate = DateTime.UtcNow;
                     existingParticipant.AuditProperties.IsActive = false;
                     existingParticipant.AuditProperties.IsDeleted = true;
                     existingParticipant.AuditProperties.UpdatedBy = _userContext.UserId;
 
-                    await participantRepo.UpdateAsync(existingParticipant);
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
+                    await _repository.ExecuteInTransactionAsync(async () =>
+                    {
+                        await participantRepo.AddAsync(newParticipant);
+                        await participantRepo.UpdateAsync(existingParticipant);
+                    });
                     return;
                 }
                 else
@@ -781,27 +767,15 @@ namespace Runnatics.Services
                     existingParticipant.AuditProperties.IsDeleted = false;
                 }
 
-                await _repository.BeginTransactionAsync();
-
-                var entity = await participantRepo.UpdateAsync(existingParticipant);
-
-                await _repository.SaveChangesAsync();
-
-                await _repository.CommitTransactionAsync();
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    await participantRepo.UpdateAsync(existingParticipant);
+                });
             }
             catch (Exception ex)
             {
                 ErrorMessage = $"Error updating participants: {ex.Message}";
                 _logger.LogError(ex, "Error while updating the participant {participantId}", participantId);
-                try
-                {
-                    await _repository.RollbackTransactionAsync();
-                }
-                catch (Exception rollbackEx)
-                {
-                    _logger.LogWarning(rollbackEx, "Rollback failed or there was no active transaction to rollback.");
-                    this.ErrorMessage = "Rollback failed.";
-                }
             }
         }
 
@@ -832,27 +806,15 @@ namespace Runnatics.Services
                     IsDeleted = true
                 };
 
-                await _repository.BeginTransactionAsync();
-
-                var entity = await participantRepo.UpdateAsync(existingParticipant);
-
-                await _repository.SaveChangesAsync();
-
-                await _repository.CommitTransactionAsync();
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    await participantRepo.UpdateAsync(existingParticipant);
+                });
             }
             catch (Exception ex)
             {
                 ErrorMessage = $"Error delete participants: {ex.Message}";
                 _logger.LogError(ex, "Error while deleting the participant {participantId}", participantId);
-                try
-                {
-                    await _repository.RollbackTransactionAsync();
-                }
-                catch (Exception rollbackEx)
-                {
-                    _logger.LogWarning(rollbackEx, "Rollback failed or there was no active transaction to rollback.");
-                    this.ErrorMessage = "Rollback failed.";
-                }
             }
         }
 
@@ -995,28 +957,17 @@ namespace Runnatics.Services
 
                 if (participantsToAdd.Count > 0)
                 {
-                    await _repository.BeginTransactionAsync();
-
-                    try
+                    await _repository.ExecuteInTransactionAsync(async () =>
                     {
-                        // Bulk insert participants
                         foreach (var participant in participantsToAdd)
                         {
                             await participantRepo.AddAsync(participant);
                         }
+                    });
 
-                        await _repository.SaveChangesAsync();
-                        await _repository.CommitTransactionAsync();
-
-                        _logger.LogInformation(
-                            "Successfully added {Count} participants for EventId: {EventId}, RaceId: {RaceId}",
-                            participantsToAdd.Count, decryptedEventId, decryptedRaceId);
-                    }
-                    catch
-                    {
-                        await _repository.RollbackTransactionAsync();
-                        throw;
-                    }
+                    _logger.LogInformation(
+                        "Successfully added {Count} participants for EventId: {EventId}, RaceId: {RaceId}",
+                        participantsToAdd.Count, decryptedEventId, decryptedRaceId);
                 }
 
                 response.TotalCreated = participantsToAdd.Count;
@@ -1145,9 +1096,7 @@ namespace Runnatics.Services
                 var notFoundBibs = new List<string>();
                 var skippedCount = 0;
 
-                await _repository.BeginTransactionAsync();
-
-                try
+                await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     foreach (var record in csvRecords)
                     {
@@ -1182,19 +1131,11 @@ namespace Runnatics.Services
                             updatedCount++;
                         }
                     }
+                });
 
-                    await _repository.SaveChangesAsync();
-                    await _repository.CommitTransactionAsync();
-
-                    _logger.LogInformation(
-                        "UpdateParticipantsByBib completed. Updated: {Updated}, NotFound: {NotFound}, Skipped: {Skipped}",
-                        updatedCount, notFoundBibs.Count, skippedCount);
-                }
-                catch
-                {
-                    await _repository.RollbackTransactionAsync();
-                    throw;
-                }
+                _logger.LogInformation(
+                    "UpdateParticipantsByBib completed. Updated: {Updated}, NotFound: {NotFound}, Skipped: {Skipped}",
+                    updatedCount, notFoundBibs.Count, skippedCount);
 
                 response.TotalUpdated = updatedCount;
                 response.TotalNotFound = notFoundBibs.Count;

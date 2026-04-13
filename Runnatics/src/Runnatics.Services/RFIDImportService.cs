@@ -2432,6 +2432,7 @@ namespace Runnatics.Services
 
                 var resultsToAdd = new List<Results>();
                 var resultsToUpdate = new List<Results>();
+                var categoriesProcessed = 0;
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
@@ -2589,7 +2590,7 @@ namespace Runnatics.Services
                     await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
 
                     // Calculate category rankings (only for Finished)
-                    var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+                    categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
 
                 });
 

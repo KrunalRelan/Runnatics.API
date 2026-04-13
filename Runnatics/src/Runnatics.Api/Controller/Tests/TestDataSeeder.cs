@@ -70,6 +70,7 @@ public class TestDataSeederController : ControllerBase
         List<Checkpoint> checkpoints = new();
         object[]? participantResults = null;
         DateTime raceStartTime = default;
+        (string, decimal, int, int?)[] checkpointData = Array.Empty<(string, decimal, int, int?)>();
 
         try
         {
@@ -141,7 +142,7 @@ public class TestDataSeederController : ControllerBase
 
             // ── CHECKPOINTS ──
             var checkpointRepo = _repository.GetRepository<Checkpoint>();
-            var checkpointData = new[]
+            checkpointData = new[]
             {
                 ("Start",           0.0m,  devices[0].Id, (int?)null),
                 ("5km",             5.0m,  devices[1].Id, (int?)null),

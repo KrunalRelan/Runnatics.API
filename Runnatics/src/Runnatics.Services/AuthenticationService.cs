@@ -50,7 +50,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(TryDecrypt(request.Password));
                 user.AuditProperties.IsActive = true;
                 user.AuditProperties.UpdatedBy = user.Id;
                 user.AuditProperties.UpdatedDate = DateTime.UtcNow;
@@ -106,7 +106,11 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                if (request.NewPassword != request.ConfirmPassword)
+                var currentPasswordPlain = TryDecrypt(request.CurrentPassword);
+                var newPasswordPlain = TryDecrypt(request.NewPassword);
+                var confirmPasswordPlain = TryDecrypt(request.ConfirmPassword);
+
+                if (newPasswordPlain != confirmPasswordPlain)
                 {
                     ErrorMessage = "New password and confirmation do not match.";
                     return null;
@@ -127,7 +131,7 @@ namespace Runnatics.Services
 
                 // Verify current password
                 if (string.IsNullOrEmpty(user.PasswordHash) ||
-                    !BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+                    !BCrypt.Net.BCrypt.Verify(currentPasswordPlain, user.PasswordHash))
                 {
                     ErrorMessage = "Current password is incorrect.";
                     _logger.LogWarning("Invalid current password attempt for user: {UserId}", userId);
@@ -135,7 +139,7 @@ namespace Runnatics.Services
                 }
 
                 // Validate new password strength
-                if (!IsValidPassword(request.NewPassword))
+                if (!IsValidPassword(newPasswordPlain))
                 {
                     ErrorMessage = "New password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&).";
                     return null;
@@ -143,14 +147,14 @@ namespace Runnatics.Services
 
 
                 // Check if new password is different from current password
-                if (BCrypt.Net.BCrypt.Verify(request.NewPassword, user.PasswordHash))
+                if (BCrypt.Net.BCrypt.Verify(newPasswordPlain, user.PasswordHash))
                 {
                     ErrorMessage = "New password must be different from the current password.";
                     return null;
                 }
 
                 // Hash the new password
-                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPasswordPlain);
                 user.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 user.AuditProperties.UpdatedBy = userId; // User is updating their own password
 
@@ -260,7 +264,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+                if (!BCrypt.Net.BCrypt.Verify(TryDecrypt(request.Password), user.PasswordHash))
                 {
                     _logger.LogWarning("Login attempt with invalid password for email: {Email}", request.Email);
                     this.ErrorMessage = "Invalid email or password.";
@@ -379,7 +383,7 @@ namespace Runnatics.Services
                         LastName = request.SuperAdminLastName,
                         Email = request.SuperAdminEmail,
                         Role = UserRole.SuperAdmin.ToString(),
-                        PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
+                        PasswordHash = BCrypt.Net.BCrypt.HashPassword(TryDecrypt(request.Password)),
                         AuditProperties = new AuditProperties
                         {
                             CreatedDate = DateTime.UtcNow,
@@ -425,14 +429,17 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                if (request.NewPassword != request.ConfirmNewPassword)
+                var newPasswordPlain = TryDecrypt(request.NewPassword);
+                var confirmNewPasswordPlain = TryDecrypt(request.ConfirmNewPassword);
+
+                if (newPasswordPlain != confirmNewPasswordPlain)
                 {
                     ErrorMessage = "New password and confirmation do not match.";
                     return null;
                 }
 
                 // Validate new password strength
-                if (!IsValidPassword(request.NewPassword))
+                if (!IsValidPassword(newPasswordPlain))
                 {
                     ErrorMessage = "New password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&).";
                     return null;
@@ -474,7 +481,7 @@ namespace Runnatics.Services
                 }
 
                 // Update user password
-                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPasswordPlain);
                 user.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 user.AuditProperties.UpdatedBy = user.Id;
 
@@ -918,6 +925,46 @@ namespace Runnatics.Services
             var tokenBytes = new byte[32];
             rng.GetBytes(tokenBytes);
             return Convert.ToBase64String(tokenBytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        }
+
+        // Decrypts an AES-CBC password encrypted by the frontend.
+        // Expected format: <base64-iv>:<base64-ciphertext>
+        // Falls back to plain-text if the format doesn't match (e.g. local dev without the key configured).
+        // TODO: Remove the plain-text fallback once all environments have PasswordEncryptionKey configured.
+        private string TryDecrypt(string? input)
+        {
+            if (string.IsNullOrEmpty(input))
+                return string.Empty;
+
+            var parts = input.Split(':', 2);
+            if (parts.Length != 2)
+                return input;
+
+            var encryptionKey = _configuration["AppSettings:PasswordEncryptionKey"];
+            if (string.IsNullOrEmpty(encryptionKey))
+                return input;
+
+            try
+            {
+                var keyBytes = Convert.FromBase64String(encryptionKey);
+                var iv = Convert.FromBase64String(parts[0]);
+                var cipherBytes = Convert.FromBase64String(parts[1]);
+
+                using var aes = Aes.Create();
+                aes.Key = keyBytes;
+                aes.IV = iv;
+                aes.Mode = CipherMode.CBC;
+                aes.Padding = PaddingMode.PKCS7;
+
+                using var decryptor = aes.CreateDecryptor();
+                var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
+                return Encoding.UTF8.GetString(plainBytes);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Password decryption failed; treating input as plain text.");
+                return input;
+            }
         }
     }
 }

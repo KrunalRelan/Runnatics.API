@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using AutoMapper;
+using Runnatics.Services.Helpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Runnatics.Data.EF;
@@ -260,7 +261,10 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+                var passwordEncryptionKey = _configuration["PasswordEncryption:Key"] ?? string.Empty;
+                var plainPassword = PasswordEncryptionHelper.Decrypt(request.Password, passwordEncryptionKey);
+
+                if (!BCrypt.Net.BCrypt.Verify(plainPassword, user.PasswordHash))
                 {
                     _logger.LogWarning("Login attempt with invalid password for email: {Email}", request.Email);
                     this.ErrorMessage = "Invalid email or password.";

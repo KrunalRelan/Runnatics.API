@@ -332,8 +332,9 @@ namespace Runnatics.Services
             }
             catch (DbUpdateException dbEx)
             {
+                var innerMessage = dbEx.InnerException?.Message ?? dbEx.Message;
                 this.ErrorMessage = "Database error occurred while updating the event.";
-                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}", id);
+                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}. Inner: {InnerMessage}", id, innerMessage);
                 return false;
             }
             catch (Exception ex)
@@ -513,6 +514,9 @@ namespace Runnatics.Services
 
             // Set the tenant ID from the JWT token
             eventEntity.TenantId = tenantId;
+            // New events start as Draft; timezone defaults to Asia/Kolkata
+            eventEntity.Status = Runnatics.Models.Data.Enumerations.EventStatus.Draft;
+            eventEntity.TimeZone = "Asia/Kolkata";
             eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
 
             // Add event settings if provided

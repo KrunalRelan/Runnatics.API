@@ -239,6 +239,81 @@ namespace Runnatics.Api.Controller
                 return Ok(HttpStatusCode.NoContent);
         }
 
+        /// <summary>
+        /// Update a participant's details including run status, manual time, distance, and optional race reassignment.
+        /// </summary>
+        [HttpPut("~/api/races/{raceId}/participants/{participantId}")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UpdateParticipant(
+            [FromRoute] string raceId,
+            [FromRoute] string participantId,
+            [FromBody] UpdateParticipantRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(participantId) || request is null)
+                return BadRequest(new { error = "Race ID, Participant ID, and request body are required." });
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
+            }
+
+            await _service.UpdateParticipantExtendedAsync(raceId, participantId, request);
+
+            if (_service.HasError)
+            {
+                if (_service.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                    return NotFound(new { error = _service.ErrorMessage });
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
+            }
+
+            return Ok(new ResponseBase<object> { Message = new { } });
+        }
+
+        /// <summary>
+        /// Soft-delete a participant by race and participant ID.
+        /// </summary>
+        [HttpDelete("~/api/races/{raceId}/participants/{participantId}")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> DeleteParticipantByRace(
+            [FromRoute] string raceId,
+            [FromRoute] string participantId,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(participantId))
+                return BadRequest(new { error = "Race ID and Participant ID are required." });
+
+            await _service.DeleteParticipantAsync(raceId, participantId);
+
+            if (_service.HasError)
+            {
+                if (_service.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                    return NotFound(new { error = _service.ErrorMessage });
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
+            }
+
+            return NoContent();
+        }
+
         [HttpGet("{eventId}/{raceId}/categories")]
         public async Task<IActionResult> Categories([FromRoute] string eventId, [FromRoute] string raceId)
         {

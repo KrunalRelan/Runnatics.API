@@ -12,9 +12,13 @@ namespace Runnatics.Services
     public class SupportQueryService(
         IUnitOfWork<RaceSyncDbContext> repository,
         IEmailService emailService,
+        IEmailTemplateService emailTemplateService,
+        ISmsService smsService,
         ILogger<SupportQueryService> logger) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), ISupportQueryService
     {
         private readonly IEmailService _emailService = emailService;
+        private readonly IEmailTemplateService _emailTemplateService = emailTemplateService;
+        private readonly ISmsService _smsService = smsService;
         private readonly ILogger<SupportQueryService> _logger = logger;
 
         // ── Public (no auth) ──────────────────────────────────────────────────
@@ -39,6 +43,8 @@ namespace Runnatics.Services
                 await _repository.SaveChangesAsync();
 
                 _logger.LogInformation("Support query submitted by {Email}, Id: {Id}", query.SubmitterEmail, query.Id);
+
+                await SendSubmissionConfirmationAsync(query.SubmitterEmail, query.Subject, query.Id);
 
                 return query.Id;
             }
@@ -332,9 +338,35 @@ namespace Runnatics.Services
 
         private async Task SendCommentEmailInternalAsync(SupportQueryComment comment, string recipientEmail)
         {
-            var subject = "Update on your support query";
-            var body = comment.CommentText;
-            await _emailService.SendAsync(recipientEmail, subject, body);
+            try
+            {
+                var subject = "Update on your support query";
+                var htmlBody = _emailTemplateService.BuildSupportQueryReply(
+                    submitterName: recipientEmail,
+                    subject: subject,
+                    replyBody: comment.CommentText);
+                await _emailService.SendEmailAsync(recipientEmail, subject, htmlBody);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send comment notification email to {Email}", recipientEmail);
+            }
+        }
+
+        private async Task SendSubmissionConfirmationAsync(string submitterEmail, string subject, int ticketId)
+        {
+            try
+            {
+                var htmlBody = _emailTemplateService.BuildSupportQueryConfirmation(
+                    submitterName: submitterEmail,
+                    subject: subject,
+                    ticketId: ticketId.ToString());
+                await _emailService.SendEmailAsync(submitterEmail, "We received your support query", htmlBody);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send submission confirmation email to {Email}", submitterEmail);
+            }
         }
 
         private static SupportQueryDetailDto MapToDetailDto(SupportQuery q) => new()

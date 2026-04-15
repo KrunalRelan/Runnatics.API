@@ -20,6 +20,12 @@ namespace Runnatics.Models.Client.Responses.Races
 
         public int? MaxParticipants { get; set; }
 
+        /// <summary>Count of active participants registered for this race</summary>
+        public int TotalParticipants { get; set; }
+
+        /// <summary>Count of participants who have an EPC/chip mapped</summary>
+        public int EncodedEpcCount { get; set; }
+
         // Audit
         public DateTime CreatedAt { get; set; }
 

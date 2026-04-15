@@ -65,9 +65,13 @@ namespace Runnatics.Models.Data.Entities
         public DateTime? RegistrationDate { get; set; } = DateTime.UtcNow;
 
         [MaxLength(20)]
-        public string Status { get; set; } = "Registered"; // Registered, CheckedIn, Started, Finished, DNF, DQ
+        public string Status { get; set; } = "Registered"; // Registered, CheckedIn, Started, Finished, DNF, DQ, DNS
 
         public string? Notes { get; set; }
+
+        public decimal? ManualDistance { get; set; }
+
+        public int? LoopCount { get; set; }
 
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 

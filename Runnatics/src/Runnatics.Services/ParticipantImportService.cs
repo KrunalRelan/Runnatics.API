@@ -606,21 +606,28 @@ namespace Runnatics.Services
                         .ToDictionary(g => g.Key, g => g.OrderBy(r => r.ChipTime).First()); // Keep earliest if multiple
 
                     // Add checkpoint times (converted to event's timezone)
+                    var checkpointList = new List<CheckpointTimeDto>();
+                    int order = 1;
                     foreach (var checkpoint in checkpoints)
                     {
                         var checkpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}";
+                        string? formattedTime = null;
 
                         if (readingsByCheckpoint.TryGetValue(checkpoint.Id, out var reading))
                         {
                             var localTime = TimeZoneInfo.ConvertTimeFromUtc(reading.ChipTime, displayTimeZone);
-                            participant.CheckpointTimes[checkpointName] = localTime.ToString("HH:mm:ss");
+                            formattedTime = localTime.ToString("HH:mm:ss");
                         }
-                        else
+
+                        participant.CheckpointTimes[checkpointName] = formattedTime;
+                        checkpointList.Add(new CheckpointTimeDto
                         {
-                            // No reading for this checkpoint - return null (graceful handling)
-                            participant.CheckpointTimes[checkpointName] = null;
-                        }
+                            CheckpointName = checkpointName,
+                            CheckpointOrder = order++,
+                            Time = formattedTime
+                        });
                     }
+                    participant.Checkpoints = checkpointList;
                 }
 
                 _logger.LogInformation(
@@ -1641,6 +1648,203 @@ namespace Runnatics.Services
                 ErrorMessage = $"Error getting participant details: {ex.Message}";
                 _logger.LogError(ex, "Error getting participant details for {ParticipantId}", participantId);
                 return null;
+            }
+        }
+
+        public async Task UpdateParticipantExtendedAsync(string raceId, string participantId, UpdateParticipantRequest request)
+        {
+            try
+            {
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+                var tenantId = _userContext.TenantId;
+                var userId = _userContext.UserId;
+
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+
+                var participant = await participantRepo.GetQuery(p =>
+                    p.Id == decryptedParticipantId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.TenantId == tenantId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found";
+                    _logger.LogWarning("UpdateParticipantExtended failed: Participant {ParticipantId} not found in Race {RaceId}", participantId, raceId);
+                    return;
+                }
+
+                // Apply scalar updates
+                if (request.FirstName != null) participant.FirstName = request.FirstName;
+                if (request.LastName != null) participant.LastName = request.LastName;
+                if (request.Mobile != null) participant.Phone = request.Mobile;
+                if (request.Email != null) participant.Email = request.Email;
+                if (request.AgeCategory != null) participant.AgeCategory = request.AgeCategory;
+                if (request.ManualDistance.HasValue) participant.ManualDistance = request.ManualDistance;
+                if (request.LoopCount.HasValue) participant.LoopCount = request.LoopCount;
+
+                // Map RunStatus to Participant.Status
+                if (request.RunStatus != null)
+                {
+                    participant.Status = request.RunStatus.Equals("OK", StringComparison.OrdinalIgnoreCase)
+                        ? "Registered"
+                        : request.RunStatus;
+                }
+
+                participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                participant.AuditProperties.UpdatedBy = userId;
+
+                // Handle race reassignment
+                int targetRaceId = decryptedRaceId;
+                if (!string.IsNullOrEmpty(request.RaceId))
+                {
+                    targetRaceId = Convert.ToInt32(_encryptionService.Decrypt(request.RaceId));
+                    if (targetRaceId != decryptedRaceId)
+                    {
+                        var raceRepo = _repository.GetRepository<Race>();
+                        var targetRaceExists = await raceRepo.GetQuery(r =>
+                            r.Id == targetRaceId &&
+                            r.EventId == participant.EventId &&
+                            r.AuditProperties.IsActive &&
+                            !r.AuditProperties.IsDeleted)
+                            .AsNoTracking()
+                            .AnyAsync();
+
+                        if (!targetRaceExists)
+                        {
+                            ErrorMessage = "Target race not found or does not belong to this event";
+                            return;
+                        }
+
+                        // Soft-delete current and insert in new race
+                        var newParticipant = new Models.Data.Entities.Participant
+                        {
+                            TenantId = tenantId,
+                            EventId = participant.EventId,
+                            RaceId = targetRaceId,
+                            BibNumber = participant.BibNumber,
+                            FirstName = participant.FirstName,
+                            LastName = participant.LastName,
+                            Email = participant.Email,
+                            Phone = participant.Phone,
+                            Gender = participant.Gender,
+                            AgeCategory = participant.AgeCategory,
+                            ManualDistance = participant.ManualDistance,
+                            LoopCount = participant.LoopCount,
+                            Status = participant.Status,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+
+                        participant.AuditProperties.IsActive = false;
+                        participant.AuditProperties.IsDeleted = true;
+
+                        await _repository.ExecuteInTransactionAsync(async () =>
+                        {
+                            await participantRepo.UpdateAsync(participant);
+                            await participantRepo.AddAsync(newParticipant);
+                        });
+
+                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}", participantId, decryptedRaceId, targetRaceId);
+                        return;
+                    }
+                }
+
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    await participantRepo.UpdateAsync(participant);
+
+                    // Update Results for RunStatus/DisqualificationReason/ManualTime
+                    if (request.RunStatus != null || request.DisqualificationReason != null || request.ManualTime != null)
+                    {
+                        var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                        var result = await resultsRepo.GetQuery(r =>
+                            r.ParticipantId == decryptedParticipantId &&
+                            r.RaceId == decryptedRaceId)
+                            .FirstOrDefaultAsync();
+
+                        if (result != null)
+                        {
+                            if (request.RunStatus != null)
+                            {
+                                result.Status = request.RunStatus.Equals("OK", StringComparison.OrdinalIgnoreCase)
+                                    ? "Finished"
+                                    : request.RunStatus;
+                            }
+                            if (request.DisqualificationReason != null)
+                                result.DisqualificationReason = request.DisqualificationReason;
+
+                            if (request.ManualTime != null &&
+                                TimeSpan.TryParseExact(request.ManualTime, @"hh\:mm\:ss", null, out var manualSpan))
+                            {
+                                result.ManualFinishTimeMs = (long)manualSpan.TotalMilliseconds;
+                            }
+
+                            result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            result.AuditProperties.UpdatedBy = userId;
+                            await resultsRepo.UpdateAsync(result);
+                        }
+                    }
+                });
+
+                _logger.LogInformation("Participant {ParticipantId} updated successfully by User {UserId}", participantId, userId);
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error updating participant: {ex.Message}";
+                _logger.LogError(ex, "Error in UpdateParticipantExtendedAsync for participant {ParticipantId}", participantId);
+            }
+        }
+
+        public async Task DeleteParticipantAsync(string raceId, string participantId)
+        {
+            try
+            {
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+                var tenantId = _userContext.TenantId;
+
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+
+                var participant = await participantRepo.GetQuery(p =>
+                    p.Id == decryptedParticipantId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.TenantId == tenantId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found";
+                    _logger.LogWarning("DeleteParticipant failed: Participant {ParticipantId} not found in Race {RaceId}", participantId, raceId);
+                    return;
+                }
+
+                participant.AuditProperties.IsActive = false;
+                participant.AuditProperties.IsDeleted = true;
+                participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                participant.AuditProperties.UpdatedBy = _userContext.UserId;
+
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    await participantRepo.UpdateAsync(participant);
+                });
+
+                _logger.LogInformation("Participant {ParticipantId} soft-deleted from Race {RaceId}", participantId, raceId);
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error deleting participant: {ex.Message}";
+                _logger.LogError(ex, "Error in DeleteParticipantAsync for participant {ParticipantId}", participantId);
             }
         }
     }

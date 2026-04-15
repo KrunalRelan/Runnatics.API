@@ -653,25 +653,54 @@ namespace Runnatics.Services
 
             var entities = await baseQuery.ToListAsync();
 
-                        var orderedEntities = orderedIds
-                            .Select(id => entities.FirstOrDefault(e => e.Id == id))
-                            .Where(e => e != null)
-                            .Cast<Race>()
-                            .ToList();
+            var orderedEntities = orderedIds
+                .Select(id => entities.FirstOrDefault(e => e.Id == id))
+                .Where(e => e != null)
+                .Cast<Race>()
+                .ToList();
 
-                        // Get effective leaderboard settings for each race
-                        var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
-
-                        foreach (var race in orderedEntities)
-                        {
-                            // Get effective leaderboard settings using the helper method
-                            var effectiveSettings = await GetEffectiveLeaderboardSettings(race.EventId, race.Id);
-
-                            // Attach to race for mapping
-                            race.LeaderboardSettings = effectiveSettings;
-                        }
+            // Get effective leaderboard settings for each race
+            foreach (var race in orderedEntities)
+            {
+                var effectiveSettings = await GetEffectiveLeaderboardSettings(race.EventId, race.Id);
+                race.LeaderboardSettings = effectiveSettings;
+            }
 
             var responses = _mapper.Map<List<RaceResponse>>(orderedEntities);
+
+            // Compute participant counts and EPC-mapped counts per race
+            var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+            var participantCounts = await participantRepo
+                .GetQuery(p => orderedIds.Contains(p.RaceId) && p.AuditProperties.IsActive && !p.AuditProperties.IsDeleted)
+                .GroupBy(p => p.RaceId)
+                .Select(g => new { RaceId = g.Key, Count = g.Count() })
+                .AsNoTracking()
+                .ToListAsync();
+
+            var chipAssignmentRepo = _repository.GetRepository<Models.Data.Entities.ChipAssignment>();
+            var epcCounts = await chipAssignmentRepo
+                .GetQuery(ca =>
+                    ca.UnassignedAt == null &&
+                    ca.AuditProperties.IsActive &&
+                    !ca.AuditProperties.IsDeleted)
+                .Include(ca => ca.Participant)
+                .Where(ca => orderedIds.Contains(ca.Participant.RaceId) && ca.Participant.AuditProperties.IsActive)
+                .GroupBy(ca => ca.Participant.RaceId)
+                .Select(g => new { RaceId = g.Key, Count = g.Count() })
+                .AsNoTracking()
+                .ToListAsync();
+
+            var participantCountLookup = participantCounts.ToDictionary(x => x.RaceId, x => x.Count);
+            var epcCountLookup = epcCounts.ToDictionary(x => x.RaceId, x => x.Count);
+
+            // responses and orderedEntities are in the same order
+            for (int i = 0; i < responses.Count; i++)
+            {
+                var rawId = orderedEntities[i].Id;
+                responses[i].TotalParticipants = participantCountLookup.TryGetValue(rawId, out var pc) ? pc : 0;
+                responses[i].EncodedEpcCount = epcCountLookup.TryGetValue(rawId, out var ec) ? ec : 0;
+            }
+
             return responses;
         }
 

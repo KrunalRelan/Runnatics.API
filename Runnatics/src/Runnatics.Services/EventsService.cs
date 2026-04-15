@@ -311,7 +311,7 @@ namespace Runnatics.Services
 
                 // Check for duplicates only if name or date changed
                 if (HasEventIdentityChanged(eventEntity, request) &&
-                        await IsDuplicateEventAsync(request, eventId))
+                        await IsDuplicateEventAsync(request, tenantId, eventId))
                 {
                     this.ErrorMessage = "Event already exists with the same name and date.";
                     _logger.LogWarning("Duplicate event update attempt: {Name} on {Date} for Tenant {TenantId} by User {UserId}",
@@ -490,6 +490,7 @@ namespace Runnatics.Services
                 e.Name == request.Name &&
                 e.EventDate.Date == request.EventDate.Date &&
                 e.TenantId == tenantId &&
+                (excludeEventId == null || e.Id != excludeEventId) &&
                 e.AuditProperties.IsActive &&
                 !e.AuditProperties.IsDeleted;
 

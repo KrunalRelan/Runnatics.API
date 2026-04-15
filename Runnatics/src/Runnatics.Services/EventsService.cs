@@ -514,6 +514,9 @@ namespace Runnatics.Services
 
             // Set the tenant ID from the JWT token
             eventEntity.TenantId = tenantId;
+            // New events start as Draft; timezone defaults to Asia/Kolkata
+            eventEntity.Status = Runnatics.Models.Data.Enumerations.EventStatus.Draft;
+            eventEntity.TimeZone = "Asia/Kolkata";
             eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
 
             // Add event settings if provided

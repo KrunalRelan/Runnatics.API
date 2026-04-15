@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using Runnatics.Models.Client.Common;
 
 namespace Runnatics.Models.Client.Requests.Events
 {
@@ -21,9 +20,6 @@ namespace Runnatics.Models.Client.Requests.Events
         [Required]
         public DateTime EventDate { get; set; }
 
-        [MaxLength(50)]
-        public string TimeZone { get; set; } = "Asia/Kolkata";
-
         [MaxLength(255)]
         public string? VenueName { get; set; }
 
@@ -43,8 +39,6 @@ namespace Runnatics.Models.Client.Requests.Events
 
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
-
-        public EventStatus Status { get; set; } = EventStatus.Active;
 
         // Event Settings
         public EventSettingsRequest? EventSettings { get; set; }

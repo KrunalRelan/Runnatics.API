@@ -88,6 +88,10 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service from JWT token
                 .ForMember(dest => dest.Slug, opt => opt.Ignore()) // Not updatable via API
+                .ForMember(dest => dest.Status, opt => opt.Ignore()) // Set server-side: Draft on create
+                .ForMember(dest => dest.TimeZone, opt => opt.Ignore()) // Set server-side on create
+                .ForMember(dest => dest.MaxParticipants, opt => opt.Ignore()) // Not set at creation time
+                .ForMember(dest => dest.RegistrationDeadline, opt => opt.Ignore()) // Not set at creation time
                 .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.LeaderboardSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
@@ -224,7 +228,9 @@ namespace Runnatics.Services.Mappings
                 .ForMember(d => d.Description, opt => opt.MapFrom(src => src.Description))
                 .ForMember(d => d.MaxParticipants, opt => opt.MapFrom(src => src.MaxParticipants))
                 .ForMember(d => d.RaceSettings, opt => opt.MapFrom(src => src.RaceSettings))
-                .ForMember(d => d.Event, opt => opt.MapFrom(src => src.Event));
+                .ForMember(d => d.Event, opt => opt.MapFrom(src => src.Event))
+                .ForMember(d => d.TotalParticipants, opt => opt.Ignore()) // Computed in service
+                .ForMember(d => d.EncodedEpcCount, opt => opt.Ignore()); // Computed in service
 
             CreateMap<RaceSettings, RaceSettingsResponse>()
                 .ForMember(d => d.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))

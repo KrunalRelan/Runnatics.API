@@ -17,8 +17,9 @@ namespace Runnatics.Models.Data.Entities
         public int? OverallRank { get; set; }
         public int? GenderRank { get; set; }
         public int? CategoryRank { get; set; }
-        public string Status { get; set; } = "Finished"; // Finished, DNF, DQ
+        public string Status { get; set; } = "Finished"; // Finished, DNF, DQ, DNS
         public string? DisqualificationReason { get; set; }
+        public long? ManualFinishTimeMs { get; set; } // Admin-entered finish time override (milliseconds)
         public bool IsOfficial { get; set; } = false; // Final verified result
         public bool CertificateGenerated { get; set; } = false;
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();

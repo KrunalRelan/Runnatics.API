@@ -21,6 +21,11 @@
         /// </summary>
         public Dictionary<string, string?>? CheckpointTimes { get; set; }
 
+        /// <summary>
+        /// Ordered list of checkpoint crossing times with structured metadata
+        /// </summary>
+        public List<CheckpointTimeDto>? Checkpoints { get; set; }
+
         // Results data - populated from Results table
         /// <summary>
         /// Gun Time - total race time from gun start (formatted as HH:mm:ss or mm:ss)

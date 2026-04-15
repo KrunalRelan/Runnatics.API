@@ -87,6 +87,7 @@ namespace Runnatics.Services.Mappings
             CreateMap<EventRequest, Event>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
                 .ForMember(dest => dest.TenantId, opt => opt.Ignore()) // Set by service from JWT token
+                .ForMember(dest => dest.Slug, opt => opt.Ignore()) // Not updatable via API
                 .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.LeaderboardSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service

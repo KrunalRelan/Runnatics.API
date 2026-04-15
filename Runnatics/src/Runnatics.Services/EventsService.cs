@@ -332,8 +332,9 @@ namespace Runnatics.Services
             }
             catch (DbUpdateException dbEx)
             {
+                var innerMessage = dbEx.InnerException?.Message ?? dbEx.Message;
                 this.ErrorMessage = "Database error occurred while updating the event.";
-                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}", id);
+                _logger.LogError(dbEx, "Database error during event update for ID: {EventId}. Inner: {InnerMessage}", id, innerMessage);
                 return false;
             }
             catch (Exception ex)

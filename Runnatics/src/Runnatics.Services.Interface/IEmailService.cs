@@ -8,33 +8,31 @@ namespace Runnatics.Services.Interface
         /// <summary>
         /// Send password reset email with reset link
         /// </summary>
-        /// <param name="email">User email address</param>
-        /// <param name="resetToken">Password reset token</param>
-        /// <param name="resetUrl">Optional custom reset URL</param>
         Task<bool> SendPasswordResetEmailAsync(string email, string resetToken, string? resetUrl = null);
 
         /// <summary>
         /// Send user invitation email
         /// </summary>
-        /// <param name="email">User email address</param>
-        /// <param name="invitationToken">Invitation token</param>
-        /// <param name="organizationName">Organization name</param>
         Task<bool> SendInvitationEmailAsync(string email, string invitationToken, string organizationName);
 
         /// <summary>
         /// Send welcome email to new users
         /// </summary>
-        /// <param name="email">User email address</param>
-        /// <param name="firstName">User first name</param>
-        /// <param name="organizationName">Organization name</param>
         Task<bool> SendWelcomeEmailAsync(string email, string firstName, string organizationName);
 
         /// <summary>
-        /// Send a generic email
+        /// Send a generic email (plain text or HTML)
         /// </summary>
-        /// <param name="to">Recipient email address</param>
-        /// <param name="subject">Email subject</param>
-        /// <param name="body">Email body (plain text or HTML)</param>
         Task<bool> SendAsync(string to, string subject, string body);
+
+        /// <summary>
+        /// Send an HTML email
+        /// </summary>
+        Task SendEmailAsync(string to, string subject, string htmlBody);
+
+        /// <summary>
+        /// Send an HTML email with optional CC and BCC
+        /// </summary>
+        Task SendEmailAsync(string to, string subject, string htmlBody, List<string>? cc = null, List<string>? bcc = null);
     }
 }

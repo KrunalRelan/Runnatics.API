@@ -55,7 +55,7 @@ namespace Runnatics.Services
                 checkpoint.EventId = decryptedEventId;
                 checkpoint.RaceId = decryptedRaceId;
                 checkpoint.DeviceId = decryptedDeviceId ?? 0;
-                checkpoint.ParentDeviceId = decryptedParentDeviceId ?? 0;
+                checkpoint.ParentDeviceId = decryptedParentDeviceId.HasValue && decryptedParentDeviceId.Value != 0 ? decryptedParentDeviceId : null;
                 checkpoint.Name = request.Name;
                 checkpoint.IsMandatory = request.IsMandatory;
                 checkpoint.DistanceFromStart = request.DistanceFromStart;
@@ -386,8 +386,8 @@ namespace Runnatics.Services
                 existing.Name = request.Name;
                 existing.DistanceFromStart = request.DistanceFromStart;
                 existing.IsMandatory = request.IsMandatory;
-                existing.DeviceId = decryptedDeviceId  ?? 0;
-                existing.ParentDeviceId = decryptedParentDeviceId ?? 0;
+                existing.DeviceId = decryptedDeviceId ?? 0;
+                existing.ParentDeviceId = decryptedParentDeviceId.HasValue && decryptedParentDeviceId.Value != 0 ? decryptedParentDeviceId : null;
                 existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 existing.AuditProperties.UpdatedBy = currentUserId;
 

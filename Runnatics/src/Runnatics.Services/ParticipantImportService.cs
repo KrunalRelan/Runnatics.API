@@ -252,29 +252,95 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                var successCount = 0;
-                var errorCount = 0;
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
 
-                var batchProcessor = await _repository.ExecuteStoredProcedure<ParticipantsStagingRequest, ProcessImportResponse>("sp_ProcessParticipantStaging",
+                // Pre-load existing bibs for duplicate detection
+                var existingBibs = await participantRepo
+                    .GetQuery(p =>
+                        p.EventId == decryptedEventId &&
+                        raceId.HasValue ? p.RaceId == raceId.Value : true &&
+                        p.AuditProperties.IsActive &&
+                        !p.AuditProperties.IsDeleted)
+                    .Select(p => p.BibNumber)
+                    .AsNoTracking()
+                    .ToListAsync();
 
-                    new ParticipantsStagingRequest
-                    {
-                        ImportBatchId = decryptedImportBatchId,
-                        TenantId = tenantId,
-                        EventId = decryptedEventId,
-                        RaceId = raceId ?? 0,
-                        UserId = userId
-                    }, "");
+                var existingBibSet = new HashSet<string>(
+                    existingBibs.Where(b => b != null)!,
+                    StringComparer.OrdinalIgnoreCase);
 
-                _logger.LogInformation("Processing completed. Success: {Success}, Errors: {Errors}", successCount, errorCount);
-                if (batchProcessor != null && batchProcessor.Count > 0)
+                var successCount = 0;
+                var errorCount = 0;
+
+                foreach (var record in stagingRecords)
                 {
-                    var firstResult = batchProcessor.FirstOrDefault();
-                    response.SuccessCount = firstResult?.SuccessCount ?? 0;
-                    response.ErrorCount = firstResult?.ErrorCount ?? 0;
-                    response.Status = "Completed";
+                    try
+                    {
+                        // Duplicate bib check
+                        if (!string.IsNullOrWhiteSpace(record.Bib) && existingBibSet.Contains(record.Bib))
+                        {
+                            record.ProcessingStatus = "Error";
+                            record.ErrorMessage = $"Bib '{record.Bib}' already exists in this race.";
+                            errorCount++;
+                            continue;
+                        }
+
+                        var participant = new Models.Data.Entities.Participant
+                        {
+                            TenantId = tenantId,
+                            EventId = decryptedEventId,
+                            RaceId = raceId ?? 0,
+                            BibNumber = record.Bib,
+                            FirstName = record.FirstName,
+                            Email = record.Email,
+                            Phone = record.Mobile,
+                            Gender = record.Gender,
+                            AgeCategory = record.AgeCategory,
+                            ImportBatchId = decryptedImportBatchId,
+                            Status = "Registered",
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+
+                        await participantRepo.AddAsync(participant);
+
+                        record.ProcessingStatus = "Success";
+                        successCount++;
+
+                        if (!string.IsNullOrWhiteSpace(record.Bib))
+                            existingBibSet.Add(record.Bib);
+                    }
+                    catch (Exception ex)
+                    {
+                        record.ProcessingStatus = "Error";
+                        record.ErrorMessage = ex.Message;
+                        errorCount++;
+                        _logger.LogWarning(ex, "Failed to process staging record {RecordId}", record.Id);
+                    }
                 }
+
+                // Persist participants, staging status updates, and batch status in one transaction
+                foreach (var record in stagingRecords)
+                    await stagingRepo.UpdateAsync(record);
+
+                importBatch.Status = errorCount == 0 ? "Completed" : "PartiallyCompleted";
+                importBatch.ProcessedAt = DateTime.UtcNow;
+                await batchRepo.UpdateAsync(importBatch);
+
+                await _repository.SaveChangesAsync();
+
+                response.SuccessCount = successCount;
+                response.ErrorCount = errorCount;
+                response.Status = importBatch.Status;
+
+                _logger.LogInformation(
+                    "Processing completed for ImportBatch {BatchId}. Success: {Success}, Errors: {Errors}",
+                    decryptedImportBatchId, successCount, errorCount);
 
                 return response;
             }

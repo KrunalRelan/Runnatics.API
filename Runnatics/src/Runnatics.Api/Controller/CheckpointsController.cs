@@ -322,6 +322,40 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Generate loop checkpoints for a race based on its RaceSettings (HasLoops, LoopLength, Distance).
+        /// Clones start-line devices at each loop interval; the checkpoint at full race distance is named "Finish".
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/add-loops")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> AddLoops(string eventId, string raceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Invalid identifiers provided." });
+            }
+
+            var result = await _checkpointsService.AddLoops(eventId, raceId);
+
+            if (_checkpointsService.HasError)
+            {
+                if (_checkpointsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true ||
+                    _checkpointsService.ErrorMessage?.Contains("must have", StringComparison.OrdinalIgnoreCase) == true ||
+                    _checkpointsService.ErrorMessage?.Contains("No existing", StringComparison.OrdinalIgnoreCase) == true ||
+                    _checkpointsService.ErrorMessage?.Contains("No new loop", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return BadRequest(new { error = _checkpointsService.ErrorMessage });
+                }
+
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _checkpointsService.ErrorMessage });
+            }
+
+            return Ok(new { message = "Loop checkpoints added successfully." });
+        }
+
+        /// <summary>
         /// Delete all checkpoints for a race
         /// </summary>
         [HttpDelete("{eventId}/{raceId}/all")]

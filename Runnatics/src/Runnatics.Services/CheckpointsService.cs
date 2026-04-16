@@ -332,6 +332,8 @@ namespace Runnatics.Services
                     .Include(c => c.Device)
                     .Include(c => c.ParentDevice)
                     .OrderBy(c => c.DistanceFromStart)
+                    .ThenBy(c => (c.ParentDeviceId.HasValue && c.ParentDeviceId.Value != 0) ? 1 : 0)
+                    .ThenBy(c => c.Id)
                     .ToListAsync();
 
                 var responses = _mapper.Map<List<CheckpointResponse>>(list);
@@ -399,6 +401,159 @@ namespace Runnatics.Services
             {
                 _logger.LogError(ex, "Error updating checkpoint. EventId: {EventId}, RaceId: {RaceId}, CheckpointId: {CheckpointId}", eventId, raceId, checkpointId);
                 ErrorMessage = "Error updating checkpoint.";
+                return false;
+            }
+        }
+
+        public async Task<bool> AddLoops(string eventId, string raceId)
+        {
+            try
+            {
+                var (decryptedEventId, decryptedRaceId) = DecryptEventAndRace(eventId, raceId);
+
+                // Load race with settings
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId && r.EventId == decryptedEventId && r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Include(r => r.RaceSettings)
+                    .FirstOrDefaultAsync();
+
+                if (race == null)
+                {
+                    ErrorMessage = "Race not found.";
+                    return false;
+                }
+
+                var totalDistance = race.Distance;
+                var loopLength = race.RaceSettings?.LoopLength;
+
+                if (!totalDistance.HasValue || totalDistance.Value <= 0)
+                {
+                    ErrorMessage = "Race must have a valid Distance to add loops.";
+                    return false;
+                }
+
+                if (!loopLength.HasValue || loopLength.Value <= 0)
+                {
+                    ErrorMessage = "Race settings must have a valid LoopLength to add loops.";
+                    return false;
+                }
+
+                if (loopLength.Value > totalDistance.Value)
+                {
+                    ErrorMessage = "LoopLength cannot exceed the total race Distance.";
+                    return false;
+                }
+
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+
+                // Load all existing active checkpoints
+                var existing = await checkpointRepo.GetQuery(c =>
+                        c.EventId == decryptedEventId &&
+                        c.RaceId == decryptedRaceId &&
+                        c.AuditProperties.IsActive &&
+                        !c.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .OrderBy(c => c.DistanceFromStart)
+                    .ThenBy(c => (c.ParentDeviceId.HasValue && c.ParentDeviceId.Value != 0) ? 1 : 0)
+                    .ThenBy(c => c.Id)
+                    .ToListAsync();
+
+                if (!existing.Any())
+                {
+                    ErrorMessage = "No existing checkpoints found. Create the initial checkpoints before adding loops.";
+                    return false;
+                }
+
+                // Group existing checkpoints by distance
+                var existingDistances = existing.Select(c => c.DistanceFromStart).Distinct().OrderBy(d => d).ToList();
+                var maxExistingDistance = existingDistances.Max();
+
+                // Start-line checkpoints (at distance 0 or the minimum)
+                var minDistance = existingDistances.Min();
+                var startLineCheckpoints = existing.Where(c => c.DistanceFromStart == minDistance).ToList();
+
+                // Turnaround checkpoints (at loopLength distance, if they exist)
+                var turnaroundCheckpoints = existing.Where(c => c.DistanceFromStart == loopLength.Value).ToList();
+
+                // If no turnaround checkpoints exist, fall back to start-line for all loop points
+                if (!turnaroundCheckpoints.Any())
+                    turnaroundCheckpoints = startLineCheckpoints;
+
+                var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
+                var newCheckpoints = new List<Checkpoint>();
+
+                // Walk from the next loop multiple after maxExistingDistance up to totalDistance
+                var loopMultiplier = (int)Math.Floor(maxExistingDistance / loopLength.Value) + 1;
+
+                while (true)
+                {
+                    var targetDistance = loopMultiplier * loopLength.Value;
+
+                    if (targetDistance > totalDistance.Value)
+                        break;
+
+                    // Already covered by existing checkpoints — skip
+                    if (existingDistances.Contains(targetDistance))
+                    {
+                        loopMultiplier++;
+                        continue;
+                    }
+
+                    var isFinish = targetDistance == totalDistance.Value;
+
+                    // Even multiples (0, 2x, 4x…) pass through start/finish line — use start-line devices
+                    // Odd multiples (1x, 3x, 5x…) are turnaround points — use turnaround devices
+                    bool useStartLine = (loopMultiplier % 2 == 0);
+                    var sourceCheckpoints = useStartLine ? startLineCheckpoints : turnaroundCheckpoints;
+
+                    bool primaryNamed = false;
+                    foreach (var src in sourceCheckpoints)
+                    {
+                        bool isPrimary = !src.ParentDeviceId.HasValue || src.ParentDeviceId.Value == 0;
+                        string name;
+                        if (isFinish && isPrimary && !primaryNamed)
+                        {
+                            name = "Finish";
+                            primaryNamed = true;
+                        }
+                        else
+                        {
+                            name = src.Name;
+                        }
+
+                        newCheckpoints.Add(new Checkpoint
+                        {
+                            EventId = decryptedEventId,
+                            RaceId = decryptedRaceId,
+                            Name = name,
+                            DistanceFromStart = targetDistance,
+                            DeviceId = src.DeviceId,
+                            ParentDeviceId = src.ParentDeviceId,
+                            IsMandatory = src.IsMandatory,
+                            AuditProperties = CreateAuditProperties(currentUserId)
+                        });
+                    }
+
+                    loopMultiplier++;
+                }
+
+                if (!newCheckpoints.Any())
+                {
+                    ErrorMessage = "No new loop checkpoints needed — all distances are already covered.";
+                    return false;
+                }
+
+                await checkpointRepo.AddRangeAsync(newCheckpoints);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation("Added {Count} loop checkpoints for EventId: {EventId}, RaceId: {RaceId}", newCheckpoints.Count, decryptedEventId, decryptedRaceId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error adding loop checkpoints. EventId: {EventId}, RaceId: {RaceId}", eventId, raceId);
+                ErrorMessage = "Error adding loop checkpoints.";
                 return false;
             }
         }

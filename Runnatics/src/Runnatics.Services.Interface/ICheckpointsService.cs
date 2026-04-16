@@ -21,5 +21,12 @@ namespace Runnatics.Services.Interface
         Task<CheckpointResponse> GetCheckpoint(string eventId, string raceId, string checkpointId);
         
         Task<bool> Clone(string eventId, string sourceRaceId, string destinationRaceId);
+
+        /// <summary>
+        /// Generates loop checkpoints for a race based on RaceSettings.HasLoops and LoopLength.
+        /// Clones start-line devices at each loop interval up to the full race distance.
+        /// The checkpoint at the full distance is named "Finish".
+        /// </summary>
+        Task<bool> AddLoops(string eventId, string raceId);
     }
 }

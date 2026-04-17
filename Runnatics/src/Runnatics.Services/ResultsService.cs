@@ -1246,5 +1246,73 @@ namespace Runnatics.Services
         }
 
         #endregion
+
+        #region Public (no-auth) methods
+
+        public async Task<Models.Data.Common.PagingList<Results>> GetPublicResultsAsync(
+            int eventId,
+            string? raceName,
+            string? searchQuery,
+            string? gender,
+            int page,
+            int pageSize)
+        {
+            try
+            {
+                var resultsRepo = _repository.GetRepository<Results>();
+
+                var query = resultsRepo.GetQuery(r =>
+                    r.EventId == eventId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .Include(r => r.Participant)
+                    .Include(r => r.Race)
+                    .Include(r => r.Participant.SplitTimes
+                        .Where(st => st.EventId == eventId &&
+                                     st.AuditProperties.IsActive &&
+                                     !st.AuditProperties.IsDeleted))
+                        .ThenInclude(st => st.ToCheckpoint)
+                    .AsNoTracking();
+
+                if (!string.IsNullOrWhiteSpace(raceName))
+                    query = query.Where(r => r.Race.Title.Contains(raceName));
+
+                if (!string.IsNullOrWhiteSpace(searchQuery))
+                    query = query.Where(r =>
+                        (r.Participant.BibNumber != null && r.Participant.BibNumber.Contains(searchQuery)) ||
+                        (r.Participant.FirstName != null && r.Participant.FirstName.Contains(searchQuery)) ||
+                        (r.Participant.LastName  != null && r.Participant.LastName.Contains(searchQuery)));
+
+                if (!string.IsNullOrWhiteSpace(gender))
+                    query = query.Where(r => r.Participant.Gender != null &&
+                                             r.Participant.Gender.ToLower() == gender.ToLower());
+
+                var totalCount = await query.CountAsync();
+
+                var items = await query
+                    .OrderBy(r => r.OverallRank)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                var result = new Models.Data.Common.PagingList<Results>();
+                result.AddRange(items);
+                result.TotalCount = totalCount;
+
+                _logger.LogInformation(
+                    "Public results for event {EventId}: returned {Count}/{Total}.",
+                    eventId, items.Count, totalCount);
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "Error retrieving public results.";
+                _logger.LogError(ex, "Error in GetPublicResultsAsync for event {EventId}", eventId);
+                return [];
+            }
+        }
+
+        #endregion
     }
 }

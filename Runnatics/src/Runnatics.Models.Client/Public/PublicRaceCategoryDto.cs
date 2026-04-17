@@ -1,0 +1,21 @@
+namespace Runnatics.Models.Client.Public
+{
+    public class PublicRaceCategoryDto
+    {
+        public int Id { get; set; }
+
+        public string Name { get; set; } = string.Empty;
+
+        // Maps from Race.Distance
+        public string? Distance { get; set; }
+
+        // Race entity does not have a Price column — set to null until column is added
+        public decimal? Price { get; set; }
+
+        // Maps from Race.MaxParticipants
+        public int? ParticipantLimit { get; set; }
+
+        // Computed: count of active, non-deleted Participants for this race
+        public int? RegisteredCount { get; set; }
+    }
+}

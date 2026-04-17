@@ -56,6 +56,58 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<int> CreatePublicQueryAsync(
+            string name,
+            string email,
+            string? phone,
+            string subject,
+            string message,
+            string? eventName = null)
+        {
+            try
+            {
+                var repo = _repository.GetRepository<SupportQuery>();
+
+                // SupportQuery has no separate Name/Phone/EventName columns.
+                // Embed them in the body so admins see the full context.
+                var bodyBuilder = new System.Text.StringBuilder();
+                bodyBuilder.AppendLine($"Name: {name}");
+                if (!string.IsNullOrWhiteSpace(phone))
+                    bodyBuilder.AppendLine($"Phone: {phone}");
+                if (!string.IsNullOrWhiteSpace(eventName))
+                    bodyBuilder.AppendLine($"Event: {eventName}");
+                bodyBuilder.AppendLine();
+                bodyBuilder.Append(message);
+
+                var query = new SupportQuery
+                {
+                    Subject  = subject,
+                    Body     = bodyBuilder.ToString(),
+                    SubmitterEmail = email.Trim().ToLowerInvariant(),
+                    StatusId = 1, // new_query
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+
+                await repo.AddAsync(query);
+                await _repository.SaveChangesAsync();
+
+                _logger.LogInformation(
+                    "Public contact form submitted by {Email} (name: {Name}), Id: {Id}",
+                    query.SubmitterEmail, name, query.Id);
+
+                await SendSubmissionConfirmationAsync(query.SubmitterEmail, query.Subject, query.Id);
+
+                return query.Id;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating public query for {Email}", email);
+                ErrorMessage = "An error occurred while submitting your message.";
+                return 0;
+            }
+        }
+
         // ── Admin ─────────────────────────────────────────────────────────────
 
         public async Task<SupportQueryCountsDto> GetCountsAsync()

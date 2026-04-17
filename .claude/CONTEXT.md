@@ -151,3 +151,42 @@ FORMAT:
   - `DeleteCommentAsync` is a hard delete (uses `repo.DeleteAsync(id)`) since comments have no AuditProperties
   - Admin user ID in AddComment is extracted from JWT `sub` claim in the controller
 - **Pending**: IEmailService `SendAsync` implementation needs to be added to the concrete email service class
+
+### 2026-04-16 — backend-agent — Public API: DTOs (Prompt 1)
+
+- **What was built**: Public-facing DTO layer for the Runnatics marketing website
+- **Files created**:
+  - `Runnatics.Models.Client/Public/PublicEventSummaryDto.cs` — summary card for event listings
+  - `Runnatics.Models.Client/Public/PublicEventDetailDto.cs` — extends summary; adds Races, FullDescription, Schedule, RouteMapUrl, RegistrationDeadline, ContactEmail
+  - `Runnatics.Models.Client/Public/PublicRaceCategoryDto.cs` — race info for public display; Price is null (Race entity has no Price column yet)
+  - `Runnatics.Models.Client/Public/PublicResultDto.cs` — race result with splits; GunTime/NetTime are TimeSpan? converted from milliseconds
+  - `Runnatics.Models.Client/Public/PublicSplitDto.cs` — checkpoint split time; CheckpointName from SplitTimes.ToCheckpoint.Name
+  - `Runnatics.Models.Client/Public/PublicGalleryImageDto.cs` — gallery image placeholder (no GalleryImage entity yet)
+  - `Runnatics.Models.Client/Public/PublicPagedResultDto.cs` — paged wrapper with TotalPages/HasNext/HasPrevious computed props
+  - `Runnatics.Models.Client/Requests/Public/PublicContactRequestDto.cs` — contact form with DataAnnotations
+- **Decisions made**:
+  - `Event.Slug` exists — no workaround needed
+  - `PagingList<T>` only has TotalCount (extends List<T>) — created new `PublicPagedResultDto<T>` with full pagination metadata
+  - No encrypted IDs on public DTOs (plain int/slug — public data, no security concern)
+  - `Race.Price` does not exist — property left nullable with comment; add column when ready
+  - `PublicEventDetailDto` inherits `PublicEventSummaryDto` to avoid duplication
+- **Pending**: Prompts 3–5 (controller, CORS, verify/build)
+
+### 2026-04-16 — backend-agent — Public API: Service Methods (Prompt 2)
+
+- **What was added**: New methods to existing service interfaces/implementations only (no new classes)
+- **Files modified**:
+  - `Runnatics.Services.Interface/IEventsService.cs` — added `GetPublicEventsAsync(bool isPast, string? city, string? searchQuery, int page, int pageSize)` and `GetPublicEventBySlugAsync(string slug)`; alias `DataPagingList` avoids collision with client `PagingList<T>`
+  - `Runnatics.Services/EventsService.cs` — implemented both methods in `#region Public (no-auth) methods`; list uses filtered `.Include(e => e.Races)`, detail uses `.ThenInclude(r => r.Participants)` for per-race counts
+  - `Runnatics.Services.Interface/IResultsService.cs` — added `GetPublicResultsAsync(int eventId, string? raceName, string? searchQuery, string? gender, int page, int pageSize)` returning `DataResultsPagingList`
+  - `Runnatics.Services/ResultsService.cs` — implemented `GetPublicResultsAsync`; filters by eventId, race name, bib/name search, gender; includes `Participant`, `Race`, `Participant.SplitTimes → ToCheckpoint`
+  - `Runnatics.Services.Interface/ISupportQueryService.cs` — added `CreatePublicQueryAsync(string name, string email, string? phone, string subject, string message, string? eventName)`
+  - `Runnatics.Services/SupportQueryService.cs` — implemented `CreatePublicQueryAsync`; embeds Name/Phone/EventName into the Body (no schema change needed)
+- **Decisions made**:
+  - All existing event search methods require `_userContext.TenantId` — unusable for public; new methods are tenant-agnostic
+  - `GetEventById` requires encrypted ID + tenant scope — slug-based lookup is a new method
+  - `GetLeaderboardAsync` returns admin leaderboard format — not suitable; new `GetPublicResultsAsync` is paged/filterable
+  - `SubmitQueryAsync` only accepts Subject/Body/SubmitterEmail; `CreatePublicQueryAsync` packs Name/Phone/EventName into the Body string since `SupportQuery` has no separate columns for them
+  - `EventOrganizer` has no email field → `ContactEmail` in `PublicEventDetailDto` will remain null
+  - EF Core filtered includes (`.Where()` inside `.Include()`) used for Races and Participants to honour soft-delete
+  - `DataPagingList` / `DataResultsPagingList` type aliases in interface files prevent CS0104 ambiguity with same-named types in Models.Client

@@ -24,6 +24,21 @@ namespace Runnatics.Services.Interface
         Task<int> SubmitQueryAsync(ContactUsRequestDto dto);
 
         /// <summary>
+        /// Creates a support query from the public marketing site contact form.
+        /// Accepts the richer set of fields (name, phone, eventName) that the
+        /// public form collects. Extra fields are embedded in the body since the
+        /// SupportQuery schema only stores Subject/Body/SubmitterEmail.
+        /// Returns the new query ID, or 0 on failure (check HasError / ErrorMessage).
+        /// </summary>
+        Task<int> CreatePublicQueryAsync(
+            string name,
+            string email,
+            string? phone,
+            string subject,
+            string message,
+            string? eventName = null);
+
+        /// <summary>
         /// Returns counts grouped by status for the admin dashboard
         /// </summary>
         Task<SupportQueryCountsDto> GetCountsAsync();

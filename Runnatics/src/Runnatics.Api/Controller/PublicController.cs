@@ -4,9 +4,10 @@ using Microsoft.AspNetCore.RateLimiting;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Public;
-using Runnatics.Models.Data.Entities;
 using Runnatics.Services.Interface;
 using System.Net;
+using Event = Runnatics.Models.Data.Entities.Event;
+using Results = Runnatics.Models.Data.Entities.Results;
 
 namespace Runnatics.Api.Controller
 {

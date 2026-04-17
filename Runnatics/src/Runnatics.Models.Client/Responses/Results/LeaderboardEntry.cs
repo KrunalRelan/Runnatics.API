@@ -12,6 +12,8 @@ namespace Runnatics.Models.Client.Responses.Results
         public string? Category { get; set; }
         public int? Age { get; set; }
         public string City { get; set; } = string.Empty;
+        public string? Email { get; set; }
+        public string? Phone { get; set; }
 
         // Times
         public long? FinishTimeMs { get; set; }

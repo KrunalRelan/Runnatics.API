@@ -478,5 +478,61 @@ namespace Runnatics.Api.Controller
             response.Message = result;
             return Ok(response);
         }
+
+        /// <summary>
+        /// Upload or replace the banner image for an event.
+        /// Accepts a file upload (IFormFile) or JSON with base64 data.
+        /// </summary>
+        [HttpPost("{eventId}/banner")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [RequestSizeLimit(5_242_880)] // 5 MB
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UploadBanner(string eventId, IFormFile? file, CancellationToken cancellationToken)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest(new { error = "No file provided." });
+
+            var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp", "image/gif" };
+            if (!allowedTypes.Contains(file.ContentType.ToLowerInvariant()))
+                return BadRequest(new { error = "Only JPEG, PNG, WebP and GIF images are allowed." });
+
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms, cancellationToken);
+            var base64 = Convert.ToBase64String(ms.ToArray());
+
+            var result = await _eventService.UpdateBannerAsync(eventId, base64, file.ContentType);
+
+            if (_eventService.HasError)
+            {
+                if (_eventService.ErrorMessage.Contains("not found"))
+                    return NotFound(new { error = _eventService.ErrorMessage });
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _eventService.ErrorMessage });
+            }
+
+            return Ok(new { message = "Banner uploaded successfully." });
+        }
+
+        /// <summary>
+        /// Returns the banner image as a binary file response.
+        /// Public — no auth required so the public site can reference this URL in img src.
+        /// </summary>
+        [HttpGet("{eventId}/banner")]
+        [AllowAnonymous]
+        [ResponseCache(Duration = 3600)]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> GetBanner(string eventId, CancellationToken cancellationToken)
+        {
+            var (base64, contentType) = await _eventService.GetBannerAsync(eventId);
+
+            if (string.IsNullOrEmpty(base64) || string.IsNullOrEmpty(contentType))
+                return NotFound();
+
+            var bytes = Convert.FromBase64String(base64);
+            return File(bytes, contentType);
+        }
     }
 }

@@ -271,7 +271,7 @@ namespace Runnatics.Api.Controller
                 });
             }
 
-            await _service.UpdateParticipantExtendedAsync(raceId, participantId, request);
+            var updated = await _service.UpdateParticipantExtendedAsync(raceId, participantId, request);
 
             if (_service.HasError)
             {
@@ -280,7 +280,7 @@ namespace Runnatics.Api.Controller
                 return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
             }
 
-            return Ok(new ResponseBase<object> { Message = new { } });
+            return Ok(new ResponseBase<ParticipantSearchReponse> { Message = updated });
         }
 
         /// <summary>

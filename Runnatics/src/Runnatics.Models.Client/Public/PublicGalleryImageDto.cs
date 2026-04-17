@@ -2,8 +2,6 @@ namespace Runnatics.Models.Client.Public
 {
     public class PublicGalleryImageDto
     {
-        public int Id { get; set; }
-
         public string Url { get; set; } = string.Empty;
 
         public string? ThumbnailUrl { get; set; }

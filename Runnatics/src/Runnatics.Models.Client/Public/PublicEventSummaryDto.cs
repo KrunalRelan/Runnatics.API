@@ -2,9 +2,8 @@ namespace Runnatics.Models.Client.Public
 {
     public class PublicEventSummaryDto
     {
-        public int Id { get; set; }
-
-        // Event.Slug exists on the entity
+        // No internal int Id exposed — slug is the public identifier.
+        // Prevents sequential enumeration of the Events table.
         public string Slug { get; set; } = string.Empty;
 
         public string Name { get; set; } = string.Empty;

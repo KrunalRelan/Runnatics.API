@@ -28,9 +28,10 @@ namespace Runnatics.Services.Interface
 
         /// <summary>
         /// Returns a single public event by its URL slug.
-        /// Includes Races (with Participants for count) and EventOrganizer.
-        /// Returns null when not found or deleted.
+        /// Includes Races and EventOrganizer.
+        /// The dictionary maps RaceId → active participant count (lightweight COUNT query).
+        /// Returns (null, null) when not found or deleted.
         /// </summary>
-        Task<Event?> GetPublicEventBySlugAsync(string slug);
+        Task<(Event? Event, Dictionary<int, int>? RaceParticipantCounts)> GetPublicEventBySlugAsync(string slug);
     }
 }

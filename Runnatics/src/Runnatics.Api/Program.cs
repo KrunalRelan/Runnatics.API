@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -13,6 +14,7 @@ using Runnatics.Services.Mappings;
 using Runnatics.Services.Validators;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -227,6 +229,42 @@ builder.Services.AddLogging(logging =>
     logging.AddDebug();
 });
 
+// Rate limiting — protects public (unauthenticated) endpoints
+builder.Services.AddRateLimiter(options =>
+{
+    // Global 429 response
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Policy: public GET endpoints — 30 requests / 60-second sliding window per IP
+    options.AddSlidingWindowLimiter("PublicRead", opt =>
+    {
+        opt.PermitLimit = 30;
+        opt.Window = TimeSpan.FromSeconds(60);
+        opt.SegmentsPerWindow = 6;         // 10-second segments
+        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        opt.QueueLimit = 0;                // reject immediately, don't queue
+    });
+
+    // Policy: public POST (contact form) — 5 requests / 60 seconds per IP
+    options.AddSlidingWindowLimiter("PublicWrite", opt =>
+    {
+        opt.PermitLimit = 5;
+        opt.Window = TimeSpan.FromSeconds(60);
+        opt.SegmentsPerWindow = 6;
+        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        opt.QueueLimit = 0;
+    });
+
+    // Partition all rate-limit policies by remote IP
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsync(
+            """{"error":{"code":429,"message":"Too many requests. Please try again later."}}""",
+            cancellationToken);
+    };
+});
+
 // Health checks & misc
 builder.Services.AddHealthChecks();
 builder.Services.AddMemoryCache();
@@ -256,6 +294,8 @@ app.UseHttpsRedirection();
 app.UseRouting();
 
 app.UseCors("AllowFrontend");
+
+app.UseRateLimiter();
 
 app.UseAuthentication();
 app.UseAuthorization();

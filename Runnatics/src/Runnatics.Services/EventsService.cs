@@ -874,11 +874,16 @@ namespace Runnatics.Services
 
         #region Public (no-auth) methods
 
+        private const int MaxPublicPageSize = 100;
+
         public async Task<Models.Data.Common.PagingList<Event>> GetPublicEventsAsync(
             bool isPast, string? city, string? searchQuery, int page, int pageSize)
         {
             try
             {
+                page = Math.Max(1, page);
+                pageSize = Math.Clamp(pageSize, 1, MaxPublicPageSize);
+
                 var today = DateTime.UtcNow.Date;
                 var eventRepo = _repository.GetRepository<Event>();
 
@@ -914,27 +919,45 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<Event?> GetPublicEventBySlugAsync(string slug)
+        public async Task<(Event? Event, Dictionary<int, int>? RaceParticipantCounts)> GetPublicEventBySlugAsync(string slug)
         {
             try
             {
                 var eventRepo = _repository.GetRepository<Event>();
 
-                return await eventRepo.GetQuery(e =>
+                var eventEntity = await eventRepo.GetQuery(e =>
                     e.Slug == slug &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
-                        .ThenInclude(r => r.Participants.Where(p => p.AuditProperties.IsActive && !p.AuditProperties.IsDeleted))
                     .Include(e => e.EventOrganizer)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                    return (null, null);
+
+                // Lightweight per-race participant counts via GROUP BY — no entity materialisation
+                var participantRepo = _repository.GetRepository<Participant>();
+                var raceIds = eventEntity.Races.Select(r => r.Id).ToList();
+
+                var countRows = await participantRepo.GetQuery(p =>
+                    raceIds.Contains(p.RaceId) &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .GroupBy(p => p.RaceId)
+                    .Select(g => new { RaceId = g.Key, Count = g.Count() })
+                    .ToListAsync();
+
+                var counts = countRows.ToDictionary(c => c.RaceId, c => c.Count);
+
+                return (eventEntity, counts);
             }
             catch (Exception ex)
             {
                 this.ErrorMessage = "Error retrieving event.";
                 _logger.LogError(ex, "Error in GetPublicEventBySlugAsync for slug: {Slug}", slug);
-                return null;
+                return (null, null);
             }
         }
 

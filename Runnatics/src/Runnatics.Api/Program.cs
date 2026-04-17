@@ -159,6 +159,21 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod()
               .AllowCredentials();
     });
+
+    // Public site — restricted to GET/POST, no credentials needed
+    options.AddPolicy("PublicSite", policy =>
+    {
+        var publicOrigins = builder.Configuration
+            .GetSection("PublicSite:AllowedOrigins")
+            .Get<string[]>()
+            ?? (builder.Environment.IsDevelopment()
+                ? new[] { "http://localhost:5173", "http://localhost:5174" }
+                : new[] { "https://runnatics.com", "https://www.runnatics.com" });
+
+        policy.WithOrigins(publicOrigins)
+              .WithMethods("GET", "POST", "OPTIONS")
+              .WithHeaders("Content-Type", "Accept");
+    });
 });
 
 // HttpContext accessor

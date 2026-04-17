@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Runnatics.Models.Client.Common;
@@ -16,9 +17,10 @@ namespace Runnatics.Api.Controller
     /// All endpoints are anonymous — no JWT required.
     /// </summary>
     [ApiController]
-    [Route("api/v1/public")]
+    [Route("api/public")]
     [Produces("application/json")]
     [AllowAnonymous]
+    [EnableCors("PublicSite")]
     public class PublicController(
         IEventsService eventsService,
         IResultsService resultsService,
@@ -31,16 +33,20 @@ namespace Runnatics.Api.Controller
         #region Events
 
         /// <summary>
-        /// Returns a paged list of upcoming events (EventDate >= today), ordered by date ascending.
+        /// Returns a paged list of events.
+        /// Use status=upcoming for future events (default) or status=past for past events.
         /// </summary>
-        [HttpGet("events/upcoming")]
+        [HttpGet("events")]
         [EnableRateLimiting("PublicRead")]
-        [ResponseCache(Duration = 60)]
+        [ResponseCache(Duration = 60, VaryByQueryKeys = ["status", "city", "q", "year", "page", "pageSize"])]
         [ProducesResponseType(typeof(ResponseBase<PublicPagedResultDto<PublicEventSummaryDto>>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> GetUpcomingEvents(
-            [FromQuery] string? city,
+        public async Task<IActionResult> GetEvents(
+            [FromQuery] string status = "upcoming",
+            [FromQuery] string? city = null,
+            [FromQuery] string? q = null,
+            [FromQuery] string? year = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 12,
             CancellationToken cancellationToken = default)
@@ -49,58 +55,14 @@ namespace Runnatics.Api.Controller
                 return BadRequest(CreateErrorResponse<PublicPagedResultDto<PublicEventSummaryDto>>(
                     "page must be >= 1 and pageSize must be between 1 and 100."));
 
-            var events = await _eventsService.GetPublicEventsAsync(
-                isPast: false, city, searchQuery: null, page, pageSize);
+            var isPast = status.Equals("past", StringComparison.OrdinalIgnoreCase);
+
+            var events = await _eventsService.GetPublicEventsAsync(isPast, city, q, page, pageSize);
 
             if (_eventsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,
                     CreateErrorResponse<PublicPagedResultDto<PublicEventSummaryDto>>(_eventsService.ErrorMessage));
 
-            var dto = new PublicPagedResultDto<PublicEventSummaryDto>
-            {
-                Items = events.Select(MapToSummary).ToList(),
-                Page = page,
-                PageSize = pageSize,
-                TotalCount = events.TotalCount
-            };
-
-            return Ok(new ResponseBase<PublicPagedResultDto<PublicEventSummaryDto>>
-            {
-                Message = dto,
-                TotalCount = events.TotalCount
-            });
-        }
-
-        /// <summary>
-        /// Returns a paged list of past events (EventDate &lt; today), ordered by date descending.
-        /// Filterable by year, city, and search query.
-        /// </summary>
-        [HttpGet("events/past")]
-        [EnableRateLimiting("PublicRead")]
-        [ResponseCache(Duration = 60)]
-        [ProducesResponseType(typeof(ResponseBase<PublicPagedResultDto<PublicEventSummaryDto>>), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> GetPastEvents(
-            [FromQuery] string? year,
-            [FromQuery] string? city,
-            [FromQuery] string? q,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 12,
-            CancellationToken cancellationToken = default)
-        {
-            if (page < 1 || pageSize < 1 || pageSize > 100)
-                return BadRequest(CreateErrorResponse<PublicPagedResultDto<PublicEventSummaryDto>>(
-                    "page must be >= 1 and pageSize must be between 1 and 100."));
-
-            var events = await _eventsService.GetPublicEventsAsync(
-                isPast: true, city, searchQuery: q, page, pageSize);
-
-            if (_eventsService.HasError)
-                return StatusCode((int)HttpStatusCode.InternalServerError,
-                    CreateErrorResponse<PublicPagedResultDto<PublicEventSummaryDto>>(_eventsService.ErrorMessage));
-
-            // Client-side year filtering (the service doesn't know about year extraction)
             var items = events.AsEnumerable();
             if (int.TryParse(year, out var yearInt))
                 items = items.Where(e => e.EventDate.Year == yearInt);

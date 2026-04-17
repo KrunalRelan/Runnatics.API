@@ -872,5 +872,96 @@ namespace Runnatics.Services
         }
         #endregion
 
+        #region Public (no-auth) methods
+
+        private const int MaxPublicPageSize = 100;
+
+        public async Task<Models.Data.Common.PagingList<Event>> GetPublicEventsAsync(
+            bool isPast, string? city, string? searchQuery, int page, int pageSize)
+        {
+            try
+            {
+                page = Math.Max(1, page);
+                pageSize = Math.Clamp(pageSize, 1, MaxPublicPageSize);
+
+                var today = DateTime.UtcNow.Date;
+                var eventRepo = _repository.GetRepository<Event>();
+
+                var query = eventRepo.GetQuery(e =>
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted &&
+                    (isPast ? e.EventDate.Date < today : e.EventDate.Date >= today) &&
+                    (city == null || (e.City != null && e.City.Contains(city))) &&
+                    (searchQuery == null || e.Name.Contains(searchQuery)))
+                    .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
+                    .AsNoTracking();
+
+                var totalCount = await query.CountAsync();
+
+                var items = isPast
+                    ? await query.OrderByDescending(e => e.EventDate).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync()
+                    : await query.OrderBy(e => e.EventDate).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
+
+                var result = new Models.Data.Common.PagingList<Event>();
+                result.AddRange(items);
+                result.TotalCount = totalCount;
+
+                _logger.LogInformation("Public event search ({Filter}) returned {Count}/{Total}.",
+                    isPast ? "past" : "upcoming", items.Count, totalCount);
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "Error retrieving public events.";
+                _logger.LogError(ex, "Error in GetPublicEventsAsync");
+                return [];
+            }
+        }
+
+        public async Task<(Event? Event, Dictionary<int, int>? RaceParticipantCounts)> GetPublicEventBySlugAsync(string slug)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+
+                var eventEntity = await eventRepo.GetQuery(e =>
+                    e.Slug == slug &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
+                    .Include(e => e.EventOrganizer)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                    return (null, null);
+
+                // Lightweight per-race participant counts via GROUP BY — no entity materialisation
+                var participantRepo = _repository.GetRepository<Participant>();
+                var raceIds = eventEntity.Races.Select(r => r.Id).ToList();
+
+                var countRows = await participantRepo.GetQuery(p =>
+                    raceIds.Contains(p.RaceId) &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .GroupBy(p => p.RaceId)
+                    .Select(g => new { RaceId = g.Key, Count = g.Count() })
+                    .ToListAsync();
+
+                var counts = countRows.ToDictionary(c => c.RaceId, c => c.Count);
+
+                return (eventEntity, counts);
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "Error retrieving event.";
+                _logger.LogError(ex, "Error in GetPublicEventBySlugAsync for slug: {Slug}", slug);
+                return (null, null);
+            }
+        }
+
+        #endregion
+
     }
 }

@@ -1,6 +1,8 @@
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
+using Runnatics.Models.Data.Entities;
+using DataResultsPagingList = Runnatics.Models.Data.Common.PagingList<Runnatics.Models.Data.Entities.Results>;
 
 namespace Runnatics.Services.Interface
 {
@@ -36,5 +38,18 @@ namespace Runnatics.Services.Interface
             string eventId,
             string raceId,
             string participantId);
+
+        /// <summary>
+        /// Returns paged, filterable results for a public event page.
+        /// Includes Participant, Race, and SplitTimes → ToCheckpoint nav properties.
+        /// No tenant filter — all active, non-deleted results for the event.
+        /// </summary>
+        Task<DataResultsPagingList> GetPublicResultsAsync(
+            int eventId,
+            string? raceName,
+            string? searchQuery,
+            string? gender,
+            int page,
+            int pageSize);
     }
 }

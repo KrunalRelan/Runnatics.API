@@ -292,6 +292,9 @@ builder.Services.AddRateLimiter(options =>
     };
 });
 
+// Response caching (required by [ResponseCache(VaryByQueryKeys = ...)])
+builder.Services.AddResponseCaching();
+
 // Health checks & misc
 builder.Services.AddHealthChecks();
 builder.Services.AddMemoryCache();
@@ -322,6 +325,7 @@ app.UseRouting();
 
 app.UseCors("AllowFrontend");
 
+app.UseResponseCaching();
 app.UseRateLimiter();
 
 app.UseAuthentication();

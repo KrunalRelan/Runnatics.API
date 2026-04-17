@@ -1259,6 +1259,9 @@ namespace Runnatics.Services
         {
             try
             {
+                page = Math.Max(1, page);
+                pageSize = Math.Clamp(pageSize, 1, 100);
+
                 var resultsRepo = _repository.GetRepository<Results>();
 
                 var query = resultsRepo.GetQuery(r =>

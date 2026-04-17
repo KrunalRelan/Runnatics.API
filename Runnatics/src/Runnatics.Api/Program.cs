@@ -134,6 +134,9 @@ builder.Services.AddCors(options =>
             {
                 builder.Configuration["AppSettings:FrontendUrl"] ?? "https://racetik.com",
                 "https://racetik.com",
+                "https://www.racetik.com",
+                "https://runnatics.com",
+                "https://www.runnatics.com",
                 "https://victorious-flower-0a6608b1e.2.azurestaticapps.net"
             };
 
@@ -151,6 +154,9 @@ builder.Services.AddCors(options =>
             {
                 builder.Configuration["AppSettings:FrontendUrl"] ?? "https://racetik.com",
                 "https://racetik.com",
+                "https://www.racetik.com",
+                "https://runnatics.com",
+                "https://www.runnatics.com",
                 "https://victorious-flower-0a6608b1e.2.azurestaticapps.net"
             };
 
@@ -168,7 +174,13 @@ builder.Services.AddCors(options =>
             .Get<string[]>()
             ?? (builder.Environment.IsDevelopment()
                 ? new[] { "http://localhost:5173", "http://localhost:5174" }
-                : new[] { "https://runnatics.com", "https://www.runnatics.com" });
+                : new[]
+                {
+                    "https://runnatics.com",
+                    "https://www.runnatics.com",
+                    "https://racetik.com",
+                    "https://www.racetik.com"
+                });
 
         policy.WithOrigins(publicOrigins)
               .WithMethods("GET", "POST", "OPTIONS")

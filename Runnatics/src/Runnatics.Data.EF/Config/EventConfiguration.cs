@@ -86,7 +86,14 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.EventType)
                 .HasColumnName("EventType")
                 .HasMaxLength(250);
-                
+
+            builder.Property(e => e.BannerImage)
+                .HasColumnName("BannerImage")
+                .HasColumnType("nvarchar(max)");
+
+            builder.Property(e => e.BannerContentType)
+                .HasColumnName("BannerContentType")
+                .HasMaxLength(50);
 
             // Configure AuditProperties to match your database schema
             builder.OwnsOne(e => e.AuditProperties, ap =>

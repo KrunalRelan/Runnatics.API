@@ -55,6 +55,12 @@ namespace Runnatics.Models.Data.Entities
         public DateTime? RegistrationDeadline { get; set; }
         public string? Settings { get; set; } // JSON
 
+        // Banner — base64-encoded image stored in DB
+        public string? BannerImage { get; set; }
+
+        [MaxLength(50)]
+        public string? BannerContentType { get; set; }
+
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 
         // Navigation Properties

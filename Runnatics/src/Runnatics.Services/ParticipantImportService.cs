@@ -144,10 +144,14 @@ namespace Runnatics.Services
                     if (validationErrors.Any())
                     {
                         invalidRecords++;
+                        record.ProcessingStatus = "Invalid";
+                        record.ErrorMessage = string.Join("; ", validationErrors.Select(e => e.Message));
                         foreach (var error in validationErrors)
                         {
                             response.Errors.Add(error);
                         }
+                        _logger.LogWarning("Row {Row}: validation failed — {Errors}",
+                            record.RowNumber, record.ErrorMessage);
                     }
                     else
                     {
@@ -255,10 +259,12 @@ namespace Runnatics.Services
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
 
                 // Pre-load existing bibs for duplicate detection
+                // Parentheses are critical — without them, IsActive/IsDeleted
+                // filters were skipped when raceId was provided (operator precedence bug).
                 var existingBibs = await participantRepo
                     .GetQuery(p =>
                         p.EventId == decryptedEventId &&
-                        raceId.HasValue ? p.RaceId == raceId.Value : true &&
+                        (!raceId.HasValue || p.RaceId == raceId.Value) &&
                         p.AuditProperties.IsActive &&
                         !p.AuditProperties.IsDeleted)
                     .Select(p => p.BibNumber)
@@ -282,6 +288,15 @@ namespace Runnatics.Services
                             record.ProcessingStatus = "Error";
                             record.ErrorMessage = $"Bib '{record.Bib}' already exists in this race.";
                             errorCount++;
+                            response.Errors.Add(new ProcessingError
+                            {
+                                StagingId = record.Id,
+                                RowNumber = record.RowNumber,
+                                Bib = record.Bib,
+                                Name = record.FirstName,
+                                ErrorMessage = record.ErrorMessage
+                            });
+                            _logger.LogWarning("Row {Row}: duplicate bib '{Bib}'", record.RowNumber, record.Bib);
                             continue;
                         }
 
@@ -320,7 +335,15 @@ namespace Runnatics.Services
                         record.ProcessingStatus = "Error";
                         record.ErrorMessage = ex.Message;
                         errorCount++;
-                        _logger.LogWarning(ex, "Failed to process staging record {RecordId}", record.Id);
+                        response.Errors.Add(new ProcessingError
+                        {
+                            StagingId = record.Id,
+                            RowNumber = record.RowNumber,
+                            Bib = record.Bib,
+                            Name = record.FirstName,
+                            ErrorMessage = ex.Message
+                        });
+                        _logger.LogWarning(ex, "Row {Row}: processing failed for record {RecordId}", record.RowNumber, record.Id);
                     }
                 }
 
@@ -339,8 +362,8 @@ namespace Runnatics.Services
                 response.Status = importBatch.Status;
 
                 _logger.LogInformation(
-                    "Processing completed for ImportBatch {BatchId}. Success: {Success}, Errors: {Errors}",
-                    decryptedImportBatchId, successCount, errorCount);
+                    "Processing completed for ImportBatch {BatchId}. Total staged: {Total}, Success: {Success}, Errors: {Errors}",
+                    decryptedImportBatchId, stagingRecords.Count, successCount, errorCount);
 
                 return response;
             }
@@ -1717,7 +1740,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task UpdateParticipantExtendedAsync(string raceId, string participantId, UpdateParticipantRequest request)
+        public async Task<ParticipantSearchReponse?> UpdateParticipantExtendedAsync(string raceId, string participantId, UpdateParticipantRequest request)
         {
             try
             {
@@ -1740,7 +1763,7 @@ namespace Runnatics.Services
                 {
                     ErrorMessage = "Participant not found";
                     _logger.LogWarning("UpdateParticipantExtended failed: Participant {ParticipantId} not found in Race {RaceId}", participantId, raceId);
-                    return;
+                    return null;
                 }
 
                 // Apply scalar updates
@@ -1782,7 +1805,7 @@ namespace Runnatics.Services
                         if (!targetRaceExists)
                         {
                             ErrorMessage = "Target race not found or does not belong to this event";
-                            return;
+                            return null;
                         }
 
                         // Soft-delete current and insert in new race
@@ -1820,7 +1843,7 @@ namespace Runnatics.Services
                         });
 
                         _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}", participantId, decryptedRaceId, targetRaceId);
-                        return;
+                        return MapToSearchResponse(newParticipant);
                     }
                 }
 
@@ -1862,12 +1885,30 @@ namespace Runnatics.Services
                 });
 
                 _logger.LogInformation("Participant {ParticipantId} updated successfully by User {UserId}", participantId, userId);
+                return MapToSearchResponse(participant);
             }
             catch (Exception ex)
             {
                 ErrorMessage = $"Error updating participant: {ex.Message}";
                 _logger.LogError(ex, "Error in UpdateParticipantExtendedAsync for participant {ParticipantId}", participantId);
+                return null;
             }
+        }
+
+        private ParticipantSearchReponse MapToSearchResponse(Models.Data.Entities.Participant p)
+        {
+            return new ParticipantSearchReponse
+            {
+                Id = _encryptionService.Encrypt(p.Id.ToString()),
+                Bib = p.BibNumber,
+                FirstName = p.FirstName,
+                LastName = p.LastName,
+                Email = p.Email,
+                Phone = p.Phone,
+                Gender = p.Gender,
+                Category = p.AgeCategory,
+                Status = p.Status
+            };
         }
 
         public async Task DeleteParticipantAsync(string raceId, string participantId)

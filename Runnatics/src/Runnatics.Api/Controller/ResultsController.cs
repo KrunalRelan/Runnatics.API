@@ -7,6 +7,7 @@ using Runnatics.Models.Client.Responses.Results;
 using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Services.Interface;
 using System.Net;
+using System.Text;
 
 namespace Runnatics.Api.Controller
 {
@@ -250,6 +251,104 @@ namespace Runnatics.Api.Controller
 
             response.Message = result;
             return Ok(response);
+        }
+
+        /// <summary>
+        /// Export race results as CSV including all participant fields and checkpoint split times.
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/export")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ExportResults(
+            string eventId,
+            string raceId,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+                return BadRequest(new { error = "Event ID and Race ID are required." });
+
+            // Use the leaderboard request to fetch all results (max page size)
+            var request = new GetLeaderboardRequest
+            {
+                EventId = eventId,
+                RaceId = raceId,
+                PageNumber = 1,
+                PageSize = 10000,
+                IncludeSplits = true
+            };
+
+            var leaderboard = await _service.GetLeaderboardAsync(request);
+
+            if (_service.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
+
+            if (leaderboard == null || leaderboard.Results == null || leaderboard.Results.Count == 0)
+                return NotFound(new { error = "No results found for this race." });
+
+            // Collect all checkpoint names across all entries
+            var checkpointNames = leaderboard.Results
+                .Where(e => e.Splits != null)
+                .SelectMany(e => e.Splits!.Select(s => s.CheckpointName))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Distinct()
+                .OrderBy(n => n)
+                .ToList();
+
+            // Build CSV
+            var csv = new StringBuilder();
+
+            // Header row
+            var headers = new List<string>
+            {
+                "BibNumber", "Name", "Email", "Mobile", "Gender",
+                "AgeCategory", "Status", "GunTime", "ChipTime",
+                "OverallRank", "GenderRank", "CategoryRank"
+            };
+            headers.AddRange(checkpointNames);
+            csv.AppendLine(string.Join(",", headers.Select(EscapeCsvField)));
+
+            // Data rows
+            foreach (var entry in leaderboard.Results)
+            {
+                var splitLookup = entry.Splits?
+                    .Where(s => !string.IsNullOrEmpty(s.CheckpointName))
+                    .ToDictionary(s => s.CheckpointName!, s => s.SplitTime)
+                    ?? new Dictionary<string, string?>();
+
+                var row = new List<string?>
+                {
+                    entry.Bib,
+                    entry.FullName,
+                    entry.Email,
+                    entry.Phone,
+                    entry.Gender,
+                    entry.Category,
+                    entry.Status,
+                    entry.GunTime,
+                    entry.NetTime,
+                    entry.OverallRank?.ToString(),
+                    entry.GenderRank?.ToString(),
+                    entry.CategoryRank?.ToString()
+                };
+
+                foreach (var cp in checkpointNames)
+                    row.Add(splitLookup.TryGetValue(cp, out var time) ? time : null);
+
+                csv.AppendLine(string.Join(",", row.Select(v => EscapeCsvField(v ?? ""))));
+            }
+
+            var fileName = $"results_export_{DateTime.UtcNow:yyyyMMdd}.csv";
+            return File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv", fileName);
+        }
+
+        private static string EscapeCsvField(string value)
+        {
+            if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+                return $"\"{value.Replace("\"", "\"\"")}\"";
+            return value;
         }
     }
 }

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Runnatics.Data.EF.Converters;
 using Runnatics.Models.Data.Entities;
 
 namespace Runnatics.Data.EF.Config
@@ -36,11 +37,13 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.StartTime)
                 .HasColumnName("StartTime")
-                .HasColumnType("datetime2(7)");
+                .HasColumnType("datetime2(7)")
+                .HasConversion(new NullableUtcDateTimeValueConverter());
 
             builder.Property(e => e.EndTime)
                 .HasColumnName("EndTime")
-                .HasColumnType("datetime2(7)");
+                .HasColumnType("datetime2(7)")
+                .HasConversion(new NullableUtcDateTimeValueConverter());
 
             builder.Property(e => e.MaxParticipants)
                 .HasColumnName("MaxParticipants");

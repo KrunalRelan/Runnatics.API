@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Runnatics.Data.EF.Converters;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Models.Data.Enumerations;
 
@@ -38,6 +39,7 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.EventDate)
                    .HasColumnName("EventDate")
+                   .HasConversion(new UtcDateTimeValueConverter())
                    .IsRequired();
 
             builder.Property(e => e.TimeZone)
@@ -72,7 +74,8 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("MaxParticipants");
 
             builder.Property(e => e.RegistrationDeadline)
-                .HasColumnName("RegistrationDeadline");
+                .HasColumnName("RegistrationDeadline")
+                .HasConversion(new NullableUtcDateTimeValueConverter());
 
             // JSON
             builder.Property(e => e.Settings)

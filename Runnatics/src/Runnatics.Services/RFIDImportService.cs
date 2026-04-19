@@ -1520,6 +1520,12 @@ namespace Runnatics.Services
 
                 response.Phase15AssignmentMs = (long)(DateTime.UtcNow - phase15Start).TotalMilliseconds;
                 response.CheckpointsAssigned = assignResponse.CheckpointsAssigned;
+                response.DiagEpcMappings = assignResponse.DiagEpcMappings;
+                response.DiagReadingsAfterTimeFilter = assignResponse.DiagReadingsAfterTimeFilter;
+                response.DiagReadingsAfterEpcFilter = assignResponse.DiagReadingsAfterEpcFilter;
+                response.DiagReadingsAfterDeviceResolution = assignResponse.DiagReadingsAfterDeviceResolution;
+                response.DiagRaceStartTimeStored = assignResponse.DiagRaceStartTimeStored;
+                response.DiagRaceStartTimeUtc = assignResponse.DiagRaceStartTimeUtc;
 
                 if (assignResponse.Status == "Failed")
                 {
@@ -3738,7 +3744,34 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                var raceStartTime = race.StartTime.Value;
+                // Race.StartTime is stored as local event time (entered via UI without UTC conversion).
+                // Convert to UTC using the event's timezone before comparing against ReadTimeUtc.
+                var eventRepo2 = _repository.GetRepository<Event>();
+                var eventForTz = await eventRepo2.GetQuery(e => e.Id == decryptedEventId)
+                    .AsNoTracking()
+                    .Select(e => new { e.TimeZone })
+                    .FirstOrDefaultAsync();
+
+                DateTime raceStartTime;
+                try
+                {
+                    var tzId = eventForTz?.TimeZone ?? "Asia/Kolkata";
+                    var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+                    raceStartTime = TimeZoneInfo.ConvertTimeToUtc(
+                        DateTime.SpecifyKind(race.StartTime.Value, DateTimeKind.Unspecified), tz);
+                }
+                catch
+                {
+                    // Fallback: subtract max UTC offset (14h) to avoid filtering valid readings
+                    raceStartTime = race.StartTime.Value.AddHours(-14);
+                }
+
+                response.DiagRaceStartTimeStored = race.StartTime.Value.ToString("yyyy-MM-dd HH:mm:ss");
+                response.DiagRaceStartTimeUtc = raceStartTime.ToString("yyyy-MM-dd HH:mm:ss");
+                _logger.LogInformation(
+                    "Race start time: stored={Stored}, UTC={Utc}",
+                    response.DiagRaceStartTimeStored,
+                    response.DiagRaceStartTimeUtc);
 
                 // 1b. Devices — build resolution map for BOTH serial (MAC) AND friendly name
                 var deviceRepo = _repository.GetRepository<Device>();
@@ -3891,6 +3924,8 @@ namespace Runnatics.Services
                     !r.AuditProperties.IsDeleted)
                     .ToListAsync();
 
+                response.DiagEpcMappings = epcToParticipant.Count;
+                response.DiagReadingsAfterTimeFilter = allReadings.Count;
                 _logger.LogInformation(
                     "Step 1: Loaded {Checkpoints} checkpoints, {Devices} devices, " +
                     "{Participants} EPC mappings, {Readings} valid readings (after race start)",
@@ -3913,6 +3948,7 @@ namespace Runnatics.Services
                     .Where(r => raceEpcSet.Contains(r.Epc))  // ← In-memory: HashSet is fine
                     .ToList();
 
+                response.DiagReadingsAfterEpcFilter = raceFilteredReadings.Count;
                 var filteredOut = allReadings.Count - raceFilteredReadings.Count;
                 if (filteredOut > 0)
                 {
@@ -3983,6 +4019,7 @@ namespace Runnatics.Services
                         unresolvedDevices);
                 }
 
+                response.DiagReadingsAfterDeviceResolution = readingInputs.Count;
                 _logger.LogInformation(
                     "After dedup + device resolution: {Count} readings ready for assignment",
                     readingInputs.Count);

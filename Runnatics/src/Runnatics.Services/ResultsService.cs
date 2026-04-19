@@ -129,12 +129,14 @@ namespace Runnatics.Services
 
                 var splitTimes = new List<SplitTimes>();
                 var checkpointSummaries = new Dictionary<int, CheckpointSummary>();
+                var startCheckpointId = checkpoints.First().Id;
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     foreach (var participantData in participantReadings)
                     {
                         long? previousSplitTime = null;
+                        int? previousCheckpointId = null;
                         var participantHasSplits = false;
 
                         foreach (var reading in participantData.Readings)
@@ -158,11 +160,20 @@ namespace Runnatics.Services
                                 pace = timeInMinutes / checkpoint.DistanceFromStart;
                             }
 
+                            var splitTimeSpan = TimeSpan.FromMilliseconds(splitTimeMs);
+                            if (splitTimeSpan.TotalHours >= 24)
+                                splitTimeSpan = new TimeSpan(23, 59, 59);
+
+                            var fromCheckpointId = previousCheckpointId ?? startCheckpointId;
+
                             var splitTime = new SplitTimes
                             {
                                 EventId = decryptedEventId,
                                 ParticipantId = participantData.ParticipantId,
                                 CheckpointId = reading.CheckpointId,
+                                FromCheckpointId = fromCheckpointId,
+                                ToCheckpointId = reading.CheckpointId,
+                                SplitTime = splitTimeSpan,
                                 ReadNormalizedId = reading.Id,
                                 SplitTimeMs = splitTimeMs,
                                 SegmentTime = segmentTimeMs,
@@ -179,6 +190,7 @@ namespace Runnatics.Services
                             splitTimes.Add(splitTime);
                             participantHasSplits = true;
                             previousSplitTime = splitTimeMs;
+                            previousCheckpointId = reading.CheckpointId;
 
                             // Update checkpoint summary
                             if (!checkpointSummaries.ContainsKey(reading.CheckpointId))

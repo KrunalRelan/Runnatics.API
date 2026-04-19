@@ -19,6 +19,14 @@ namespace Runnatics.Models.Client.Responses.RFID
         public long Phase15AssignmentMs { get; set; }
         public int CheckpointsAssigned { get; set; }
 
+        // Phase 1.5 Diagnostics — use these to pinpoint 0-assignment root cause
+        public int DiagEpcMappings { get; set; }
+        public int DiagReadingsAfterTimeFilter { get; set; }
+        public int DiagReadingsAfterEpcFilter { get; set; }
+        public int DiagReadingsAfterDeviceResolution { get; set; }
+        public string? DiagRaceStartTimeStored { get; set; }
+        public string? DiagRaceStartTimeUtc { get; set; }
+
         // Phase 2: Deduplication Stats
         public int TotalNormalizedReadings { get; set; }
         public int DuplicatesRemoved { get; set; }

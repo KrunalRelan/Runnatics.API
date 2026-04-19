@@ -11,6 +11,10 @@ namespace Runnatics.Repositories.Interface
         // Unit of Work methods
         Task<int> SaveChangesAsync();
 
+        // Remove an entity from the change tracker (e.g. after a failed insert so the outer
+        // SaveChanges will not retry it). No SQL is emitted.
+        void Detach<T>(T entity) where T : class;
+
         // Transaction management
         Task BeginTransactionAsync();
         Task CommitTransactionAsync();

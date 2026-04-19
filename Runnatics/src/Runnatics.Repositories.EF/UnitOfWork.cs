@@ -59,6 +59,16 @@ namespace Runnatics.Repositories.EF
         }
 
         /// <summary>
+        /// Removes the given entity from the change tracker. Used to discard an entity whose
+        /// insert failed (e.g. unique-index race) so the next SaveChanges will not retry it.
+        /// </summary>
+        public void Detach<T>(T entity) where T : class
+        {
+            if (entity == null) return;
+            _context.Entry(entity).State = EntityState.Detached;
+        }
+
+        /// <summary>
         /// Gets the repository instance for the specified entity type.
         /// </summary>
         /// <typeparam name="T">The entity type</typeparam>

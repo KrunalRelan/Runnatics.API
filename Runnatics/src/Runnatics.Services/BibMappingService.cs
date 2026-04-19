@@ -1,5 +1,6 @@
 using AutoMapper;
 using FluentValidation;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
@@ -268,7 +269,7 @@ namespace Runnatics.Services
 
                     if (chip == null)
                     {
-                        chip = new Chip
+                        var newChip = new Chip
                         {
                             TenantId = tenantId,
                             EPC = request.Epc,
@@ -282,10 +283,40 @@ namespace Runnatics.Services
                                 IsDeleted = false
                             }
                         };
-                        await chipRepo.AddAsync(chip);
-                        // Flush inside the transaction so chip.Id is populated
-                        // before ChipAssignment.ChipId references it (FK is part of the composite PK).
-                        await _repository.SaveChangesAsync();
+                        await chipRepo.AddAsync(newChip);
+                        try
+                        {
+                            // Flush inside the transaction so chip.Id is populated
+                            // before ChipAssignment.ChipId references it (FK is part of the composite PK).
+                            await _repository.SaveChangesAsync();
+                            chip = newChip;
+                        }
+                        catch (DbUpdateException ex) when (ex.InnerException is SqlException sql && sql.Number == 2601)
+                        {
+                            // Concurrent scan (or a soft-deleted row with the same EPC) won the
+                            // unique-index race on IX_Chips_EPC. Detach the failed Added entity
+                            // so the outer SaveChanges won't retry it, then reactivate the
+                            // existing row (ignoreQueryFilters covers the soft-deleted case).
+                            _logger.LogWarning(
+                                "Concurrent Chip insert for EPC={Epc} hit IX_Chips_EPC; refetching existing row.",
+                                request.Epc);
+                            _repository.Detach(newChip);
+
+                            chip = await chipRepo
+                                .GetQuery(c => c.EPC == request.Epc, ignoreQueryFilters: true)
+                                .FirstOrDefaultAsync(cancellationToken);
+                            if (chip == null)
+                            {
+                                throw;
+                            }
+                            chip.Status = "Assigned";
+                            chip.LastSeenAt = DateTime.UtcNow;
+                            chip.AuditProperties.IsDeleted = false;
+                            chip.AuditProperties.IsActive = true;
+                            chip.AuditProperties.UpdatedBy = userId;
+                            chip.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            await chipRepo.UpdateAsync(chip);
+                        }
                     }
                     else
                     {
@@ -311,25 +342,50 @@ namespace Runnatics.Services
                         }
                     }
 
-                    var assignment = new ChipAssignment
+                    // Composite PK is (EventId, ParticipantId, ChipId). A soft-deleted row
+                    // with the same triple would fail INSERT with a PK violation, so reactivate
+                    // it in place instead of adding a new row.
+                    var existingForPk = await assignmentRepo
+                        .GetQuery(a => a.EventId == eventId
+                            && a.ParticipantId == participant.Id
+                            && a.ChipId == chip.Id,
+                            ignoreQueryFilters: true)
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                    if (existingForPk != null)
                     {
-                        EventId = eventId,
-                        ParticipantId = participant.Id,
-                        ChipId = chip.Id,
-                        AssignedAt = DateTime.UtcNow,
-                        AssignedByUserId = userId,
-                        AuditProperties = new AuditProperties
+                        existingForPk.AssignedAt = DateTime.UtcNow;
+                        existingForPk.UnassignedAt = null;
+                        existingForPk.AssignedByUserId = userId;
+                        existingForPk.AuditProperties.IsDeleted = false;
+                        existingForPk.AuditProperties.IsActive = true;
+                        existingForPk.AuditProperties.UpdatedBy = userId;
+                        existingForPk.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await assignmentRepo.UpdateAsync(existingForPk);
+                        createdAssignment = existingForPk;
+                    }
+                    else
+                    {
+                        var assignment = new ChipAssignment
                         {
-                            CreatedBy = userId,
-                            CreatedDate = DateTime.UtcNow,
-                            IsActive = true,
-                            IsDeleted = false
-                        }
-                    };
-                    await assignmentRepo.AddAsync(assignment);
+                            EventId = eventId,
+                            ParticipantId = participant.Id,
+                            ChipId = chip.Id,
+                            AssignedAt = DateTime.UtcNow,
+                            AssignedByUserId = userId,
+                            AuditProperties = new AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+                        await assignmentRepo.AddAsync(assignment);
+                        createdAssignment = assignment;
+                    }
 
                     chipForNew = chip;
-                    createdAssignment = assignment;
                 });
 
                 // Audit log for override actions

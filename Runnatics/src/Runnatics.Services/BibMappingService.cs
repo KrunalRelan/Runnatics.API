@@ -30,6 +30,10 @@ namespace Runnatics.Services
         {
             var result = new CreateBibMappingServiceResult();
 
+            _logger.LogInformation(
+                "CreateBibMapping request: BIB={Bib}, EPC={Epc}, Override={Override}, UserId={UserId}",
+                request?.BibNumber, request?.Epc, request?.Override, _userContext.UserId);
+
             try
             {
                 // Validate
@@ -37,6 +41,7 @@ namespace Runnatics.Services
                 if (!validationResult.IsValid)
                 {
                     ErrorMessage = string.Join("; ", validationResult.Errors.Select(e => e.ErrorMessage));
+                    _logger.LogWarning("CreateBibMapping validation failed: {Error}", ErrorMessage);
                     return result;
                 }
 
@@ -278,6 +283,9 @@ namespace Runnatics.Services
                             }
                         };
                         await chipRepo.AddAsync(chip);
+                        // Flush inside the transaction so chip.Id is populated
+                        // before ChipAssignment.ChipId references it (FK is part of the composite PK).
+                        await _repository.SaveChangesAsync();
                     }
                     else
                     {

@@ -516,6 +516,8 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.Category, opt => opt.MapFrom(src => src.Participant.AgeCategory))
                 .ForMember(dest => dest.Age, opt => opt.MapFrom(src => src.Participant.Age))
                 .ForMember(dest => dest.City, opt => opt.MapFrom(src => src.Participant.City ?? string.Empty))
+                .ForMember(dest => dest.Email, opt => opt.MapFrom(src => src.Participant.Email))
+                .ForMember(dest => dest.Phone, opt => opt.MapFrom(src => src.Participant.Phone))
                 .ForMember(dest => dest.FinishTimeMs, opt => opt.MapFrom(src => src.FinishTime))
                 .ForMember(dest => dest.GunTimeMs, opt => opt.MapFrom(src => src.GunTime))
                 .ForMember(dest => dest.NetTimeMs, opt => opt.MapFrom(src => src.NetTime))

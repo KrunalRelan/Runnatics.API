@@ -33,5 +33,15 @@ namespace Runnatics.Services.Interface
         /// Returns (null, null) when not found or deleted.
         /// </summary>
         Task<(Event? Event, Dictionary<int, int>? RaceParticipantCounts)> GetPublicEventBySlugAsync(string slug);
+
+        /// <summary>
+        /// Stores a base64-encoded banner image on the event.
+        /// </summary>
+        Task<bool> UpdateBannerAsync(string eventId, string base64Image, string contentType);
+
+        /// <summary>
+        /// Returns the banner image as (base64, contentType). Both null if no banner.
+        /// </summary>
+        Task<(string? Base64, string? ContentType)> GetBannerAsync(string eventId);
     }
 }

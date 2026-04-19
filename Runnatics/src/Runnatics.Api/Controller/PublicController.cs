@@ -136,10 +136,26 @@ namespace Runnatics.Api.Controller
                 return BadRequest(CreateErrorResponse<PublicPagedResultDto<PublicResultDto>>(
                     "page must be >= 1 and pageSize must be between 1 and 100."));
 
-            // Look up event ID from slug
+            // Look up event ID from slug — includes EventSettings and RaceSettings
             var (eventEntity, _) = await _eventsService.GetPublicEventBySlugAsync(slug);
             if (eventEntity == null)
                 return NotFound(CreateErrorResponse<PublicPagedResultDto<PublicResultDto>>("Event not found."));
+
+            // Check if any published race allows showing a result table
+            var publishedRaces = eventEntity.Races?
+                .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
+                .ToList() ?? [];
+
+            var anyShowResultTable = publishedRaces.Any(r => r.RaceSettings == null || r.RaceSettings.ShowResultTable);
+            if (!anyShowResultTable)
+                return Ok(new ResponseBase<PublicPagedResultDto<PublicResultDto>>
+                {
+                    Message = new PublicPagedResultDto<PublicResultDto> { Items = [], TotalCount = 0 },
+                    Error = new ResponseBase<PublicPagedResultDto<PublicResultDto>>.ErrorData
+                    {
+                        Message = "Results not available for this event."
+                    }
+                });
 
             var results = await _resultsService.GetPublicResultsAsync(
                 eventEntity.Id, race, q, gender, page, pageSize);
@@ -148,9 +164,29 @@ namespace Runnatics.Api.Controller
                 return StatusCode((int)HttpStatusCode.InternalServerError,
                     CreateErrorResponse<PublicPagedResultDto<PublicResultDto>>(_resultsService.ErrorMessage));
 
+            // Respect RaceSettings: filter out unpublished races and DNF if PublishDnf=false
+            var raceSettingsMap = publishedRaces
+                .Where(r => r.RaceSettings != null)
+                .ToDictionary(r => r.Id, r => r.RaceSettings!);
+
+            var filteredResults = results.Where(r =>
+            {
+                // Only include results from published races
+                if (!publishedRaces.Any(pr => pr.Id == r.RaceId))
+                    return false;
+
+                // Respect PublishDnf setting
+                if (raceSettingsMap.TryGetValue(r.RaceId, out var rs) &&
+                    !rs.PublishDnf &&
+                    r.Status == "DNF")
+                    return false;
+
+                return true;
+            }).ToList();
+
             var dto = new PublicPagedResultDto<PublicResultDto>
             {
-                Items = results.Select(MapToResultDto).ToList(),
+                Items = filteredResults.Select(MapToResultDto).ToList(),
                 Page = page,
                 PageSize = pageSize,
                 TotalCount = results.TotalCount
@@ -284,6 +320,14 @@ namespace Runnatics.Api.Controller
 
         #region Private mapping helpers
 
+        private static string? BuildBannerUrl(Event e)
+        {
+            var removeBanner = e.EventSettings?.RemoveBanner ?? false;
+            if (removeBanner || string.IsNullOrEmpty(e.BannerImage))
+                return null;
+            return $"/api/events/{e.Id}/banner";
+        }
+
         private static PublicEventSummaryDto MapToSummary(Event e)
         {
             return new PublicEventSummaryDto
@@ -293,18 +337,19 @@ namespace Runnatics.Api.Controller
                 City = e.City,
                 State = e.State,
                 EventDate = e.EventDate,
-                HeroImageUrl = null, // No HeroImageUrl column on Event yet
+                HeroImageUrl = null,
+                BannerUrl = BuildBannerUrl(e),
                 Description = e.Description != null && e.Description.Length > 200
                     ? e.Description[..200] + "..."
                     : e.Description,
                 RaceCategories = e.Races?
                     .Select(r => r.Title)
                     .ToList() ?? [],
-                ParticipantCount = null, // Not available in list view (no heavy join)
+                ParticipantCount = null,
                 RegistrationOpen = e.RegistrationDeadline.HasValue
                     ? e.RegistrationDeadline.Value > DateTime.UtcNow
                     : e.EventDate > DateTime.UtcNow,
-                RegistrationUrl = null, // No RegistrationUrl column on Event yet
+                RegistrationUrl = null,
                 Venue = e.VenueName
             };
         }
@@ -312,6 +357,12 @@ namespace Runnatics.Api.Controller
         private static PublicEventDetailDto MapToDetail(Event e, Dictionary<int, int>? raceCounts)
         {
             var totalParticipants = raceCounts?.Values.Sum() ?? 0;
+            var settings = e.EventSettings;
+
+            // Only include races where RaceSettings.Published == true (or no settings = published)
+            var publishedRaces = e.Races?
+                .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
+                .ToList() ?? [];
 
             return new PublicEventDetailDto
             {
@@ -321,12 +372,11 @@ namespace Runnatics.Api.Controller
                 State = e.State,
                 EventDate = e.EventDate,
                 HeroImageUrl = null,
+                BannerUrl = BuildBannerUrl(e),
                 Description = e.Description != null && e.Description.Length > 200
                     ? e.Description[..200] + "..."
                     : e.Description,
-                RaceCategories = e.Races?
-                    .Select(r => r.Title)
-                    .ToList() ?? [],
+                RaceCategories = publishedRaces.Select(r => r.Title).ToList(),
                 ParticipantCount = totalParticipants,
                 RegistrationOpen = e.RegistrationDeadline.HasValue
                     ? e.RegistrationDeadline.Value > DateTime.UtcNow
@@ -334,18 +384,20 @@ namespace Runnatics.Api.Controller
                 RegistrationUrl = null,
                 Venue = e.VenueName,
                 FullDescription = e.Description,
-                Schedule = null,       // No Schedule column on Event yet
-                RouteMapUrl = null,    // No RouteMapUrl column on Event yet
-                Races = e.Races?.Select(r => new PublicRaceCategoryDto
+                Schedule = null,
+                RouteMapUrl = null,
+                Races = publishedRaces.Select(r => new PublicRaceCategoryDto
                 {
                     Name = r.Title,
                     Distance = r.Distance?.ToString("0.##"),
-                    Price = null,      // No Price column on Race yet
+                    Price = null,
                     ParticipantLimit = r.MaxParticipants,
                     RegisteredCount = raceCounts != null && raceCounts.TryGetValue(r.Id, out var c) ? c : 0
-                }).ToList() ?? [],
+                }).ToList(),
                 RegistrationDeadline = e.RegistrationDeadline,
-                ContactEmail = null    // EventOrganizer has no email field
+                ContactEmail = null,
+                ShowResultSummary = settings?.ShowResultSummaryForRaces ?? false,
+                ShowBanner = !(settings?.RemoveBanner ?? false) && !string.IsNullOrEmpty(e.BannerImage)
             };
         }
 

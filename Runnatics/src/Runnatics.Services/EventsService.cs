@@ -890,9 +890,12 @@ namespace Runnatics.Services
                 var query = eventRepo.GetQuery(e =>
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
+                    // Only show events where EventSettings.Published == true
+                    (e.EventSettings == null || e.EventSettings.Published) &&
                     (isPast ? e.EventDate.Date < today : e.EventDate.Date >= today) &&
                     (city == null || (e.City != null && e.City.Contains(city))) &&
                     (searchQuery == null || e.Name.Contains(searchQuery)))
+                    .Include(e => e.EventSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
                     .AsNoTracking();
 
@@ -929,7 +932,9 @@ namespace Runnatics.Services
                     e.Slug == slug &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted)
+                    .Include(e => e.EventSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
+                        .ThenInclude(r => r.RaceSettings)
                     .Include(e => e.EventOrganizer)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
@@ -957,6 +962,75 @@ namespace Runnatics.Services
             {
                 this.ErrorMessage = "Error retrieving event.";
                 _logger.LogError(ex, "Error in GetPublicEventBySlugAsync for slug: {Slug}", slug);
+                return (null, null);
+            }
+        }
+
+        public async Task<bool> UpdateBannerAsync(string eventId, string base64Image, string contentType)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                var decryptedId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var tenantId = _userContext.TenantId;
+
+                var eventEntity = await eventRepo.GetQuery(e =>
+                    e.Id == decryptedId &&
+                    e.TenantId == tenantId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (eventEntity == null)
+                {
+                    this.ErrorMessage = "Event not found.";
+                    return false;
+                }
+
+                eventEntity.BannerImage = base64Image;
+                eventEntity.BannerContentType = contentType;
+                eventEntity.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                eventEntity.AuditProperties.UpdatedBy = _userContext.UserId;
+
+                await eventRepo.UpdateAsync(eventEntity);
+                await _repository.SaveChangesAsync();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "Error updating banner.";
+                _logger.LogError(ex, "Error in UpdateBannerAsync for event {EventId}", eventId);
+                return false;
+            }
+        }
+
+        public async Task<(string? Base64, string? ContentType)> GetBannerAsync(string eventId)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                int decryptedId;
+
+                // Support both encrypted IDs (admin) and plain int IDs (public)
+                if (int.TryParse(eventId, out var plainId))
+                    decryptedId = plainId;
+                else
+                    decryptedId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+
+                var data = await eventRepo.GetQuery(e =>
+                    e.Id == decryptedId &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted)
+                    .Select(e => new { e.BannerImage, e.BannerContentType })
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                return (data?.BannerImage, data?.BannerContentType);
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "Error retrieving banner.";
+                _logger.LogError(ex, "Error in GetBannerAsync for event {EventId}", eventId);
                 return (null, null);
             }
         }

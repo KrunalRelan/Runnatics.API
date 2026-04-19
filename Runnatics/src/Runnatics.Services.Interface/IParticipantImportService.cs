@@ -36,7 +36,7 @@ namespace Runnatics.Services.Interface
         /// <summary>
         /// Extended update for admin use: supports RunStatus, DisqualificationReason, ManualTime, ManualDistance, LoopCount, and race reassignment.
         /// </summary>
-        Task UpdateParticipantExtendedAsync(string raceId, string participantId, UpdateParticipantRequest request);
+        Task<ParticipantSearchReponse?> UpdateParticipantExtendedAsync(string raceId, string participantId, UpdateParticipantRequest request);
 
         /// <summary>
         /// Soft-deletes a participant, verifying they belong to the given race.

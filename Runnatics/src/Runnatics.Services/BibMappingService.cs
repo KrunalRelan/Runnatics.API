@@ -26,8 +26,10 @@ namespace Runnatics.Services
         private readonly IEncryptionService _encryptionService = encryptionService;
         private readonly IValidator<CreateBibMappingRequest> _validator = validator;
 
-        public async Task<BibMappingResponse?> CreateAsync(CreateBibMappingRequest request, CancellationToken cancellationToken = default)
+        public async Task<CreateBibMappingServiceResult> CreateAsync(CreateBibMappingRequest request, CancellationToken cancellationToken = default)
         {
+            var result = new CreateBibMappingServiceResult();
+
             try
             {
                 // Validate
@@ -35,7 +37,7 @@ namespace Runnatics.Services
                 if (!validationResult.IsValid)
                 {
                     ErrorMessage = string.Join("; ", validationResult.Errors.Select(e => e.ErrorMessage));
-                    return null;
+                    return result;
                 }
 
                 var decryptedRaceId = int.Parse(_encryptionService.Decrypt(request.RaceId));
@@ -45,9 +47,10 @@ namespace Runnatics.Services
                 var chipRepo = _repository.GetRepository<Chip>();
                 var participantRepo = _repository.GetRepository<Participant>();
                 var assignmentRepo = _repository.GetRepository<ChipAssignment>();
+                var raceRepo = _repository.GetRepository<Race>();
+                var eventRepo = _repository.GetRepository<Event>();
 
                 // Look up the race to get the EventId
-                var raceRepo = _repository.GetRepository<Race>();
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId && !r.AuditProperties.IsDeleted)
                     .AsNoTracking()
                     .FirstOrDefaultAsync(cancellationToken);
@@ -55,13 +58,12 @@ namespace Runnatics.Services
                 if (race == null)
                 {
                     ErrorMessage = "Race not found.";
-                    return null;
+                    return result;
                 }
 
                 var eventId = race.EventId;
 
                 // Resolve the event's display timezone for response times
-                var eventRepo = _repository.GetRepository<Event>();
                 var eventTimeZoneId = await eventRepo
                     .GetQuery(e => e.Id == eventId)
                     .AsNoTracking()
@@ -78,21 +80,6 @@ namespace Runnatics.Services
                     displayTz = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
                 }
 
-                // Check if EPC is already assigned to another participant in this event
-                var existingEpcAssignment = await assignmentRepo
-                    .GetQuery(a => a.Chip.EPC == request.Epc
-                        && a.EventId == eventId
-                        && a.UnassignedAt == null
-                        && !a.AuditProperties.IsDeleted, includeNavigationProperties: true)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(cancellationToken);
-
-                if (existingEpcAssignment != null)
-                {
-                    ErrorMessage = $"EPC '{request.Epc}' is already mapped to another participant in this event.";
-                    return null;
-                }
-
                 // Look up participant by BibNumber + RaceId
                 var participant = await participantRepo
                     .GetQuery(p => p.BibNumber == request.BibNumber
@@ -104,37 +91,225 @@ namespace Runnatics.Services
                 if (participant == null)
                 {
                     ErrorMessage = $"No participant found with BIB '{request.BibNumber}' in this race.";
-                    return null;
+                    return result;
                 }
 
-                // Check if BIB is already mapped for this event
+                // Check if requested EPC is already assigned to some participant in this event
+                var existingEpcAssignment = await assignmentRepo
+                    .GetQuery(a => a.Chip.EPC == request.Epc
+                        && a.EventId == eventId
+                        && a.UnassignedAt == null
+                        && !a.AuditProperties.IsDeleted, includeNavigationProperties: true)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                // Check if the target BIB/participant already has an active assignment
                 var existingBibAssignment = await assignmentRepo
                     .GetQuery(a => a.ParticipantId == participant.Id
                         && a.EventId == eventId
                         && a.UnassignedAt == null
-                        && !a.AuditProperties.IsDeleted)
+                        && !a.AuditProperties.IsDeleted, includeNavigationProperties: true)
                     .AsNoTracking()
                     .FirstOrDefaultAsync(cancellationToken);
 
-                if (existingBibAssignment != null)
+                // Idempotent short-circuit: BIB already has exactly this EPC — return existing mapping as success
+                if (existingBibAssignment != null
+                    && existingEpcAssignment != null
+                    && existingBibAssignment.ParticipantId == participant.Id
+                    && existingEpcAssignment.ParticipantId == participant.Id
+                    && existingBibAssignment.ChipId == existingEpcAssignment.ChipId)
                 {
-                    ErrorMessage = $"BIB '{request.BibNumber}' is already mapped to a chip in this event.";
-                    return null;
+                    existingBibAssignment.Participant = participant;
+                    result.Success = true;
+                    result.Overridden = false;
+                    result.SuccessMessage = $"BIB '{request.BibNumber}' is already mapped to EPC '{request.Epc}'.";
+                    result.Mapping = _mapper.Map<BibMappingResponse>(existingBibAssignment, opts =>
+                    {
+                        opts.Items["DisplayTz"] = displayTz;
+                        opts.Items["RaceId"] = request.RaceId;
+                    });
+                    return result;
                 }
 
-                // Find or create Chip record by EPC
-                var chip = await chipRepo
-                    .GetQuery(c => c.EPC == request.Epc && !c.AuditProperties.IsDeleted)
-                    .FirstOrDefaultAsync(cancellationToken);
-
-                if (chip == null)
+                // BIB already has a DIFFERENT EPC → conflict type #3 (unless override)
+                if (existingBibAssignment != null && !request.Override)
                 {
-                    chip = new Chip
+                    var currentEpc = existingBibAssignment.Chip?.EPC ?? string.Empty;
+                    result.Conflict = new BibMappingConflictResponse
                     {
-                        TenantId = tenantId,
-                        EPC = request.Epc,
-                        Status = "Assigned",
-                        LastSeenAt = DateTime.UtcNow,
+                        Success = false,
+                        ConflictType = BibMappingConflictTypes.BibHasDifferentEpc,
+                        Message = $"BIB #{request.BibNumber} already has EPC {currentEpc}. Replace it?",
+                        BibNumber = request.BibNumber,
+                        ExistingEpc = currentEpc
+                    };
+                    return result;
+                }
+
+                // EPC already mapped to a DIFFERENT participant → conflict type #1 (unless override)
+                if (existingEpcAssignment != null
+                    && existingEpcAssignment.ParticipantId != participant.Id
+                    && !request.Override)
+                {
+                    Participant? otherParticipant = null;
+                    if (existingEpcAssignment.Participant == null)
+                    {
+                        otherParticipant = await participantRepo
+                            .GetQuery(p => p.Id == existingEpcAssignment.ParticipantId)
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(cancellationToken);
+                    }
+                    else
+                    {
+                        otherParticipant = existingEpcAssignment.Participant;
+                    }
+
+                    result.Conflict = new BibMappingConflictResponse
+                    {
+                        Success = false,
+                        ConflictType = BibMappingConflictTypes.EpcAlreadyMapped,
+                        Message = "EPC already mapped",
+                        ExistingMapping = new ExistingBibMappingInfo
+                        {
+                            BibNumber = otherParticipant?.BibNumber ?? string.Empty,
+                            ParticipantName = otherParticipant == null
+                                ? null
+                                : $"{otherParticipant.FirstName} {otherParticipant.LastName}".Trim(),
+                            ParticipantId = _encryptionService.Encrypt(existingEpcAssignment.ParticipantId.ToString()),
+                            MappedAt = existingEpcAssignment.AssignedAt
+                        }
+                    };
+                    return result;
+                }
+
+                // From here on, we will write. If override=true, we may need to unassign conflicting
+                // rows before creating the new assignment. Wrap everything in a transaction.
+                ChipAssignment? createdAssignment = null;
+                Chip? chipForNew = null;
+                string? overrideSuccessMessage = null;
+                bool wasOverride = false;
+
+                // Capture identifying info for logging before mutation
+                string? displacedBib = null;
+                string? replacedOldEpc = null;
+                int? oldChipIdToFreeForBibOverride = null;
+
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    // Re-read tracked copies for mutation
+                    if (existingEpcAssignment != null
+                        && existingEpcAssignment.ParticipantId != participant.Id
+                        && request.Override)
+                    {
+                        var trackedEpcAssignment = await assignmentRepo
+                            .GetQuery(a => a.EventId == existingEpcAssignment.EventId
+                                && a.ParticipantId == existingEpcAssignment.ParticipantId
+                                && a.ChipId == existingEpcAssignment.ChipId
+                                && a.UnassignedAt == null
+                                && !a.AuditProperties.IsDeleted,
+                                includeNavigationProperties: true)
+                            .FirstOrDefaultAsync(cancellationToken);
+
+                        if (trackedEpcAssignment != null)
+                        {
+                            var displacedParticipant = await participantRepo
+                                .GetQuery(p => p.Id == trackedEpcAssignment.ParticipantId)
+                                .AsNoTracking()
+                                .FirstOrDefaultAsync(cancellationToken);
+                            displacedBib = displacedParticipant?.BibNumber;
+
+                            trackedEpcAssignment.UnassignedAt = DateTime.UtcNow;
+                            trackedEpcAssignment.AuditProperties.IsDeleted = true;
+                            trackedEpcAssignment.AuditProperties.IsActive = false;
+                            trackedEpcAssignment.AuditProperties.UpdatedBy = userId;
+                            trackedEpcAssignment.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            await assignmentRepo.UpdateAsync(trackedEpcAssignment);
+                        }
+
+                        wasOverride = true;
+                    }
+
+                    if (existingBibAssignment != null && request.Override)
+                    {
+                        var trackedBibAssignment = await assignmentRepo
+                            .GetQuery(a => a.EventId == existingBibAssignment.EventId
+                                && a.ParticipantId == existingBibAssignment.ParticipantId
+                                && a.ChipId == existingBibAssignment.ChipId
+                                && a.UnassignedAt == null
+                                && !a.AuditProperties.IsDeleted,
+                                includeNavigationProperties: true)
+                            .FirstOrDefaultAsync(cancellationToken);
+
+                        if (trackedBibAssignment != null)
+                        {
+                            replacedOldEpc = trackedBibAssignment.Chip?.EPC;
+                            oldChipIdToFreeForBibOverride = trackedBibAssignment.ChipId;
+
+                            trackedBibAssignment.UnassignedAt = DateTime.UtcNow;
+                            trackedBibAssignment.AuditProperties.IsDeleted = true;
+                            trackedBibAssignment.AuditProperties.IsActive = false;
+                            trackedBibAssignment.AuditProperties.UpdatedBy = userId;
+                            trackedBibAssignment.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            await assignmentRepo.UpdateAsync(trackedBibAssignment);
+                        }
+
+                        wasOverride = true;
+                    }
+
+                    // Find or create Chip record by EPC (tracked)
+                    var chip = await chipRepo
+                        .GetQuery(c => c.EPC == request.Epc && !c.AuditProperties.IsDeleted)
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                    if (chip == null)
+                    {
+                        chip = new Chip
+                        {
+                            TenantId = tenantId,
+                            EPC = request.Epc,
+                            Status = "Assigned",
+                            LastSeenAt = DateTime.UtcNow,
+                            AuditProperties = new AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+                        await chipRepo.AddAsync(chip);
+                    }
+                    else
+                    {
+                        chip.Status = "Assigned";
+                        chip.LastSeenAt = DateTime.UtcNow;
+                        chip.AuditProperties.UpdatedBy = userId;
+                        chip.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await chipRepo.UpdateAsync(chip);
+                    }
+
+                    // If we freed up a different chip from the BIB's old assignment, mark it Available
+                    if (oldChipIdToFreeForBibOverride.HasValue && oldChipIdToFreeForBibOverride.Value != chip.Id)
+                    {
+                        var freedChip = await chipRepo
+                            .GetQuery(c => c.Id == oldChipIdToFreeForBibOverride.Value)
+                            .FirstOrDefaultAsync(cancellationToken);
+                        if (freedChip != null)
+                        {
+                            freedChip.Status = "Available";
+                            freedChip.AuditProperties.UpdatedBy = userId;
+                            freedChip.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            await chipRepo.UpdateAsync(freedChip);
+                        }
+                    }
+
+                    var assignment = new ChipAssignment
+                    {
+                        EventId = eventId,
+                        ParticipantId = participant.Id,
+                        ChipId = chip.Id,
+                        AssignedAt = DateTime.UtcNow,
+                        AssignedByUserId = userId,
                         AuditProperties = new AuditProperties
                         {
                             CreatedBy = userId,
@@ -143,58 +318,58 @@ namespace Runnatics.Services
                             IsDeleted = false
                         }
                     };
-                    await chipRepo.AddAsync(chip);
-                    await _repository.SaveChangesAsync();
+                    await assignmentRepo.AddAsync(assignment);
+
+                    chipForNew = chip;
+                    createdAssignment = assignment;
+                });
+
+                // Audit log for override actions
+                if (wasOverride)
+                {
+                    if (!string.IsNullOrEmpty(displacedBib))
+                    {
+                        _logger.LogInformation(
+                            "BIB mapping overridden (EPC reassigned): UserId={UserId}, OldBib={OldBib}, NewBib={NewBib}, Epc={Epc}, EventId={EventId}, Timestamp={Timestamp:o}",
+                            userId, displacedBib, request.BibNumber, request.Epc, eventId, DateTime.UtcNow);
+                        overrideSuccessMessage = $"EPC moved from BIB {displacedBib} to BIB {request.BibNumber}";
+                    }
+                    if (!string.IsNullOrEmpty(replacedOldEpc))
+                    {
+                        _logger.LogInformation(
+                            "BIB mapping overridden (BIB EPC replaced): UserId={UserId}, Bib={Bib}, OldEpc={OldEpc}, NewEpc={NewEpc}, EventId={EventId}, Timestamp={Timestamp:o}",
+                            userId, request.BibNumber, replacedOldEpc, request.Epc, eventId, DateTime.UtcNow);
+                        overrideSuccessMessage = overrideSuccessMessage != null
+                            ? $"{overrideSuccessMessage}; BIB {request.BibNumber}'s EPC changed from {replacedOldEpc} to {request.Epc}"
+                            : $"BIB {request.BibNumber}'s EPC changed from {replacedOldEpc} to {request.Epc}";
+                    }
                 }
                 else
                 {
-                    // Update chip status
-                    chip.Status = "Assigned";
-                    chip.LastSeenAt = DateTime.UtcNow;
-                    chip.AuditProperties.UpdatedBy = userId;
-                    chip.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                    await chipRepo.UpdateAsync(chip);
-                    await _repository.SaveChangesAsync();
+                    _logger.LogInformation(
+                        "BIB mapping created: EPC={Epc}, BIB={Bib}, ParticipantId={ParticipantId}, ChipId={ChipId}, EventId={EventId}",
+                        request.Epc, request.BibNumber, participant.Id, chipForNew!.Id, eventId);
                 }
 
-                // Create ChipAssignment
-                var assignment = new ChipAssignment
-                {
-                    EventId = eventId,
-                    ParticipantId = participant.Id,
-                    ChipId = chip.Id,
-                    AssignedAt = DateTime.UtcNow,
-                    AssignedByUserId = userId,
-                    AuditProperties = new AuditProperties
-                    {
-                        CreatedBy = userId,
-                        CreatedDate = DateTime.UtcNow,
-                        IsActive = true,
-                        IsDeleted = false
-                    }
-                };
+                createdAssignment!.Chip = chipForNew!;
+                createdAssignment.Participant = participant;
 
-                await assignmentRepo.AddAsync(assignment);
-                await _repository.SaveChangesAsync();
-
-                _logger.LogInformation(
-                    "BIB mapping created: EPC={Epc}, BIB={Bib}, ParticipantId={ParticipantId}, ChipId={ChipId}, EventId={EventId}",
-                    request.Epc, request.BibNumber, participant.Id, chip.Id, eventId);
-
-                assignment.Chip = chip;
-                assignment.Participant = participant;
-
-                return _mapper.Map<BibMappingResponse>(assignment, opts =>
+                result.Success = true;
+                result.Overridden = wasOverride;
+                result.SuccessMessage = overrideSuccessMessage ?? "BIB mapping created successfully.";
+                result.Mapping = _mapper.Map<BibMappingResponse>(createdAssignment, opts =>
                 {
                     opts.Items["DisplayTz"] = displayTz;
                     opts.Items["RaceId"] = request.RaceId;
                 });
+
+                return result;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error creating BIB mapping for EPC={Epc}, BIB={Bib}", request.Epc, request.BibNumber);
                 ErrorMessage = "Error creating BIB mapping.";
-                return null;
+                return result;
             }
         }
 

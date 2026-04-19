@@ -14,5 +14,7 @@ namespace Runnatics.Models.Client.Requests.BibMapping
         [Required]
         [MaxLength(100)]
         public string Epc { get; set; } = string.Empty;
+
+        public bool Override { get; set; } = false;
     }
 }

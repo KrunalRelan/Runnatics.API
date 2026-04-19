@@ -17,49 +17,61 @@ namespace Runnatics.Api.Controller
         private readonly IBibMappingService _bibMappingService = bibMappingService;
 
         /// <summary>
-        /// Create a new EPC-to-BIB mapping
+        /// Create a new EPC-to-BIB mapping. Set <c>override=true</c> to forcibly replace any
+        /// existing conflicting mapping (EPC assigned to another BIB, or BIB already holding
+        /// a different EPC).
         /// </summary>
         [HttpPost]
         [ProducesResponseType(typeof(ResponseBase<BibMappingResponse>), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status409Conflict)]
+        [ProducesResponseType(typeof(BibMappingConflictResponse), StatusCodes.Status409Conflict)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> Create([FromBody] CreateBibMappingRequest request, CancellationToken cancellationToken)
         {
-            var response = new ResponseBase<BibMappingResponse>();
-            var result = await _bibMappingService.CreateAsync(request, cancellationToken);
+            var serviceResult = await _bibMappingService.CreateAsync(request, cancellationToken);
+
+            // Conflict path — return bespoke conflict payload expected by the UI
+            if (serviceResult.Conflict != null)
+            {
+                return Conflict(serviceResult.Conflict);
+            }
 
             if (_bibMappingService.HasError)
             {
-                response.Error = new ResponseBase<BibMappingResponse>.ErrorData
+                var errorResponse = new ResponseBase<BibMappingResponse>
                 {
-                    Message = _bibMappingService.ErrorMessage
+                    Error = new ResponseBase<BibMappingResponse>.ErrorData
+                    {
+                        Message = _bibMappingService.ErrorMessage
+                    }
                 };
 
-                // Conflict errors (already mapped)
-                if (_bibMappingService.ErrorMessage.Contains("already mapped", StringComparison.OrdinalIgnoreCase))
-                {
-                    return Conflict(response);
-                }
-
-                // Not found errors
                 if (_bibMappingService.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
                 {
-                    return BadRequest(response);
+                    return BadRequest(errorResponse);
                 }
 
-                // Validation errors
                 if (_bibMappingService.ErrorMessage.Contains("is required", StringComparison.OrdinalIgnoreCase)
                     || _bibMappingService.ErrorMessage.Contains("must be", StringComparison.OrdinalIgnoreCase))
                 {
-                    return BadRequest(response);
+                    return BadRequest(errorResponse);
                 }
 
-                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+                return StatusCode((int)HttpStatusCode.InternalServerError, errorResponse);
             }
 
-            response.Message = result;
-            return StatusCode((int)HttpStatusCode.Created, response);
+            var successResponse = new ResponseBase<BibMappingResponse>
+            {
+                Message = serviceResult.Mapping
+            };
+
+            return StatusCode((int)HttpStatusCode.Created, new
+            {
+                success = true,
+                overridden = serviceResult.Overridden,
+                message = serviceResult.SuccessMessage,
+                mapping = successResponse.Message
+            });
         }
 
         /// <summary>

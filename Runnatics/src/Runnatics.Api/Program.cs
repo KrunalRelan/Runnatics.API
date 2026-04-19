@@ -173,7 +173,7 @@ builder.Services.AddCors(options =>
             .GetSection("PublicSite:AllowedOrigins")
             .Get<string[]>()
             ?? (builder.Environment.IsDevelopment()
-                ? new[] { "http://localhost:5173", "http://localhost:5174" }
+                ? new[] { "http://localhost:5173", "http://localhost:5174", "http://localhost:5173/login" }
                 : new[]
                 {
                     "https://runnatics.com",
@@ -219,6 +219,7 @@ builder.Services.AddScoped<IDevicesService, DevicesService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<ICertificatesService, CertificatesService>();
 builder.Services.AddScoped<IRFIDImportService, RFIDImportService>();
+builder.Services.AddScoped<IRFIDDiagnosticsService, RFIDDiagnosticsService>();
 builder.Services.AddScoped<IResultsService, ResultsService>();
 builder.Services.AddScoped<IBibMappingService, BibMappingService>();
 builder.Services.AddScoped<ISupportQueryService, SupportQueryService>();

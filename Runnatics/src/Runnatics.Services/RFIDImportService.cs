@@ -1901,6 +1901,23 @@ namespace Runnatics.Services
                     "Found {Count} upload batches for Race {RaceId} (including event-level batches)",
                     raceBatchIds.Count, decryptedRaceId);
 
+                // ── Phase 2 pipeline diagnostic ──
+                var phase2StatusBreakdown = await readingRepo.GetQuery(r =>
+                    raceBatchIds.Contains(r.BatchId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .GroupBy(r => r.ProcessResult)
+                    .Select(g => new { Status = g.Key, Count = g.Count() })
+                    .ToListAsync();
+                _logger.LogInformation(
+                    "Phase 2 pipeline diagnostic — Batches: {Batches} | " +
+                    "Total readings: {Total} (breakdown: [{Breakdown}]) | " +
+                    "Active EPC count: {Epcs}",
+                    raceBatchIds.Count,
+                    phase2StatusBreakdown.Sum(x => x.Count),
+                    string.Join(", ", phase2StatusBreakdown.Select(x => $"{x.Status}={x.Count}")),
+                    activeEpcs.Count);
+
                 // Get raw readings that haven't been normalized yet
                 // FIX: Added raceBatchIds.Contains(r.BatchId) to filter by race
                 var rawReadingsQuery = await readingRepo.GetQuery(r =>
@@ -2800,6 +2817,24 @@ namespace Runnatics.Services
                 // 2. LOAD ALL PENDING READINGS ACROSS ALL BATCHES
                 // ================================================================
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
+
+                // ── Phase 1 pipeline diagnostic: where are readings disappearing? ──
+                // Show status breakdown so Pending==0 with Success=9000 is obvious.
+                var phase1StatusBreakdown = await readingRepo.GetQuery(r =>
+                    batchIds.Contains(r.BatchId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .GroupBy(r => r.ProcessResult)
+                    .Select(g => new { Status = g.Key, Count = g.Count() })
+                    .ToListAsync();
+                var totalReadingsInBatches = phase1StatusBreakdown.Sum(x => x.Count);
+                _logger.LogInformation(
+                    "Phase 1 pipeline diagnostic — Batches found: {Batches} | " +
+                    "Total readings in batches: {Total} | ProcessResult breakdown: [{Breakdown}]",
+                    pendingBatches.Count,
+                    totalReadingsInBatches,
+                    string.Join(", ", phase1StatusBreakdown.Select(x => $"{x.Status}={x.Count}")));
+
                 var allReadings = await readingRepo.GetQuery(r =>
                     batchIds.Contains(r.BatchId) &&
                     r.ProcessResult == "Pending" &&
@@ -2876,6 +2911,19 @@ namespace Runnatics.Services
                 }
 
                 _logger.LogInformation("Loaded {Count} EPC→Participant mappings", epcToParticipant.Count);
+
+                // ── Phase 1 pipeline diagnostic: EPC match step ──
+                // How many of the Pending readings belong to THIS race's mapped participants?
+                var pendingUniqueEpcs = allReadings.Select(r => r.Epc).Distinct().ToHashSet();
+                var matchedEpcCount = pendingUniqueEpcs.Count(e => epcToParticipant.ContainsKey(e));
+                var matchedReadingCount = allReadings.Count(r => epcToParticipant.ContainsKey(r.Epc));
+                _logger.LogInformation(
+                    "Phase 1 pipeline diagnostic — After Pending filter: {PendingReadings} readings ({PendingEpcs} unique EPCs) | " +
+                    "After EPC match: {MatchedReadings} readings ({MatchedEpcs} unique EPCs) matched this race's participants | " +
+                    "Unmatched (left as Pending for other races): {Unmatched} readings",
+                    allReadings.Count, pendingUniqueEpcs.Count,
+                    matchedReadingCount, matchedEpcCount,
+                    allReadings.Count - matchedReadingCount);
 
                 // ================================================================
                 // 4. LOAD DEVICE → CHECKPOINT MAPPINGS
@@ -3777,6 +3825,24 @@ namespace Runnatics.Services
                     .Select(r => r.Id)
                     .ToListAsync();
                 var raceReadingIdSet = new HashSet<long>(raceReadingIds);  // For in-memory lookups
+
+                // ── Phase 1.5 pipeline diagnostic ──
+                var phase15StatusBreakdown = await readingRepo.GetQuery(r =>
+                    batchIds.Contains(r.BatchId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .GroupBy(r => r.ProcessResult)
+                    .Select(g => new { Status = g.Key, Count = g.Count() })
+                    .ToListAsync();
+                _logger.LogInformation(
+                    "Phase 1.5 pipeline diagnostic — Batches: {Batches} | " +
+                    "Total readings: {Total} (breakdown: [{Breakdown}]) | " +
+                    "Race EPC count: {RaceEpcs} | Readings matching race EPCs: {Matched}",
+                    batches.Count,
+                    phase15StatusBreakdown.Sum(x => x.Count),
+                    string.Join(", ", phase15StatusBreakdown.Select(x => $"{x.Status}={x.Count}")),
+                    raceEpcList.Count,
+                    raceReadingIds.Count);
 
                 // Find existing assignments for THIS race's readings only
                 var existingAssignments = await assignmentRepo.GetQuery(a =>

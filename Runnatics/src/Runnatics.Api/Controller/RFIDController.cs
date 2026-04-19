@@ -17,10 +17,12 @@ namespace Runnatics.Api.Controller
     public class RFIDController : ControllerBase
     {
         private readonly IRFIDImportService _service;
+        private readonly IRFIDDiagnosticsService _diagnosticsService;
 
-        public RFIDController(IRFIDImportService importService)
+        public RFIDController(IRFIDImportService importService, IRFIDDiagnosticsService diagnosticsService)
         {
             _service = importService;
+            _diagnosticsService = diagnosticsService;
         }
 
         /// <summary>
@@ -366,6 +368,42 @@ namespace Runnatics.Api.Controller
                 response.Error = new ResponseBase<CreateSplitTimesResponse>.ErrorData
                 {
                     Message = _service.ErrorMessage ?? result.ErrorMessage ?? "An error occurred"
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Read-only diagnostic inspection of the RFID processing pipeline state for a race.
+        /// Inspects Event/Race setup, checkpoints, participants, batches, raw readings,
+        /// assignments, normalized readings, splits, results, and EPC-BIB mapping,
+        /// then returns a prioritized list of likely issues.
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/diagnose")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<RFIDDiagnosticsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> DiagnoseProcessing(string eventId, string raceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Event ID and Race ID are required" });
+            }
+
+            var response = new ResponseBase<RFIDDiagnosticsResponse>();
+            var result = await _diagnosticsService.DiagnoseProcessingAsync(eventId, raceId);
+
+            if (_diagnosticsService.HasError)
+            {
+                response.Error = new ResponseBase<RFIDDiagnosticsResponse>.ErrorData
+                {
+                    Message = _diagnosticsService.ErrorMessage
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }

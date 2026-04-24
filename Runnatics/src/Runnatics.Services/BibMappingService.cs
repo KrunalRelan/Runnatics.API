@@ -7,6 +7,7 @@ using Runnatics.Data.EF;
 using Runnatics.Models.Client.Requests.BibMapping;
 using Runnatics.Models.Client.Responses.BibMapping;
 using Runnatics.Models.Data.Common;
+using ClientCommon = Runnatics.Models.Client.Common;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -498,12 +499,11 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<PagedBibMappingResponse> GetParticipantsWithMappingStatusAsync(
+        public async Task<ClientCommon.PagingList<BibMappingParticipantResponse>> GetParticipantsWithMappingStatusAsync(
             string encryptedRaceId,
             GetEpcMappingRequest request,
             CancellationToken cancellationToken = default)
         {
-            var empty = new PagedBibMappingResponse { PageNumber = request.PageNumber, PageSize = request.PageSize };
             try
             {
                 var decryptedRaceId = int.Parse(_encryptionService.Decrypt(encryptedRaceId));
@@ -516,7 +516,7 @@ namespace Runnatics.Services
                 if (race == null)
                 {
                     ErrorMessage = "Race not found.";
-                    return empty;
+                    return new ClientCommon.PagingList<BibMappingParticipantResponse>();
                 }
 
                 var participantRepo = _repository.GetRepository<Participant>();
@@ -525,9 +525,9 @@ namespace Runnatics.Services
                     p.AuditProperties.IsActive &&
                     !p.AuditProperties.IsDeleted);
 
-                if (!string.IsNullOrEmpty(request.SearchTerm))
+                if (!string.IsNullOrEmpty(request.SearchString))
                 {
-                    var term = request.SearchTerm.Trim();
+                    var term = request.SearchString.Trim();
                     query = query.Where(p =>
                         (p.FirstName != null && p.FirstName.Contains(term)) ||
                         (p.LastName != null && p.LastName.Contains(term)) ||
@@ -562,7 +562,7 @@ namespace Runnatics.Services
                 var totalCount = await query.CountAsync(cancellationToken);
 
                 var pageNumber = Math.Max(1, request.PageNumber);
-                var pageSize = Math.Clamp(request.PageSize, 1, 100000);
+                var pageSize = Math.Clamp(request.PageSize, 1, 1000);
 
                 var participants = await query
                     .OrderBy(p => p.BibNumber)
@@ -583,21 +583,16 @@ namespace Runnatics.Services
                         Epc = mapping?.EPC,
                         MappedAt = mapping?.AssignedAt
                     };
-                }).ToList();
+                });
 
-                return new PagedBibMappingResponse
-                {
-                    TotalCount = totalCount,
-                    PageNumber = pageNumber,
-                    PageSize = pageSize,
-                    Items = items
-                };
+                var result = new ClientCommon.PagingList<BibMappingParticipantResponse>(items) { TotalCount = totalCount };
+                return result;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error fetching participants with mapping status for RaceId={RaceId}", encryptedRaceId);
                 ErrorMessage = "Error fetching participants with mapping status.";
-                return empty;
+                return new ClientCommon.PagingList<BibMappingParticipantResponse>();
             }
         }
 

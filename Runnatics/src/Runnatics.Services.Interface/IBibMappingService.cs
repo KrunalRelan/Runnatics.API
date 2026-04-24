@@ -1,3 +1,4 @@
+using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.BibMapping;
 using Runnatics.Models.Client.Responses.BibMapping;
 
@@ -9,7 +10,7 @@ namespace Runnatics.Services.Interface
 
         Task<List<BibMappingResponse>> GetByRaceAsync(string encryptedRaceId, CancellationToken cancellationToken = default);
 
-        Task<PagedBibMappingResponse> GetParticipantsWithMappingStatusAsync(string encryptedRaceId, GetEpcMappingRequest request, CancellationToken cancellationToken = default);
+        Task<PagingList<BibMappingParticipantResponse>> GetParticipantsWithMappingStatusAsync(string encryptedRaceId, GetEpcMappingRequest request, CancellationToken cancellationToken = default);
 
         Task<bool> DeleteAsync(string encryptedChipId, string encryptedParticipantId, string encryptedEventId, CancellationToken cancellationToken = default);
     }

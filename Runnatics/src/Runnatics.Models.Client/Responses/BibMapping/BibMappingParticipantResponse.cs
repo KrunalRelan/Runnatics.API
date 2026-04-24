@@ -9,12 +9,4 @@ namespace Runnatics.Models.Client.Responses.BibMapping
         public string? Epc { get; set; }
         public DateTime? MappedAt { get; set; }
     }
-
-    public class PagedBibMappingResponse
-    {
-        public int TotalCount { get; set; }
-        public int PageNumber { get; set; }
-        public int PageSize { get; set; }
-        public List<BibMappingParticipantResponse> Items { get; set; } = [];
-    }
 }

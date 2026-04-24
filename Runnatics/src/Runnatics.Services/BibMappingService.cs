@@ -562,7 +562,7 @@ namespace Runnatics.Services
                 var totalCount = await query.CountAsync(cancellationToken);
 
                 var pageNumber = Math.Max(1, request.PageNumber);
-                var pageSize = Math.Clamp(request.PageSize, 1, 100);
+                var pageSize = Math.Clamp(request.PageSize, 1, 100000);
 
                 var participants = await query
                     .OrderBy(p => p.BibNumber)

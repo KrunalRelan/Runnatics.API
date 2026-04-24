@@ -56,5 +56,10 @@ namespace Runnatics.Services.Interface
         /// Export all participants for a race as an xlsx file with dynamic checkpoint columns.
         /// </summary>
         Task<byte[]?> ExportParticipantsAsync(string raceId);
+
+        /// <summary>
+        /// Export all participants with full race details: ranking, chip/gun times, SMS sent time, and absolute checkpoint clock times.
+        /// </summary>
+        Task<byte[]?> ExportParticipantsDetailedAsync(string eventId, string raceId);
     }
 }

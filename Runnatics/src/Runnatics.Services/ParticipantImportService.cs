@@ -1845,6 +1845,178 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<byte[]?> ExportParticipantsDetailedAsync(string eventId, string raceId)
+        {
+            try
+            {
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+                var raceRepo = _repository.GetRepository<Race>();
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var splitTimesRepo = _repository.GetRepository<SplitTimes>();
+                var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                var notificationRepo = _repository.GetRepository<Models.Data.Entities.Notification>();
+                var eventRepo = _repository.GetRepository<Event>();
+
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (race == null)
+                {
+                    ErrorMessage = "Race not found.";
+                    return null;
+                }
+
+                var eventTimeZoneId = await eventRepo.GetQuery(e => e.Id == decryptedEventId)
+                    .AsNoTracking()
+                    .Select(e => e.TimeZone)
+                    .FirstOrDefaultAsync() ?? "UTC";
+
+                TimeZoneInfo displayTz;
+                try
+                {
+                    displayTz = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZoneId);
+                }
+                catch (TimeZoneNotFoundException)
+                {
+                    _logger.LogWarning("Event {EventId} has unknown timezone '{TZ}', falling back to UTC", decryptedEventId, eventTimeZoneId);
+                    displayTz = TimeZoneInfo.Utc;
+                }
+
+                var participants = await participantRepo.GetQuery(p =>
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var checkpoints = await checkpointRepo.GetQuery(c =>
+                    c.RaceId == decryptedRaceId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                    .OrderBy(c => c.DistanceFromStart)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var participantIds = participants.Select(p => p.Id).ToList();
+
+                var results = await resultsRepo.GetQuery(r =>
+                    r.RaceId == decryptedRaceId &&
+                    participantIds.Contains(r.ParticipantId))
+                    .AsNoTracking()
+                    .ToDictionaryAsync(r => r.ParticipantId);
+
+                var splits = await splitTimesRepo.GetQuery(st =>
+                    participantIds.Contains(st.ParticipantId) &&
+                    st.AuditProperties.IsActive &&
+                    !st.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var splitsByParticipant = splits
+                    .GroupBy(st => st.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                var smsSentByParticipant = (await notificationRepo.GetQuery(n =>
+                    n.ParticipantId.HasValue &&
+                    participantIds.Contains(n.ParticipantId!.Value) &&
+                    n.Type == "SMS" &&
+                    n.SentAt.HasValue)
+                    .AsNoTracking()
+                    .ToListAsync())
+                    .GroupBy(n => n.ParticipantId!.Value)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(n => n.SentAt).First().SentAt!.Value);
+
+                // Sort: Finished first by NetTime ascending, then others by bib number
+                var ordered = participants
+                    .Select(p => (Participant: p, Result: results.TryGetValue(p.Id, out var r) ? r : null))
+                    .OrderBy(x => x.Result?.Status == "Finished" ? 0 : 1)
+                    .ThenBy(x => x.Result?.NetTime ?? long.MaxValue)
+                    .ThenBy(x => x.Participant.BibNumber)
+                    .ToList();
+
+                using var workbook = new ClosedXML.Excel.XLWorkbook();
+                var ws = workbook.Worksheets.Add("Participants");
+
+                var headers = new List<string> { "#", "Bib No", "Name", "Age", "Gender", "Status", "Chip Time", "Gun Time", "SMS Sent At", "Mobile", "Email" };
+                headers.AddRange(checkpoints.Select(c => $"{c.Name} ({c.DistanceFromStart:G})"));
+
+                for (int i = 0; i < headers.Count; i++)
+                {
+                    ws.Cell(1, i + 1).Value = headers[i];
+                    ws.Cell(1, i + 1).Style.Font.Bold = true;
+                }
+
+                int row = 2;
+                foreach (var (p, result) in ordered)
+                {
+                    var displayStatus = MapResultStatus(result?.Status ?? p.Status);
+
+                    ws.Cell(row, 1).Value = row - 1;
+                    ws.Cell(row, 2).Value = p.BibNumber ?? string.Empty;
+                    ws.Cell(row, 3).Value = $"{p.FirstName} {p.LastName}".Trim();
+                    ws.Cell(row, 4).Value = p.AgeCategory ?? string.Empty;
+                    ws.Cell(row, 5).Value = p.Gender ?? string.Empty;
+                    ws.Cell(row, 6).Value = displayStatus;
+                    ws.Cell(row, 7).Value = result?.NetTime.HasValue == true ? FormatDuration(result.NetTime!.Value) : string.Empty;
+                    ws.Cell(row, 8).Value = result?.GunTime.HasValue == true ? FormatDuration(result.GunTime!.Value) : string.Empty;
+
+                    if (smsSentByParticipant.TryGetValue(p.Id, out var smsSentAt))
+                        ws.Cell(row, 9).Value = TimeZoneInfo.ConvertTimeFromUtc(smsSentAt, displayTz).ToString("HH:mm:ss");
+                    else
+                        ws.Cell(row, 9).Value = string.Empty;
+
+                    ws.Cell(row, 10).Value = p.Phone ?? string.Empty;
+                    ws.Cell(row, 11).Value = p.Email ?? string.Empty;
+
+                    var participantSplits = splitsByParticipant.TryGetValue(p.Id, out var ps) ? ps : new List<SplitTimes>();
+                    for (int c = 0; c < checkpoints.Count; c++)
+                    {
+                        var cpSplit = participantSplits
+                            .Where(st => st.CheckpointId == checkpoints[c].Id || st.ToCheckpointId == checkpoints[c].Id)
+                            .OrderBy(st => st.SplitTimeMs)
+                            .FirstOrDefault();
+
+                        if (cpSplit?.SplitTimeMs.HasValue == true && race.StartTime.HasValue)
+                        {
+                            var absUtc = race.StartTime.Value.AddMilliseconds(cpSplit.SplitTimeMs.Value);
+                            ws.Cell(row, 12 + c).Value = TimeZoneInfo.ConvertTimeFromUtc(absUtc, displayTz).ToString("HH:mm:ss");
+                        }
+                        else
+                        {
+                            ws.Cell(row, 12 + c).Value = string.Empty;
+                        }
+                    }
+                    row++;
+                }
+
+                ws.Columns().AdjustToContents();
+
+                using var stream = new MemoryStream();
+                workbook.SaveAs(stream);
+                return stream.ToArray();
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error exporting participants: {ex.Message}";
+                _logger.LogError(ex, "Error exporting participants for event {EventId} race {RaceId}", eventId, raceId);
+                return null;
+            }
+        }
+
+        private static string MapResultStatus(string? status) => status switch
+        {
+            "Finished" => "OK",
+            "DNF" => "DNF",
+            "DQ" => "DQ",
+            "DNS" => "DNS",
+            _ => string.Empty
+        };
+
         public async Task<ParticipantSearchReponse?> UpdateParticipantExtendedAsync(string raceId, string participantId, UpdateParticipantRequest request)
         {
             try

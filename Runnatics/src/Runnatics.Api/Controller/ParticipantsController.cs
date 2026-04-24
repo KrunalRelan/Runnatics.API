@@ -337,6 +337,29 @@ namespace Runnatics.Api.Controller
                 $"participants_race_{raceId}.xlsx");
         }
 
+        /// <summary>
+        /// Export all participants with full race details: ranking, chip/gun times, SMS sent time, and absolute checkpoint clock times.
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/export")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ExportParticipantsDetailed([FromRoute] string eventId, [FromRoute] string raceId, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+                return BadRequest(new { error = "Event ID and Race ID are required." });
+
+            var bytes = await _service.ExportParticipantsDetailedAsync(eventId, raceId);
+
+            if (_service.HasError || bytes == null)
+                return StatusCode((int)System.Net.HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
+
+            return File(bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                $"participants_export_{raceId}.xlsx");
+        }
+
         [HttpGet("{eventId}/{raceId}/categories")]
         public async Task<IActionResult> Categories([FromRoute] string eventId, [FromRoute] string raceId)
         {

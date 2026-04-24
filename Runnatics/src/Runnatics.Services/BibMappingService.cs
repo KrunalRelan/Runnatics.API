@@ -498,6 +498,109 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<PagedBibMappingResponse> GetParticipantsWithMappingStatusAsync(
+            string encryptedRaceId,
+            GetEpcMappingRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var empty = new PagedBibMappingResponse { PageNumber = request.PageNumber, PageSize = request.PageSize };
+            try
+            {
+                var decryptedRaceId = int.Parse(_encryptionService.Decrypt(encryptedRaceId));
+
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId && !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (race == null)
+                {
+                    ErrorMessage = "Race not found.";
+                    return empty;
+                }
+
+                var participantRepo = _repository.GetRepository<Participant>();
+                var query = participantRepo.GetQuery(p =>
+                    p.RaceId == decryptedRaceId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted);
+
+                if (!string.IsNullOrEmpty(request.SearchTerm))
+                {
+                    var term = request.SearchTerm.Trim();
+                    query = query.Where(p =>
+                        (p.FirstName != null && p.FirstName.Contains(term)) ||
+                        (p.LastName != null && p.LastName.Contains(term)) ||
+                        (p.BibNumber != null && p.BibNumber == term));
+                }
+
+                // Get active chip assignments for the event
+                var assignmentRepo = _repository.GetRepository<ChipAssignment>();
+                var mappedParticipantIds = await assignmentRepo
+                    .GetQuery(a => a.EventId == race.EventId && a.UnassignedAt == null && !a.AuditProperties.IsDeleted,
+                        includeNavigationProperties: true)
+                    .Select(a => new { a.ParticipantId, a.Chip.EPC, a.AssignedAt })
+                    .AsNoTracking()
+                    .ToListAsync(cancellationToken);
+
+                var mappingLookup = mappedParticipantIds
+                    .GroupBy(a => a.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.First());
+
+                // Filter by mapped/unmapped status using participant IDs
+                if (request.Status == EpcMappingStatusFilter.Mapped)
+                {
+                    var mappedIds = mappingLookup.Keys.ToList();
+                    query = query.Where(p => mappedIds.Contains(p.Id));
+                }
+                else if (request.Status == EpcMappingStatusFilter.Unmapped)
+                {
+                    var mappedIds = mappingLookup.Keys.ToList();
+                    query = query.Where(p => !mappedIds.Contains(p.Id));
+                }
+
+                var totalCount = await query.CountAsync(cancellationToken);
+
+                var pageNumber = Math.Max(1, request.PageNumber);
+                var pageSize = Math.Clamp(request.PageSize, 1, 100);
+
+                var participants = await query
+                    .OrderBy(p => p.BibNumber)
+                    .Skip((pageNumber - 1) * pageSize)
+                    .Take(pageSize)
+                    .AsNoTracking()
+                    .ToListAsync(cancellationToken);
+
+                var items = participants.Select(p =>
+                {
+                    var mapping = mappingLookup.TryGetValue(p.Id, out var m) ? m : null;
+                    return new BibMappingParticipantResponse
+                    {
+                        ParticipantId = _encryptionService.Encrypt(p.Id.ToString()),
+                        BibNumber = p.BibNumber,
+                        Name = $"{p.FirstName} {p.LastName}".Trim(),
+                        IsEpcMapped = mapping != null,
+                        Epc = mapping?.EPC,
+                        MappedAt = mapping?.AssignedAt
+                    };
+                }).ToList();
+
+                return new PagedBibMappingResponse
+                {
+                    TotalCount = totalCount,
+                    PageNumber = pageNumber,
+                    PageSize = pageSize,
+                    Items = items
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching participants with mapping status for RaceId={RaceId}", encryptedRaceId);
+                ErrorMessage = "Error fetching participants with mapping status.";
+                return empty;
+            }
+        }
+
         public async Task<bool> DeleteAsync(string encryptedChipId, string encryptedParticipantId, string encryptedEventId, CancellationToken cancellationToken = default)
         {
             try

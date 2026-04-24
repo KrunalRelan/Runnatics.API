@@ -73,6 +73,8 @@ namespace Runnatics.Models.Data.Entities
 
         public int? LoopCount { get; set; }
 
+        public bool IsManualTiming { get; set; } = false;
+
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 
         // Computed Property

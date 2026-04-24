@@ -314,6 +314,29 @@ namespace Runnatics.Api.Controller
             return NoContent();
         }
 
+        /// <summary>
+        /// Export all participants for a race as an xlsx file with dynamic checkpoint columns.
+        /// </summary>
+        [HttpGet("~/api/races/{raceId}/participants/export")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ExportParticipants([FromRoute] string raceId, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(raceId))
+                return BadRequest(new { error = "Race ID is required." });
+
+            var bytes = await _service.ExportParticipantsAsync(raceId);
+
+            if (_service.HasError || bytes == null)
+                return StatusCode((int)System.Net.HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
+
+            return File(bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                $"participants_race_{raceId}.xlsx");
+        }
+
         [HttpGet("{eventId}/{raceId}/categories")]
         public async Task<IActionResult> Categories([FromRoute] string eventId, [FromRoute] string raceId)
         {

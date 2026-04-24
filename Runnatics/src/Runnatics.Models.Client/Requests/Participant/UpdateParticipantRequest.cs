@@ -17,6 +17,8 @@ namespace Runnatics.Models.Client.Requests.Participant
 
         public string? AgeCategory { get; set; }
 
+        public DateTime? DateOfBirth { get; set; }
+
         /// <summary>
         /// Run status: OK, DNF, Disqualified, DNS
         /// </summary>
@@ -40,6 +42,11 @@ namespace Runnatics.Models.Client.Requests.Participant
         /// Encrypted race ID. When provided and different from current race, participant is reassigned.
         /// </summary>
         public string? RaceId { get; set; }
+
+        /// <summary>
+        /// Manual checkpoint crossing times. Saving these marks the participant as IsManualTiming = true.
+        /// </summary>
+        public List<ManualCheckpointTime>? ManualCheckpointTimes { get; set; }
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
@@ -69,5 +76,15 @@ namespace Runnatics.Models.Client.Requests.Participant
                     new[] { nameof(ManualTime) });
             }
         }
+    }
+
+    public class ManualCheckpointTime
+    {
+        public string CheckpointId { get; set; } = string.Empty; // Encrypted checkpoint ID
+
+        /// <summary>
+        /// Absolute crossing time, e.g. "2024-04-01T10:30:00"
+        /// </summary>
+        public DateTime Time { get; set; }
     }
 }

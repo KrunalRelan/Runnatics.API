@@ -92,6 +92,8 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.TimeZone, opt => opt.Ignore()) // Set server-side on create
                 .ForMember(dest => dest.MaxParticipants, opt => opt.Ignore()) // Not set at creation time
                 .ForMember(dest => dest.RegistrationDeadline, opt => opt.Ignore()) // Not set at creation time
+                .ForMember(dest => dest.BannerImage, opt => opt.Ignore()) // Handled manually in service
+                .ForMember(dest => dest.BannerContentType, opt => opt.Ignore())
                 .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.LeaderboardSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
@@ -128,14 +130,19 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.EventOrganizerId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventOrganizerId))
-                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer.Name));
+                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer.Name))
+                .ForMember(dest => dest.BannerBase64, opt => opt.MapFrom(src => src.BannerImage));
 
             // EventSettings mappings
             CreateMap<EventSettingsRequest, EventSettings>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.EventId, opt => opt.Ignore()) // Set by service
+                .ForMember(dest => dest.EventId, opt => opt.Ignore())
                 .ForMember(dest => dest.Event, opt => opt.Ignore())
-                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()); // Set by service
+                .ForMember(dest => dest.AuditProperties, opt => opt.Ignore())
+                .ForMember(dest => dest.RemoveBanner, opt => opt.Ignore())
+                .ForMember(dest => dest.ShowResultSummaryForRaces, opt => opt.Ignore())
+                .ForMember(dest => dest.UseOldData, opt => opt.Ignore())
+                .ForMember(dest => dest.AllowParticipantEdit, opt => opt.Ignore());
 
             CreateMap<EventSettings, EventSettingsResponse>()
                 .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id))

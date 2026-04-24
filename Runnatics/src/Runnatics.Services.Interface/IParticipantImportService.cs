@@ -51,5 +51,10 @@ namespace Runnatics.Services.Interface
         /// Get detailed participant information including performance, rankings, split times and pace progression
         /// </summary>
         Task<ParticipantDetailsResponse?> GetParticipantDetails(string eventId, string raceId, string participantId);
+
+        /// <summary>
+        /// Export all participants for a race as an xlsx file with dynamic checkpoint columns.
+        /// </summary>
+        Task<byte[]?> ExportParticipantsAsync(string raceId);
     }
 }

@@ -45,6 +45,12 @@ namespace Runnatics.Services
             });
         }
 
+        // Pending reads accumulator for 500ms RSSI debounce: EPC → best RSSI seen so far
+        private readonly Dictionary<string, int> _pendingReads = [];
+        private CancellationTokenSource? _debounceTokenSource;
+        private readonly SemaphoreSlim _debounceLock = new(1, 1);
+        private const int DebounceMs = 500;
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             stoppingToken.Register(() => _stopping = true);
@@ -59,17 +65,10 @@ namespace Runnatics.Services
 
                     ConnectAndStartInventory();
 
-                    // Process tags from channel and broadcast via SignalR
+                    // Process tags from channel with 500ms RSSI debounce
                     await foreach (var (epc, rssi) in _tagChannel.Reader.ReadAllAsync(stoppingToken))
                     {
-                        try
-                        {
-                            await _hubContext.Clients.All.SendAsync("EpcDetected", epc, rssi, stoppingToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "Failed to broadcast EPC={Epc} via SignalR", epc);
-                        }
+                        await AccumulateAndDebounceAsync(epc, rssi, stoppingToken);
                     }
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -91,6 +90,69 @@ namespace Runnatics.Services
                         break;
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Accumulates EPC reads for 500ms and broadcasts the best RSSI read per EPC.
+        /// If the same EPC arrives again before the window fires, its RSSI is updated if higher.
+        /// </summary>
+        private async Task AccumulateAndDebounceAsync(string epc, int rssi, CancellationToken stoppingToken)
+        {
+            await _debounceLock.WaitAsync(stoppingToken);
+            try
+            {
+                // Keep highest RSSI seen for each EPC in the current window
+                if (!_pendingReads.TryGetValue(epc, out var existingRssi) || rssi > existingRssi)
+                    _pendingReads[epc] = rssi;
+
+                // Reset the debounce timer
+                _debounceTokenSource?.Cancel();
+                _debounceTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var debounceToken = _debounceTokenSource.Token;
+
+                // Fire-and-forget the flush task so we don't hold the lock during the delay
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(DebounceMs, debounceToken);
+
+                        // Flush window — grab all accumulated reads
+                        Dictionary<string, int> batch;
+                        await _debounceLock.WaitAsync(stoppingToken);
+                        try
+                        {
+                            batch = new Dictionary<string, int>(_pendingReads);
+                            _pendingReads.Clear();
+                        }
+                        finally
+                        {
+                            _debounceLock.Release();
+                        }
+
+                        // Broadcast the best RSSI read for each EPC
+                        foreach (var (batchEpc, batchRssi) in batch)
+                        {
+                            try
+                            {
+                                await _hubContext.Clients.All.SendAsync("EpcDetected", batchEpc, batchRssi, stoppingToken);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to broadcast EPC={Epc} via SignalR", batchEpc);
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // A new read arrived before the window expired — normal debounce reset
+                    }
+                }, stoppingToken);
+            }
+            finally
+            {
+                _debounceLock.Release();
             }
         }
 

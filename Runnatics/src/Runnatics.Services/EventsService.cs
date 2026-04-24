@@ -519,6 +519,12 @@ namespace Runnatics.Services
             eventEntity.TimeZone = "Asia/Kolkata";
             eventEntity.AuditProperties = CreateAuditProperties(currentUserId);
 
+            // Save banner on create if provided
+            if (!string.IsNullOrEmpty(request.BannerBase64))
+            {
+                eventEntity.BannerImage = request.BannerBase64;
+            }
+
             // Add event settings if provided
             if (request.EventSettings != null)
             {
@@ -554,8 +560,12 @@ namespace Runnatics.Services
         private EventSettings CreateEventSettings(EventSettingsRequest request, int userId)
         {
             var eventSettings = _mapper.Map<EventSettings>(request);
-            eventSettings.Id = 0; // Ensure EF Core generates a new ID
-            eventSettings.EventId = 0; // Will be set after Event is saved
+            eventSettings.Id = 0;
+            eventSettings.EventId = 0;
+            eventSettings.RemoveBanner = false;
+            eventSettings.ShowResultSummaryForRaces = false;
+            eventSettings.UseOldData = false;
+            eventSettings.AllowParticipantEdit = false;
             eventSettings.AuditProperties = CreateAuditProperties(userId);
             return eventSettings;
         }
@@ -615,14 +625,14 @@ namespace Runnatics.Services
                     var newEventSettings = new EventSettings
                     {
                         EventId = addedEvent.Id,
-                        RemoveBanner = eventSettingsData.RemoveBanner,
+                        RemoveBanner = false,
                         Published = eventSettingsData.Published,
                         RankOnNet = eventSettingsData.RankOnNet,
-                        ShowResultSummaryForRaces = eventSettingsData.ShowResultSummaryForRaces,
-                        UseOldData = eventSettingsData.UseOldData,
+                        ShowResultSummaryForRaces = false,
+                        UseOldData = false,
                         ConfirmedEvent = eventSettingsData.ConfirmedEvent,
                         AllowNameCheck = eventSettingsData.AllowNameCheck,
-                        AllowParticipantEdit = eventSettingsData.AllowParticipantEdit,
+                        AllowParticipantEdit = false,
                         AuditProperties = eventSettingsData.AuditProperties
                     };
 
@@ -777,6 +787,12 @@ namespace Runnatics.Services
             // Update main event properties
             _mapper.Map(request, eventEntity);
 
+            // Only save banner if one does not already exist
+            if (!string.IsNullOrEmpty(request.BannerBase64) && string.IsNullOrEmpty(eventEntity.BannerImage))
+            {
+                eventEntity.BannerImage = request.BannerBase64;
+            }
+
             // Update audit properties
             UpdateAuditProperties(eventEntity.AuditProperties, currentUserId);
 
@@ -809,6 +825,10 @@ namespace Runnatics.Services
             if (eventEntity.EventSettings != null)
             {
                 _mapper.Map(settingsRequest, eventEntity.EventSettings);
+                eventEntity.EventSettings.RemoveBanner = false;
+                eventEntity.EventSettings.ShowResultSummaryForRaces = false;
+                eventEntity.EventSettings.UseOldData = false;
+                eventEntity.EventSettings.AllowParticipantEdit = false;
                 UpdateAuditProperties(eventEntity.EventSettings.AuditProperties, currentUserId);
             }
             else
@@ -890,8 +910,9 @@ namespace Runnatics.Services
                 var query = eventRepo.GetQuery(e =>
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
-                    // Only show events where EventSettings.Published == true
-                    (e.EventSettings == null || e.EventSettings.Published) &&
+                    e.EventSettings != null &&
+                    e.EventSettings.Published &&
+                    e.EventSettings.ConfirmedEvent &&
                     (isPast ? e.EventDate.Date < today : e.EventDate.Date >= today) &&
                     (city == null || (e.City != null && e.City.Contains(city))) &&
                     (searchQuery == null || e.Name.Contains(searchQuery)))

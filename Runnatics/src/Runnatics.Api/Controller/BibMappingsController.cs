@@ -75,6 +75,34 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Get all participants for a race with their EPC mapping status (paginated, filterable)
+        /// </summary>
+        [HttpGet("participants")]
+        [ProducesResponseType(typeof(ResponseBase<PagedBibMappingResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetParticipantsWithMappingStatus(
+            [FromQuery] string raceId,
+            [FromQuery] GetEpcMappingRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(raceId))
+                return BadRequest(new { error = "raceId is required." });
+
+            var result = await _bibMappingService.GetParticipantsWithMappingStatusAsync(raceId, request, cancellationToken);
+
+            if (_bibMappingService.HasError)
+            {
+                return StatusCode((int)HttpStatusCode.InternalServerError, new ResponseBase<PagedBibMappingResponse>
+                {
+                    Error = new ResponseBase<PagedBibMappingResponse>.ErrorData { Message = _bibMappingService.ErrorMessage }
+                });
+            }
+
+            return Ok(new ResponseBase<PagedBibMappingResponse> { Message = result, TotalCount = result.TotalCount });
+        }
+
+        /// <summary>
         /// Get all EPC-to-BIB mappings for a race
         /// </summary>
         [HttpGet]

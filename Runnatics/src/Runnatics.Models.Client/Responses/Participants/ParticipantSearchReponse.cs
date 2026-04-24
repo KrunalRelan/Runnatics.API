@@ -16,6 +16,11 @@
         public string? ChipId { get; set; }
 
         /// <summary>
+        /// True if the participant has an active EPC chip assignment
+        /// </summary>
+        public bool IsEpcMapped { get; set; }
+
+        /// <summary>
         /// Dictionary of checkpoint times keyed by checkpoint name (e.g., "Start", "5 KM", "Finish")
         /// Values are formatted times (HH:mm:ss) or null if not crossed
         /// </summary>

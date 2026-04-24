@@ -634,8 +634,9 @@ namespace Runnatics.Services
 
                     var participantId = Convert.ToInt32(_encryptionService.Decrypt(participant.Id));
 
-                    // Set chip ID
+                    // Set chip ID and EPC mapped status
                     participant.ChipId = chipLookup.TryGetValue(participantId, out var chipEpc) ? chipEpc : null;
+                    participant.IsEpcMapped = !string.IsNullOrEmpty(participant.ChipId);
 
                     // ========== POPULATE RESULTS DATA ==========
                     if (results.TryGetValue(participantId, out var result))
@@ -1740,6 +1741,106 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task<byte[]?> ExportParticipantsAsync(string raceId)
+        {
+            try
+            {
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var splitTimesRepo = _repository.GetRepository<SplitTimes>();
+                var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+
+                var participants = await participantRepo.GetQuery(p =>
+                    p.RaceId == decryptedRaceId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .OrderBy(p => p.BibNumber)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var checkpoints = await checkpointRepo.GetQuery(c =>
+                    c.RaceId == decryptedRaceId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                    .OrderBy(c => c.DistanceFromStart)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var participantIds = participants.Select(p => p.Id).ToList();
+
+                var results = await resultsRepo.GetQuery(r =>
+                    r.RaceId == decryptedRaceId &&
+                    participantIds.Contains(r.ParticipantId))
+                    .AsNoTracking()
+                    .ToDictionaryAsync(r => r.ParticipantId);
+
+                var splits = await splitTimesRepo.GetQuery(st =>
+                    participantIds.Contains(st.ParticipantId) &&
+                    st.AuditProperties.IsActive &&
+                    !st.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var splitsByParticipant = splits
+                    .GroupBy(st => st.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                using var workbook = new ClosedXML.Excel.XLWorkbook();
+                var ws = workbook.Worksheets.Add("Participants");
+
+                var headers = new List<string> { "BIB No", "Name", "Mobile", "Email", "Gender", "Age Category", "Status", "Gun Time", "Chip Time" };
+                headers.AddRange(checkpoints.Select(c => $"{c.Name} Time"));
+
+                for (int i = 0; i < headers.Count; i++)
+                {
+                    ws.Cell(1, i + 1).Value = headers[i];
+                    ws.Cell(1, i + 1).Style.Font.Bold = true;
+                }
+
+                int row = 2;
+                foreach (var p in participants)
+                {
+                    results.TryGetValue(p.Id, out var result);
+                    ws.Cell(row, 1).Value = p.BibNumber ?? string.Empty;
+                    ws.Cell(row, 2).Value = $"{p.FirstName} {p.LastName}".Trim();
+                    ws.Cell(row, 3).Value = p.Phone ?? string.Empty;
+                    ws.Cell(row, 4).Value = p.Email ?? string.Empty;
+                    ws.Cell(row, 5).Value = p.Gender ?? string.Empty;
+                    ws.Cell(row, 6).Value = p.AgeCategory ?? string.Empty;
+                    ws.Cell(row, 7).Value = result?.Status ?? p.Status;
+                    ws.Cell(row, 8).Value = result?.GunTime.HasValue == true ? FormatDuration(result.GunTime!.Value) : string.Empty;
+                    ws.Cell(row, 9).Value = result?.NetTime.HasValue == true ? FormatDuration(result.NetTime!.Value) : string.Empty;
+
+                    var participantSplits = splitsByParticipant.TryGetValue(p.Id, out var ps) ? ps : new List<SplitTimes>();
+                    for (int c = 0; c < checkpoints.Count; c++)
+                    {
+                        var cpSplit = participantSplits
+                            .Where(st => st.CheckpointId == checkpoints[c].Id || st.ToCheckpointId == checkpoints[c].Id)
+                            .OrderBy(st => st.SplitTimeMs)
+                            .FirstOrDefault();
+                        ws.Cell(row, 10 + c).Value = cpSplit?.SplitTimeMs.HasValue == true
+                            ? FormatDuration(cpSplit.SplitTimeMs!.Value)
+                            : string.Empty;
+                    }
+                    row++;
+                }
+
+                ws.Columns().AdjustToContents();
+
+                using var stream = new MemoryStream();
+                workbook.SaveAs(stream);
+                return stream.ToArray();
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error exporting participants: {ex.Message}";
+                _logger.LogError(ex, "Error exporting participants for race {RaceId}", raceId);
+                return null;
+            }
+        }
+
         public async Task<ParticipantSearchReponse?> UpdateParticipantExtendedAsync(string raceId, string participantId, UpdateParticipantRequest request)
         {
             try
@@ -1772,6 +1873,7 @@ namespace Runnatics.Services
                 if (request.Mobile != null) participant.Phone = request.Mobile;
                 if (request.Email != null) participant.Email = request.Email;
                 if (request.AgeCategory != null) participant.AgeCategory = request.AgeCategory;
+                if (request.DateOfBirth.HasValue) participant.DateOfBirth = request.DateOfBirth;
                 if (request.ManualDistance.HasValue) participant.ManualDistance = request.ManualDistance;
                 if (request.LoopCount.HasValue) participant.LoopCount = request.LoopCount;
 
@@ -1881,6 +1983,94 @@ namespace Runnatics.Services
                             result.AuditProperties.UpdatedBy = userId;
                             await resultsRepo.UpdateAsync(result);
                         }
+                    }
+
+                    // Save manual checkpoint times
+                    if (request.ManualCheckpointTimes?.Count > 0)
+                    {
+                        var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                        var splitTimesRepo = _repository.GetRepository<SplitTimes>();
+
+                        // Load race checkpoints ordered by distance for segment calculation
+                        var checkpoints = await checkpointRepo.GetQuery(c =>
+                            c.RaceId == decryptedRaceId &&
+                            c.AuditProperties.IsActive &&
+                            !c.AuditProperties.IsDeleted)
+                            .OrderBy(c => c.DistanceFromStart)
+                            .AsNoTracking()
+                            .ToListAsync();
+
+                        // Get earliest normalized reading to use as start reference
+                        var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+                        var earliestReading = await normalizedRepo.GetQuery(r =>
+                            r.ParticipantId == decryptedParticipantId &&
+                            r.EventId == participant.EventId &&
+                            r.AuditProperties.IsActive &&
+                            !r.AuditProperties.IsDeleted)
+                            .AsNoTracking()
+                            .OrderBy(r => r.ChipTime)
+                            .FirstOrDefaultAsync();
+
+                        var raceStartTime = earliestReading?.ChipTime;
+
+                        foreach (var ct in request.ManualCheckpointTimes)
+                        {
+                            var checkpointId = Convert.ToInt32(_encryptionService.Decrypt(ct.CheckpointId));
+                            var checkpoint = checkpoints.FirstOrDefault(c => c.Id == checkpointId);
+                            if (checkpoint == null) continue;
+
+                            // Soft-delete any existing SplitTimes for this participant at this checkpoint
+                            var existingSplits = await splitTimesRepo.GetQuery(st =>
+                                st.ParticipantId == decryptedParticipantId &&
+                                (st.CheckpointId == checkpointId || st.ToCheckpointId == checkpointId) &&
+                                st.AuditProperties.IsActive &&
+                                !st.AuditProperties.IsDeleted)
+                                .ToListAsync();
+
+                            foreach (var existing in existingSplits)
+                            {
+                                existing.AuditProperties.IsDeleted = true;
+                                existing.AuditProperties.IsActive = false;
+                                existing.AuditProperties.UpdatedBy = userId;
+                                existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            }
+                            if (existingSplits.Count > 0)
+                                await splitTimesRepo.UpdateRangeAsync(existingSplits);
+
+                            // Determine from/to checkpoint for segment
+                            var checkpointIndex = checkpoints.IndexOf(checkpoint);
+                            var fromCheckpoint = checkpointIndex > 0 ? checkpoints[checkpointIndex - 1] : checkpoint;
+
+                            // Compute elapsed time from race start
+                            long splitTimeMs = raceStartTime.HasValue
+                                ? (long)(ct.Time - raceStartTime.Value).TotalMilliseconds
+                                : 0;
+                            var splitTimeSpan = splitTimeMs > 0
+                                ? TimeSpan.FromMilliseconds(splitTimeMs)
+                                : ct.Time.TimeOfDay;
+
+                            await splitTimesRepo.AddAsync(new SplitTimes
+                            {
+                                EventId = participant.EventId,
+                                ParticipantId = decryptedParticipantId,
+                                FromCheckpointId = fromCheckpoint.Id,
+                                ToCheckpointId = checkpointId,
+                                CheckpointId = checkpointId,
+                                SplitTime = splitTimeSpan,
+                                SplitTimeMs = splitTimeMs > 0 ? splitTimeMs : null,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            });
+                        }
+
+                        participant.IsManualTiming = true;
+                        await participantRepo.UpdateAsync(participant);
+                        _logger.LogInformation("Saved {Count} manual checkpoint times for Participant {ParticipantId}", request.ManualCheckpointTimes.Count, participantId);
                     }
                 });
 

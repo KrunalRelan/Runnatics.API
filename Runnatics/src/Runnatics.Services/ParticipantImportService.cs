@@ -1921,15 +1921,24 @@ namespace Runnatics.Services
                     .GroupBy(st => st.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.ToList());
 
-                var smsSentByParticipant = (await notificationRepo.GetQuery(n =>
-                    n.ParticipantId.HasValue &&
-                    participantIds.Contains(n.ParticipantId!.Value) &&
-                    n.Type == "SMS" &&
-                    n.SentAt.HasValue)
-                    .AsNoTracking()
-                    .ToListAsync())
-                    .GroupBy(n => n.ParticipantId!.Value)
-                    .ToDictionary(g => g.Key, g => g.OrderByDescending(n => n.SentAt).First().SentAt!.Value);
+                Dictionary<int, DateTime> smsSentByParticipant;
+                try
+                {
+                    smsSentByParticipant = (await notificationRepo.GetQuery(n =>
+                        n.ParticipantId.HasValue &&
+                        participantIds.Contains(n.ParticipantId!.Value) &&
+                        n.Type == "SMS" &&
+                        n.SentAt.HasValue)
+                        .AsNoTracking()
+                        .ToListAsync())
+                        .GroupBy(n => n.ParticipantId!.Value)
+                        .ToDictionary(g => g.Key, g => g.OrderByDescending(n => n.SentAt).First().SentAt!.Value);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not load SMS notifications for export — SMS Sent At column will be empty");
+                    smsSentByParticipant = new Dictionary<int, DateTime>();
+                }
 
                 // Sort: Finished first by NetTime ascending, then others by bib number
                 var ordered = participants

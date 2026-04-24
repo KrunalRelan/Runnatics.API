@@ -309,8 +309,8 @@ namespace Runnatics.Services
                             FirstName = record.FirstName,
                             Email = record.Email,
                             Phone = record.Mobile,
-                            Gender = record.Gender,
-                            AgeCategory = record.AgeCategory,
+                            Gender = string.IsNullOrWhiteSpace(record.Gender) ? "Unknown" : record.Gender.Trim(),
+                            AgeCategory = string.IsNullOrWhiteSpace(record.AgeCategory) ? "Unknown" : record.AgeCategory.Trim(),
                             ImportBatchId = decryptedImportBatchId,
                             Status = "Registered",
                             AuditProperties = new Models.Data.Common.AuditProperties
@@ -765,6 +765,8 @@ namespace Runnatics.Services
                 participant.EventId = eventIdInt;
                 participant.RaceId = raceIdInt;
                 participant.TenantId = _userContext.TenantId;
+                participant.Gender = string.IsNullOrWhiteSpace(participant.Gender) ? "Unknown" : participant.Gender.Trim();
+                participant.AgeCategory = string.IsNullOrWhiteSpace(participant.AgeCategory) ? "Unknown" : participant.AgeCategory.Trim();
 
                 // Duplicate bib check: ensure no active participant exists with same bib in same tenant/event/race
                 if (!string.IsNullOrWhiteSpace(participant.BibNumber))
@@ -828,6 +830,8 @@ namespace Runnatics.Services
                 }
 
                 _mapper.Map(editParticipant, existingParticipant);
+                existingParticipant.Gender = string.IsNullOrWhiteSpace(existingParticipant.Gender) ? "Unknown" : existingParticipant.Gender.Trim();
+                existingParticipant.AgeCategory = string.IsNullOrWhiteSpace(existingParticipant.AgeCategory) ? "Unknown" : existingParticipant.AgeCategory.Trim();
 
                 ///If existing race id is different than the new race id, then user is moving participant to another race.
                 ///so, we need to deleted that record from existing and add a new record in the new race.
@@ -1355,13 +1359,13 @@ namespace Runnatics.Services
 
             if (!string.IsNullOrWhiteSpace(record.Gender))
             {
-                participant.Gender = record.Gender;
+                participant.Gender = record.Gender.Trim();
                 hasChanges = true;
             }
 
             if (!string.IsNullOrWhiteSpace(record.AgeCategory))
             {
-                participant.AgeCategory = record.AgeCategory;
+                participant.AgeCategory = record.AgeCategory.Trim();
                 hasChanges = true;
             }
 
@@ -1872,7 +1876,7 @@ namespace Runnatics.Services
                 if (request.LastName != null) participant.LastName = request.LastName;
                 if (request.Mobile != null) participant.Phone = request.Mobile;
                 if (request.Email != null) participant.Email = request.Email;
-                if (request.AgeCategory != null) participant.AgeCategory = request.AgeCategory;
+                if (request.AgeCategory != null) participant.AgeCategory = string.IsNullOrWhiteSpace(request.AgeCategory) ? "Unknown" : request.AgeCategory.Trim();
                 if (request.DateOfBirth.HasValue) participant.DateOfBirth = request.DateOfBirth;
                 if (request.ManualDistance.HasValue) participant.ManualDistance = request.ManualDistance;
                 if (request.LoopCount.HasValue) participant.LoopCount = request.LoopCount;
@@ -2095,8 +2099,8 @@ namespace Runnatics.Services
                 LastName = p.LastName,
                 Email = p.Email,
                 Phone = p.Phone,
-                Gender = p.Gender,
-                Category = p.AgeCategory,
+                Gender = string.IsNullOrWhiteSpace(p.Gender) ? "Unknown" : p.Gender,
+                Category = string.IsNullOrWhiteSpace(p.AgeCategory) ? "Unknown" : p.AgeCategory,
                 Status = p.Status
             };
         }

@@ -16,8 +16,7 @@ namespace Runnatics.Models.Client.Public
 
         public string? HeroImageUrl { get; set; }
 
-        // URL to GET /api/events/{id}/banner — NOT base64 data
-        public string? BannerUrl { get; set; }
+        public string? BannerBase64 { get; set; }
 
         // Truncated to 200 chars max at the mapping layer
         public string? Description { get; set; }

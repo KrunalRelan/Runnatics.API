@@ -320,12 +320,12 @@ namespace Runnatics.Api.Controller
 
         #region Private mapping helpers
 
-        private static string? BuildBannerUrl(Event e)
+        private static string? GetBannerBase64(Event e)
         {
             var removeBanner = e.EventSettings?.RemoveBanner ?? false;
             if (removeBanner || string.IsNullOrEmpty(e.BannerImage))
                 return null;
-            return $"/api/events/{e.Id}/banner";
+            return e.BannerImage;
         }
 
         private static PublicEventSummaryDto MapToSummary(Event e)
@@ -338,7 +338,7 @@ namespace Runnatics.Api.Controller
                 State = e.State,
                 EventDate = e.EventDate,
                 HeroImageUrl = null,
-                BannerUrl = BuildBannerUrl(e),
+                BannerBase64 = GetBannerBase64(e),
                 Description = e.Description != null && e.Description.Length > 200
                     ? e.Description[..200] + "..."
                     : e.Description,
@@ -372,7 +372,7 @@ namespace Runnatics.Api.Controller
                 State = e.State,
                 EventDate = e.EventDate,
                 HeroImageUrl = null,
-                BannerUrl = BuildBannerUrl(e),
+                BannerBase64 = GetBannerBase64(e),
                 Description = e.Description != null && e.Description.Length > 200
                     ? e.Description[..200] + "..."
                     : e.Description,

@@ -908,13 +908,11 @@ namespace Runnatics.Services
                 var normalizedStatus = status?.ToLowerInvariant();
                 var eventRepo = _repository.GetRepository<Event>();
 
-                // ConfirmedEvent is NOT required — Published + IsActive + !IsDeleted is sufficient
-                // for public listing. Past events often predate the ConfirmedEvent flag.
                 var query = eventRepo.GetQuery(e =>
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
-                    e.EventSettings.Published &&
+                    (e.EventSettings.Published || e.EventSettings.ConfirmedEvent) &&
                     (city == null || (e.City != null && e.City.Contains(city))) &&
                     (searchQuery == null || e.Name.Contains(searchQuery)))
                     .Include(e => e.EventSettings)

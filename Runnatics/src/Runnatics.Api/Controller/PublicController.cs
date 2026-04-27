@@ -119,7 +119,7 @@ namespace Runnatics.Api.Controller
         [HttpGet("events/{slug}/results")]
         [EnableRateLimiting("PublicRead")]
         [ResponseCache(Duration = 30)]
-        [ProducesResponseType(typeof(ResponseBase<PublicPagedResultDto<PublicResultDto>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ResponseBase<PublicResultsResponseDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
@@ -133,66 +133,94 @@ namespace Runnatics.Api.Controller
             CancellationToken cancellationToken = default)
         {
             if (page < 1 || pageSize < 1 || pageSize > 100)
-                return BadRequest(CreateErrorResponse<PublicPagedResultDto<PublicResultDto>>(
+                return BadRequest(CreateErrorResponse<PublicResultsResponseDto>(
                     "page must be >= 1 and pageSize must be between 1 and 100."));
 
-            // Look up event ID from slug — includes EventSettings and RaceSettings
+            // Look up event — includes EventSettings, RaceSettings, LeaderboardSettings
             var (eventEntity, _) = await _eventsService.GetPublicEventBySlugAsync(slug);
             if (eventEntity == null)
-                return NotFound(CreateErrorResponse<PublicPagedResultDto<PublicResultDto>>("Event not found."));
+                return NotFound(CreateErrorResponse<PublicResultsResponseDto>("Event not found."));
 
-            // Check if any published race allows showing a result table
+            // ── Publish gate ────────────────────────────────────────────────────
+            // EventSettings.Published must be true for the event to appear in listings.
+            // Results are only surfaced when the event is published AND at least one
+            // race has ShowResultTable enabled.
+            var isEventPublished = eventEntity.EventSettings?.Published ?? false;
+            if (!isEventPublished)
+                return Ok(new ResponseBase<PublicResultsResponseDto>
+                {
+                    Message = new PublicResultsResponseDto
+                    {
+                        IsPublished = false,
+                        StatusMessage = "Results not yet published for this event.",
+                        Results = [],
+                        Races = [],
+                        LeaderboardSettings = new PublicLeaderboardSettingsDto()
+                    }
+                });
+
             var publishedRaces = eventEntity.Races?
                 .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
                 .ToList() ?? [];
 
             var anyShowResultTable = publishedRaces.Any(r => r.RaceSettings == null || r.RaceSettings.ShowResultTable);
             if (!anyShowResultTable)
-                return Ok(new ResponseBase<PublicPagedResultDto<PublicResultDto>>
+                return Ok(new ResponseBase<PublicResultsResponseDto>
                 {
-                    Message = new PublicPagedResultDto<PublicResultDto> { Items = [], TotalCount = 0 },
-                    Error = new ResponseBase<PublicPagedResultDto<PublicResultDto>>.ErrorData
+                    Message = new PublicResultsResponseDto
                     {
-                        Message = "Results not available for this event."
+                        IsPublished = true,
+                        StatusMessage = "Results not available for this event.",
+                        Results = [],
+                        Races = publishedRaces.Select(r => r.Title).ToList(),
+                        LeaderboardSettings = new PublicLeaderboardSettingsDto()
                     }
                 });
 
+            // ── Effective leaderboard settings ──────────────────────────────────
+            var selectedRace = !string.IsNullOrEmpty(race)
+                ? publishedRaces.FirstOrDefault(r =>
+                    r.Title.Equals(race, StringComparison.OrdinalIgnoreCase))
+                : null;
+
+            var leaderboardSettings = await _resultsService
+                .GetEffectivePublicLeaderboardSettingsAsync(eventEntity.Id, selectedRace?.Id);
+
+            // ── Fetch and filter results ─────────────────────────────────────────
             var results = await _resultsService.GetPublicResultsAsync(
                 eventEntity.Id, race, q, gender, page, pageSize);
 
             if (_resultsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,
-                    CreateErrorResponse<PublicPagedResultDto<PublicResultDto>>(_resultsService.ErrorMessage));
+                    CreateErrorResponse<PublicResultsResponseDto>(_resultsService.ErrorMessage));
 
-            // Respect RaceSettings: filter out unpublished races and DNF if PublishDnf=false
             var raceSettingsMap = publishedRaces
                 .Where(r => r.RaceSettings != null)
                 .ToDictionary(r => r.Id, r => r.RaceSettings!);
 
             var filteredResults = results.Where(r =>
             {
-                // Only include results from published races
                 if (!publishedRaces.Any(pr => pr.Id == r.RaceId))
                     return false;
-
-                // Respect PublishDnf setting
                 if (raceSettingsMap.TryGetValue(r.RaceId, out var rs) &&
                     !rs.PublishDnf &&
                     r.Status == "DNF")
                     return false;
-
                 return true;
             }).ToList();
 
-            var dto = new PublicPagedResultDto<PublicResultDto>
+            var dto = new PublicResultsResponseDto
             {
-                Items = filteredResults.Select(MapToResultDto).ToList(),
+                Results = filteredResults.Select(MapToResultDto).ToList(),
+                Races = publishedRaces.Select(r => r.Title).ToList(),
                 Page = page,
                 PageSize = pageSize,
-                TotalCount = results.TotalCount
+                TotalCount = results.TotalCount,
+                LeaderboardSettings = leaderboardSettings,
+                IsPublished = true
             };
 
-            return Ok(new ResponseBase<PublicPagedResultDto<PublicResultDto>>
+            return Ok(new ResponseBase<PublicResultsResponseDto>
             {
                 Message = dto,
                 TotalCount = results.TotalCount
@@ -330,6 +358,15 @@ namespace Runnatics.Api.Controller
 
         private static PublicEventSummaryDto MapToSummary(Event e)
         {
+            // A past event has published results when at least one published race
+            // has ShowResultTable enabled (or has no RaceSettings row at all = default on).
+            var publishedRaces = e.Races?
+                .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
+                .ToList() ?? [];
+
+            var hasPublishedResults = e.EventDate.Date < DateTime.UtcNow.Date &&
+                publishedRaces.Any(r => r.RaceSettings == null || r.RaceSettings.ShowResultTable);
+
             return new PublicEventSummaryDto
             {
                 Slug = e.Slug,
@@ -350,7 +387,8 @@ namespace Runnatics.Api.Controller
                     ? e.RegistrationDeadline.Value > DateTime.UtcNow
                     : e.EventDate > DateTime.UtcNow,
                 RegistrationUrl = null,
-                Venue = e.VenueName
+                Venue = e.VenueName,
+                HasPublishedResults = hasPublishedResults
             };
         }
 

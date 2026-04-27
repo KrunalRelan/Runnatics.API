@@ -1,3 +1,4 @@
+using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
@@ -51,5 +52,14 @@ namespace Runnatics.Services.Interface
             string? gender,
             int page,
             int pageSize);
+
+        /// <summary>
+        /// Returns effective leaderboard display settings for a race on the public site.
+        /// Race-level settings are returned when OverrideSettings=true, otherwise event-level.
+        /// Returns defaults (all-true/sensible values) when no settings row exists.
+        /// </summary>
+        Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
+            int eventId,
+            int? raceId);
     }
 }

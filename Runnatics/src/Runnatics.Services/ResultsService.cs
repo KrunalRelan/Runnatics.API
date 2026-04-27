@@ -2,6 +2,7 @@ using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
+using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
@@ -1315,6 +1316,75 @@ namespace Runnatics.Services
                 return [];
             }
         }
+
+        public async Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
+            int eventId, int? raceId)
+        {
+            try
+            {
+                var repo = _repository.GetRepository<LeaderboardSettings>();
+
+                // Race-level override takes priority when OverrideSettings == true
+                if (raceId.HasValue)
+                {
+                    var raceSettings = await repo
+                        .GetQuery(s =>
+                            s.EventId == eventId &&
+                            s.RaceId == raceId &&
+                            s.OverrideSettings == true &&
+                            s.AuditProperties.IsActive &&
+                            !s.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+
+                    if (raceSettings != null)
+                        return MapToPublicLeaderboardSettingsDto(raceSettings);
+                }
+
+                // Fall back to event-level settings
+                var eventSettings = await repo
+                    .GetQuery(s =>
+                        s.EventId == eventId &&
+                        s.RaceId == null &&
+                        s.AuditProperties.IsActive &&
+                        !s.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                return eventSettings != null
+                    ? MapToPublicLeaderboardSettingsDto(eventSettings)
+                    : new PublicLeaderboardSettingsDto();   // sensible defaults
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Error fetching leaderboard settings for event {EventId}, race {RaceId}",
+                    eventId, raceId);
+                return new PublicLeaderboardSettingsDto();
+            }
+        }
+
+        private static PublicLeaderboardSettingsDto MapToPublicLeaderboardSettingsDto(
+            LeaderboardSettings s) => new()
+        {
+            ShowOverallResults    = s.ShowOverallResults    ?? true,
+            ShowCategoryResults   = s.ShowCategoryResults   ?? true,
+            ShowGenderResults     = s.ShowGenderResults     ?? false,
+            ShowAgeGroupResults   = s.ShowAgeGroupResults   ?? false,
+            SortByOverallChipTime = s.SortByOverallChipTime ?? true,
+            SortByOverallGunTime  = s.SortByOverallGunTime  ?? false,
+            SortByCategoryChipTime= s.SortByCategoryChipTime?? true,
+            SortByCategoryGunTime = s.SortByCategoryGunTime ?? false,
+            EnableLiveLeaderboard = s.EnableLiveLeaderboard ?? false,
+            ShowSplitTimes        = s.ShowSplitTimes        ?? false,
+            ShowPace              = s.ShowPace              ?? false,
+            ShowTeamResults       = s.ShowTeamResults       ?? false,
+            ShowMedalIcon         = s.ShowMedalIcon         ?? true,
+            AutoRefreshIntervalSec      = s.AutoRefreshIntervalSec      ?? 30,
+            MaxDisplayedRecords         = s.MaxDisplayedRecords         ?? 0,
+            NumberOfResultsToShowOverall   = s.NumberOfResultsToShowOverall   ?? 0,
+            NumberOfResultsToShowCategory  = s.NumberOfResultsToShowCategory  ?? 0,
+        };
 
         #endregion
     }

@@ -32,5 +32,11 @@ namespace Runnatics.Models.Client.Public
 
         // Maps from Event.VenueName
         public string? Venue { get; set; }
+
+        /// <summary>
+        /// True when at least one published race has ShowResultTable enabled.
+        /// Used to conditionally show the "View Result →" button on public event tiles.
+        /// </summary>
+        public bool HasPublishedResults { get; set; }
     }
 }

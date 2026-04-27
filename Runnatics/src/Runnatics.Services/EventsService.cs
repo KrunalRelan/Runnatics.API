@@ -918,6 +918,7 @@ namespace Runnatics.Services
                     (searchQuery == null || e.Name.Contains(searchQuery)))
                     .Include(e => e.EventSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
+                        .ThenInclude(r => r.RaceSettings)
                     .AsNoTracking();
 
                 var totalCount = await query.CountAsync();
@@ -954,8 +955,11 @@ namespace Runnatics.Services
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted)
                     .Include(e => e.EventSettings)
+                    .Include(e => e.LeaderboardSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
                         .ThenInclude(r => r.RaceSettings)
+                    .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
+                        .ThenInclude(r => r.LeaderboardSettings)
                     .Include(e => e.EventOrganizer)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();

@@ -1267,6 +1267,8 @@ namespace Runnatics.Services
 
                 var query = resultsRepo.GetQuery(r =>
                     r.EventId == eventId &&
+                    r.Event.EventSettings != null &&
+                    r.Event.EventSettings.Published &&
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
                     .Include(r => r.Participant)

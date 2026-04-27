@@ -1,4 +1,4 @@
-﻿using AutoMapper;
+using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -962,7 +962,10 @@ namespace Runnatics.Services
                 var eventEntity = await eventRepo.GetQuery(e =>
                     e.Slug == slug &&
                     e.AuditProperties.IsActive &&
-                    !e.AuditProperties.IsDeleted)
+                    !e.AuditProperties.IsDeleted &&
+                    e.EventSettings != null &&
+                    e.EventSettings.ConfirmedEvent &&
+                    !e.EventSettings.Published)
                     .Include(e => e.EventSettings)
                     .Include(e => e.LeaderboardSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
@@ -976,7 +979,7 @@ namespace Runnatics.Services
                 if (eventEntity == null)
                     return (null, null);
 
-                // Lightweight per-race participant counts via GROUP BY — no entity materialisation
+                // Lightweight per-race participant counts via GROUP BY � no entity materialisation
                 var participantRepo = _repository.GetRepository<Participant>();
                 var raceIds = eventEntity.Races.Select(r => r.Id).ToList();
 

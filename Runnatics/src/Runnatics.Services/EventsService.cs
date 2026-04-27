@@ -897,7 +897,7 @@ namespace Runnatics.Services
         private const int MaxPublicPageSize = 100;
 
         public async Task<Models.Data.Common.PagingList<Event>> GetPublicEventsAsync(
-            bool isPast, string? city, string? searchQuery, int page, int pageSize)
+            string? status, string? city, string? searchQuery, int page, int pageSize, int? take = null)
         {
             try
             {
@@ -905,15 +905,16 @@ namespace Runnatics.Services
                 pageSize = Math.Clamp(pageSize, 1, MaxPublicPageSize);
 
                 var today = DateTime.UtcNow.Date;
+                var normalizedStatus = status?.ToLowerInvariant();
                 var eventRepo = _repository.GetRepository<Event>();
 
+                // ConfirmedEvent is NOT required — Published + IsActive + !IsDeleted is sufficient
+                // for public listing. Past events often predate the ConfirmedEvent flag.
                 var query = eventRepo.GetQuery(e =>
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
                     e.EventSettings.Published &&
-                    e.EventSettings.ConfirmedEvent &&
-                    (isPast ? e.EventDate.Date < today : e.EventDate.Date >= today) &&
                     (city == null || (e.City != null && e.City.Contains(city))) &&
                     (searchQuery == null || e.Name.Contains(searchQuery)))
                     .Include(e => e.EventSettings)
@@ -921,18 +922,28 @@ namespace Runnatics.Services
                         .ThenInclude(r => r.RaceSettings)
                     .AsNoTracking();
 
-                var totalCount = await query.CountAsync();
+                IQueryable<Event> orderedQuery;
+                if (normalizedStatus == "upcoming")
+                    orderedQuery = query.Where(e => e.EventDate.Date >= today).OrderBy(e => e.EventDate);
+                else if (normalizedStatus == "past")
+                    orderedQuery = query.Where(e => e.EventDate.Date < today).OrderByDescending(e => e.EventDate);
+                else
+                    orderedQuery = query.OrderByDescending(e => e.EventDate);
 
-                var items = isPast
-                    ? await query.OrderByDescending(e => e.EventDate).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync()
-                    : await query.OrderBy(e => e.EventDate).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
+                var totalCount = await orderedQuery.CountAsync();
+
+                var effectiveSize = (take.HasValue && take.Value > 0) ? take.Value : pageSize;
+                var items = await orderedQuery
+                    .Skip((page - 1) * effectiveSize)
+                    .Take(effectiveSize)
+                    .ToListAsync();
 
                 var result = new Models.Data.Common.PagingList<Event>();
                 result.AddRange(items);
                 result.TotalCount = totalCount;
 
                 _logger.LogInformation("Public event search ({Filter}) returned {Count}/{Total}.",
-                    isPast ? "past" : "upcoming", items.Count, totalCount);
+                    normalizedStatus ?? "all", items.Count, totalCount);
 
                 return result;
             }

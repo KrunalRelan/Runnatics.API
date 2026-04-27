@@ -38,26 +38,25 @@ namespace Runnatics.Api.Controller
         /// </summary>
         [HttpGet("events")]
         [EnableRateLimiting("PublicRead")]
-        [ResponseCache(Duration = 60, VaryByQueryKeys = ["status", "city", "q", "year", "page", "pageSize"])]
+        [ResponseCache(Duration = 60, VaryByQueryKeys = ["status", "city", "q", "year", "page", "pageSize", "take"])]
         [ProducesResponseType(typeof(ResponseBase<PublicPagedResultDto<PublicEventSummaryDto>>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> GetEvents(
-            [FromQuery] string status = "upcoming",
+            [FromQuery] string? status = "upcoming",
             [FromQuery] string? city = null,
             [FromQuery] string? q = null,
             [FromQuery] string? year = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 12,
+            [FromQuery] int? take = null,
             CancellationToken cancellationToken = default)
         {
             if (page < 1 || pageSize < 1 || pageSize > 100)
                 return BadRequest(CreateErrorResponse<PublicPagedResultDto<PublicEventSummaryDto>>(
                     "page must be >= 1 and pageSize must be between 1 and 100."));
 
-            var isPast = status.Equals("past", StringComparison.OrdinalIgnoreCase);
-
-            var events = await _eventsService.GetPublicEventsAsync(isPast, city, q, page, pageSize);
+            var events = await _eventsService.GetPublicEventsAsync(status, city, q, page, pageSize, take);
 
             if (_eventsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,
@@ -329,8 +328,8 @@ namespace Runnatics.Api.Controller
         public async Task<IActionResult> GetPublicStats(CancellationToken cancellationToken = default)
         {
             // Fetch upcoming and past event counts via lightweight calls
-            var upcoming = await _eventsService.GetPublicEventsAsync(isPast: false, city: null, searchQuery: null, page: 1, pageSize: 1);
-            var past     = await _eventsService.GetPublicEventsAsync(isPast: true,  city: null, searchQuery: null, page: 1, pageSize: 1);
+            var upcoming = await _eventsService.GetPublicEventsAsync(status: "upcoming", city: null, searchQuery: null, page: 1, pageSize: 1);
+            var past     = await _eventsService.GetPublicEventsAsync(status: "past",     city: null, searchQuery: null, page: 1, pageSize: 1);
 
             var response = new ResponseBase<object>
             {

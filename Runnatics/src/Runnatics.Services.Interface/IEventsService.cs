@@ -21,10 +21,12 @@ namespace Runnatics.Services.Interface
 
         /// <summary>
         /// Returns a paged list of public events (no tenant filter).
+        /// status: "upcoming" = future, "past" = past, null/"recent" = all (desc).
+        /// take overrides pageSize when provided and > 0.
         /// Includes the Races collection so callers can build category lists.
         /// </summary>
         Task<DataPagingList> GetPublicEventsAsync(
-            bool isPast, string? city, string? searchQuery, int page, int pageSize);
+            string? status, string? city, string? searchQuery, int page, int pageSize, int? take = null);
 
         /// <summary>
         /// Returns a single public event by its URL slug.

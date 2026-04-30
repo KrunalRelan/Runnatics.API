@@ -99,6 +99,20 @@ namespace Runnatics.Services
                     return false;
                 }
 
+                // Prevent deleting a device that is in use by any checkpoint
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var isUsedInCheckpoint = await checkpointRepo.GetQuery(c =>
+                        (c.DeviceId == decryptedDeviceId || (c.ParentDeviceId.HasValue && c.ParentDeviceId.Value == decryptedDeviceId)) &&
+                        c.AuditProperties.IsActive && !c.AuditProperties.IsDeleted)
+                    .AnyAsync();
+
+                if (isUsedInCheckpoint)
+                {
+                    ErrorMessage = "Device is assigned to one or more checkpoints and cannot be deleted.";
+                    _logger.LogWarning("Device delete prevented - device is used by checkpoints. DeviceId: {DeviceId}, TenantId: {TenantId}", decryptedDeviceId, tenantId);
+                    return false;
+                }
+
                 // Soft delete
                 existing.AuditProperties.IsActive = false;
                 existing.AuditProperties.IsDeleted = true;

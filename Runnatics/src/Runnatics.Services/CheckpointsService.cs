@@ -32,6 +32,24 @@ namespace Runnatics.Services
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
+                // Guard: prevent duplicate (EventId, RaceId, DeviceId, DistanceFromStart)
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var deviceIdValue = decryptedDeviceId ?? 0;
+                bool duplicate = await checkpointRepo.GetQuery(c =>
+                        c.EventId == decryptedEventId
+                        && c.RaceId == decryptedRaceId
+                        && c.DeviceId == deviceIdValue
+                        && c.DistanceFromStart == request.DistanceFromStart
+                        && c.AuditProperties.IsActive
+                        && !c.AuditProperties.IsDeleted)
+                    .AnyAsync();
+
+                if (duplicate)
+                {
+                    ErrorMessage = $"A checkpoint for this device at {request.DistanceFromStart} KM already exists in this race.";
+                    return false;
+                }
+
                 if (!await ParentEventAndRaceExistAsync(decryptedEventId, decryptedRaceId))
                 {
                     return false;
@@ -61,7 +79,6 @@ namespace Runnatics.Services
                 checkpoint.DistanceFromStart = request.DistanceFromStart;
                 checkpoint.AuditProperties = CreateAuditProperties(currentUserId);
 
-                var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 await checkpointRepo.AddAsync(checkpoint);
                 await _repository.SaveChangesAsync();
 

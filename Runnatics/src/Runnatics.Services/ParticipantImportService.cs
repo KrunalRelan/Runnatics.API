@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
+using Runnatics.Models.Client.Responses.Export;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Races;
 using Runnatics.Models.Data.Entities;
@@ -1845,7 +1846,7 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<byte[]?> ExportParticipantsDetailedAsync(string eventId, string raceId)
+        public async Task<ExcelExportResult?> ExportParticipantsDetailedAsync(string eventId, string raceId)
         {
             try
             {
@@ -1870,10 +1871,13 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                var eventTimeZoneId = await eventRepo.GetQuery(e => e.Id == decryptedEventId)
+                var eventInfo = await eventRepo.GetQuery(e => e.Id == decryptedEventId)
                     .AsNoTracking()
-                    .Select(e => e.TimeZone)
-                    .FirstOrDefaultAsync() ?? "UTC";
+                    .Select(e => new { e.TimeZone, e.Name })
+                    .FirstOrDefaultAsync();
+
+                var eventTimeZoneId = eventInfo?.TimeZone ?? "UTC";
+                var eventName = eventInfo?.Name;
 
                 TimeZoneInfo displayTz;
                 try
@@ -2007,7 +2011,15 @@ namespace Runnatics.Services
 
                 using var stream = new MemoryStream();
                 workbook.SaveAs(stream);
-                return stream.ToArray();
+
+                var fileName = BuildParticipantExportFileName(eventName, race.Title);
+
+                return new ExcelExportResult
+                {
+                    Content = stream.ToArray(),
+                    ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    FileName = fileName,
+                };
             }
             catch (Exception ex)
             {
@@ -2015,6 +2027,19 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error exporting participants for event {EventId} race {RaceId}", eventId, raceId);
                 return null;
             }
+        }
+
+        private static string BuildParticipantExportFileName(string? eventName, string? raceName)
+        {
+            static string Sanitize(string? value) =>
+                string.IsNullOrWhiteSpace(value)
+                    ? string.Empty
+                    : string.Concat(value.Split(Path.GetInvalidFileNameChars())).Replace(' ', '_');
+
+            var parts = new[] { Sanitize(eventName), Sanitize(raceName), "participantsData", DateTime.UtcNow.ToString("yyyyMMdd") }
+                .Where(p => !string.IsNullOrEmpty(p));
+
+            return $"{string.Join("_", parts)}.xlsx";
         }
 
         private static string MapResultStatus(string? status) => status switch

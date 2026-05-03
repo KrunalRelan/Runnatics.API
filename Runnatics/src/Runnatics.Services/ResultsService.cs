@@ -6,6 +6,7 @@ using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
+using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Helpers;
@@ -580,9 +581,12 @@ namespace Runnatics.Services
 
                 var leaderboardEntries = new List<LeaderboardEntry>();
 
-                // Fetch race once for pace calculation
+                // Fetch race and event once for pace calculation and naming
                 var raceRepo = _repository.GetRepository<Race>();
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId).FirstOrDefaultAsync();
+
+                var eventRepo = _repository.GetRepository<Event>();
+                var @event = await eventRepo.GetQuery(e => e.Id == decryptedEventId).FirstOrDefaultAsync();
 
                 foreach (var result in results)
                 {
@@ -644,6 +648,8 @@ namespace Runnatics.Services
                     RankBy = rankBy,
                     Gender = request.Gender,
                     Category = request.Category,
+                    EventName = @event?.Name,
+                    RaceName = race?.Title,
                     Results = leaderboardEntries,
                     DisplaySettings = displaySettings
                 };
@@ -1247,6 +1253,131 @@ namespace Runnatics.Services
         }
 
         #endregion
+
+        public async Task<ManualTimeResponse?> RecordManualTimeAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            long finishTimeMs)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+
+            try
+            {
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var participant = await participantRepo.GetQuery(p =>
+                    p.Id == decryptedParticipantId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found";
+                    return null;
+                }
+
+                var resultsRepo = _repository.GetRepository<Results>();
+
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    var existing = await resultsRepo.GetQuery(r =>
+                        r.ParticipantId == decryptedParticipantId &&
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId)
+                        .FirstOrDefaultAsync();
+
+                    if (existing != null)
+                    {
+                        existing.FinishTime = finishTimeMs;
+                        existing.GunTime = finishTimeMs;
+                        existing.NetTime = finishTimeMs;
+                        existing.ManualFinishTimeMs = finishTimeMs;
+                        existing.Status = "Finished";
+                        existing.AuditProperties.IsActive = true;
+                        existing.AuditProperties.IsDeleted = false;
+                        existing.AuditProperties.UpdatedBy = userId;
+                        existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await resultsRepo.UpdateAsync(existing);
+                    }
+                    else
+                    {
+                        var newResult = new Results
+                        {
+                            EventId = decryptedEventId,
+                            ParticipantId = decryptedParticipantId,
+                            RaceId = decryptedRaceId,
+                            FinishTime = finishTimeMs,
+                            GunTime = finishTimeMs,
+                            NetTime = finishTimeMs,
+                            ManualFinishTimeMs = finishTimeMs,
+                            Status = "Finished",
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+                        await resultsRepo.AddAsync(newResult);
+                    }
+
+                    participant.IsManualTiming = true;
+                    participant.AuditProperties.UpdatedBy = userId;
+                    participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    await participantRepo.UpdateAsync(participant);
+
+                    await _repository.SaveChangesAsync();
+
+                    // Recalculate rankings for every finisher in the race
+                    await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+                });
+
+                var updatedResult = await resultsRepo.GetQuery(r =>
+                    r.ParticipantId == decryptedParticipantId &&
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync();
+
+                var totalFinishers = await resultsRepo.CountAsync(r =>
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == "Finished" &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted);
+
+                _logger.LogInformation(
+                    "Manual time recorded for participant {ParticipantId}: {FinishTimeMs}ms — overall rank {Rank}/{Total}",
+                    decryptedParticipantId, finishTimeMs, updatedResult?.OverallRank, totalFinishers);
+
+                return new ManualTimeResponse
+                {
+                    ParticipantId = participantId,
+                    Bib = participant.BibNumber ?? string.Empty,
+                    FullName = participant.FullName,
+                    FinishTimeMs = finishTimeMs,
+                    FinishTime = FormatTime(finishTimeMs),
+                    OverallRank = updatedResult?.OverallRank,
+                    GenderRank = updatedResult?.GenderRank,
+                    CategoryRank = updatedResult?.CategoryRank,
+                    TotalFinishers = totalFinishers,
+                    Status = "Finished"
+                };
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error recording manual time: {ex.Message}";
+                _logger.LogError(ex, "Error recording manual time for participant {ParticipantId}", participantId);
+                return null;
+            }
+        }
 
         #region Public (no-auth) methods
 

@@ -1,5 +1,6 @@
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Participant;
+using Runnatics.Models.Client.Responses.Export;
 using Runnatics.Models.Client.Responses.Participants;
 
 namespace Runnatics.Services.Interface
@@ -60,6 +61,6 @@ namespace Runnatics.Services.Interface
         /// <summary>
         /// Export all participants with full race details: ranking, chip/gun times, SMS sent time, and absolute checkpoint clock times.
         /// </summary>
-        Task<byte[]?> ExportParticipantsDetailedAsync(string eventId, string raceId);
+        Task<ExcelExportResult?> ExportParticipantsDetailedAsync(string eventId, string raceId);
     }
 }

@@ -9,6 +9,8 @@ namespace Runnatics.Models.Client.Responses.Results
         public string RankBy { get; set; } = "overall";
         public string? Gender { get; set; }
         public string? Category { get; set; }
+        public string? EventName { get; set; }
+        public string? RaceName { get; set; }
         public List<LeaderboardEntry> Results { get; set; } = new();
         public LeaderboardDisplaySettings DisplaySettings { get; set; } = new();
     }

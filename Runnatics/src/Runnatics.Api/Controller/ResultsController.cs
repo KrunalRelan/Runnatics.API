@@ -20,10 +20,12 @@ namespace Runnatics.Api.Controller
     public class ResultsController : ControllerBase
     {
         private readonly IResultsService _service;
+        private readonly IResultsExportService _exportService;
 
-        public ResultsController(IResultsService resultsService)
+        public ResultsController(IResultsService resultsService, IResultsExportService exportService)
         {
             _service = resultsService;
+            _exportService = exportService;
         }
 
         /// <summary>
@@ -342,6 +344,47 @@ namespace Runnatics.Api.Controller
 
             var fileName = $"results_export_{DateTime.UtcNow:yyyyMMdd}.csv";
             return File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv", fileName);
+        }
+
+        /// <summary>
+        /// Export race results as Excel (.xlsx), honouring all leaderboard display settings.
+        /// Columns, split times, pace, and rank views are driven by the configured settings.
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/export-excel")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> ExportResultsExcel(
+            string eventId,
+            string raceId,
+            [FromQuery] string rankBy = "Overall",
+            [FromQuery] string? gender = null,
+            [FromQuery] string? category = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+                return BadRequest(new { error = "Event ID and Race ID are required." });
+
+            var request = new GetLeaderboardRequest
+            {
+                EventId = eventId,
+                RaceId = raceId,
+                RankBy = rankBy,
+                Gender = string.IsNullOrWhiteSpace(gender) ? null : gender,
+                Category = string.IsNullOrWhiteSpace(category) ? null : category,
+                PageNumber = 1,
+                PageSize = 10000,
+                IncludeSplits = true,
+            };
+
+            var result = await _exportService.ExportResultsExcelAsync(request, cancellationToken);
+
+            if (result is null)
+                return NotFound(new { error = "No results found for this race." });
+
+            return File(result.Content, result.ContentType, result.FileName);
         }
 
         private static string EscapeCsvField(string value)

@@ -221,6 +221,7 @@ builder.Services.AddScoped<ICertificatesService, CertificatesService>();
 builder.Services.AddScoped<IRFIDImportService, RFIDImportService>();
 builder.Services.AddScoped<IRFIDDiagnosticsService, RFIDDiagnosticsService>();
 builder.Services.AddScoped<IResultsService, ResultsService>();
+builder.Services.AddScoped<IResultsExportService, ResultsExportService>();
 builder.Services.AddScoped<IBibMappingService, BibMappingService>();
 builder.Services.AddScoped<ISupportQueryService, SupportQueryService>();
 builder.Services.AddHttpClient<ISmsService, Msg91SmsService>();

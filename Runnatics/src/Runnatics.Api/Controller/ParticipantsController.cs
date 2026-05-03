@@ -350,14 +350,12 @@ namespace Runnatics.Api.Controller
             if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
                 return BadRequest(new { error = "Event ID and Race ID are required." });
 
-            var bytes = await _service.ExportParticipantsDetailedAsync(eventId, raceId);
+            var result = await _service.ExportParticipantsDetailedAsync(eventId, raceId);
 
-            if (_service.HasError || bytes == null)
+            if (_service.HasError || result is null)
                 return StatusCode((int)System.Net.HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
 
-            return File(bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"participants_export_{raceId}.xlsx");
+            return File(result.Content, result.ContentType, result.FileName);
         }
 
         [HttpGet("{eventId}/{raceId}/categories")]

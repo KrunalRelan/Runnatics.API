@@ -2,6 +2,7 @@ using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
+using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Models.Data.Entities;
 using DataResultsPagingList = Runnatics.Models.Data.Common.PagingList<Runnatics.Models.Data.Entities.Results>;
 
@@ -61,5 +62,15 @@ namespace Runnatics.Services.Interface
         Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
             int eventId,
             int? raceId);
+
+        /// <summary>
+        /// Records a manual finish time for a participant, then recalculates rankings for
+        /// the entire race so overall/gender/category positions reflect the new entry.
+        /// </summary>
+        Task<ManualTimeResponse?> RecordManualTimeAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            long finishTimeMs);
     }
 }

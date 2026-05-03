@@ -18,11 +18,16 @@ namespace Runnatics.Api.Controller
     {
         private readonly IRFIDImportService _service;
         private readonly IRFIDDiagnosticsService _diagnosticsService;
+        private readonly IResultsService _resultsService;
 
-        public RFIDController(IRFIDImportService importService, IRFIDDiagnosticsService diagnosticsService)
+        public RFIDController(
+            IRFIDImportService importService,
+            IRFIDDiagnosticsService diagnosticsService,
+            IResultsService resultsService)
         {
             _service = importService;
             _diagnosticsService = diagnosticsService;
+            _resultsService = resultsService;
         }
 
         /// <summary>
@@ -369,6 +374,61 @@ namespace Runnatics.Api.Controller
                 {
                     Message = _service.ErrorMessage ?? result.ErrorMessage ?? "An error occurred"
                 };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Record a manual finish time for a participant and recalculate the full race rankings.
+        /// Use when a participant's chip failed to read at the finish line and their time is known.
+        /// Rankings for every finisher in the race are recomputed after the entry is saved.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/participant/{participantId}/manual-time")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<ManualTimeResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> RecordManualTime(
+            string eventId,
+            string raceId,
+            string participantId,
+            [FromBody] ManualTimeRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(participantId))
+                return BadRequest(new { error = "Event ID, Race ID, and Participant ID are required." });
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)
+                        .ToList()
+                });
+            }
+
+            var response = new ResponseBase<ManualTimeResponse>();
+            var result = await _resultsService.RecordManualTimeAsync(eventId, raceId, participantId, request.FinishTimeMs);
+
+            if (_resultsService.HasError || result == null)
+            {
+                response.Error = new ResponseBase<ManualTimeResponse>.ErrorData
+                {
+                    Message = _resultsService.ErrorMessage ?? "Failed to record manual time."
+                };
+
+                if (_resultsService.ErrorMessage?.Contains("not found") == true)
+                    return NotFound(response);
+
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 

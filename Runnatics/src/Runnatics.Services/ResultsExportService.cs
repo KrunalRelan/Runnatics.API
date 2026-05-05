@@ -144,13 +144,16 @@ namespace Runnatics.Services
 
                 if (settings.ShowSplitTimes)
                 {
+                    // GroupBy + Last instead of ToDictionary to avoid ArgumentException
+                    // when a participant has two split readings for the same checkpoint name
                     var splitLookup = entry.Splits?
                         .Where(s => !string.IsNullOrEmpty(s.CheckpointName))
-                        .ToDictionary(s => s.CheckpointName, s => s.SplitTime)
-                        ?? new Dictionary<string, string>();
+                        .GroupBy(s => s.CheckpointName!)
+                        .ToDictionary(g => g.Key, g => g.Last().SplitTime)
+                        ?? new Dictionary<string, string?>();
 
-                    foreach (var cp in checkpointNames)
-                        ws.Cell(row, col++).Value = splitLookup.TryGetValue(cp, out var t) ? t : string.Empty;
+                    foreach (var cp in checkpointNames!)
+                        ws.Cell(row, col++).Value = splitLookup.TryGetValue(cp!, out var t) ? t ?? string.Empty : string.Empty;
                 }
 
                 if (i % 2 == 1)

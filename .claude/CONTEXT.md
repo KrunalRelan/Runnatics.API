@@ -249,3 +249,47 @@ FORMAT:
   - Only `CalculateResultRankingsAsync` is called (not the full `CalculateResultsAsync`), so existing RFID-derived finish times are preserved; rankings are simply recomputed across all Finished results
   - `Results.ManualFinishTimeMs` stores the raw admin entry; `FinishTime`/`GunTime`/`NetTime` are all set to the same value (no gun-to-chip offset available for manual entry)
   - `Participant.IsManualTiming = true` is set so the UI can distinguish chip vs. manual finishers
+
+### 2026-05-05 — backend-agent — SRP Refactoring of Public Results Changes
+
+- **What was built**: Applied Single Responsibility Principle to the 2026-05-05 changes
+- **Files modified**:
+  - `Runnatics.Models.Client/Public/PublicGroupedLeaderboardDto.cs` — now contains only `PublicGroupedLeaderboardDto`
+  - `Runnatics.Models.Client/Public/PublicParticipantDetailDto.cs` — now contains only `PublicParticipantDetailDto`
+  - `Runnatics.Services.Interface/IResultsService.cs` — removed 4 public no-auth methods (`GetPublicResultsAsync`, `GetEffectivePublicLeaderboardSettingsAsync`, `GetPublicGroupedLeaderboardAsync`, `GetPublicParticipantDetailAsync`)
+  - `Runnatics.Services/ResultsService.cs` — removed the same 4 methods; now admin-only
+  - `Runnatics.Api/Controller/PublicController.cs` — now injects `IPublicResultsService` instead of `IResultsService`
+  - `Runnatics.Api/Program.cs` — registered `IPublicResultsService → PublicResultsService`
+- **Files created**:
+  - `Runnatics.Models.Client/Public/PublicGenderGroupDto.cs`
+  - `Runnatics.Models.Client/Public/PublicCategoryGroupDto.cs`
+  - `Runnatics.Models.Client/Public/PublicLeaderboardEntryDto.cs`
+  - `Runnatics.Models.Client/Public/PublicParticipantInfoDto.cs`
+  - `Runnatics.Models.Client/Public/PublicTimeDetailDto.cs`
+  - `Runnatics.Models.Client/Public/PublicSplitDetailDto.cs`
+  - `Runnatics.Services.Interface/IPublicResultsService.cs`
+  - `Runnatics.Services/PublicResultsService.cs`
+- **Decisions made**:
+  - `IResultsService` is now admin-only; `IPublicResultsService` owns all anonymous public endpoints
+  - `PublicResultsService` depends only on `IUnitOfWork`, `IEncryptionService`, `ILogger` — no `IMapper` or `IUserContextService` needed
+  - One class per .cs file rule enforced across all 8 new DTO/service files
+
+### 2026-05-05 — backend-agent — Excel Export Fix + Public Leaderboard + Public Participant Detail
+
+- **What was built**: 3 features — fixed admin Excel export (Task 1), added public grouped leaderboard endpoint (Task 2), added public participant detail endpoint (Task 3)
+- **Files modified**:
+  - `Runnatics.Services/ResultsExportService.cs` — rewritten to bypass `GetLeaderboardAsync` entirely; now injects `RaceSyncDbContext` + `IEncryptionService` and queries Results directly (no leaderboard visibility gates). Builds 2-sheet Excel: "Overall Results" (all results with optional splits/pace columns from leaderboard settings) and "Category Results" (grouped by gender→category with merged group header rows)
+  - `Runnatics.Services.Interface/IResultsService.cs` — added `GetPublicGroupedLeaderboardAsync` and `GetPublicParticipantDetailAsync`
+  - `Runnatics.Services/ResultsService.cs` — implemented both new methods in `#region Public (no-auth) methods`
+  - `Runnatics.Api/Controller/PublicController.cs` — added `GET api/public/{eventId}/{raceId}/leaderboard` and `GET api/public/participant/{participantId}`
+- **Files created**:
+  - `Runnatics.Models.Client/Public/PublicGroupedLeaderboardDto.cs` — 4 DTOs: `PublicGroupedLeaderboardDto`, `PublicGenderGroupDto`, `PublicCategoryGroupDto`, `PublicLeaderboardEntryDto`
+  - `Runnatics.Models.Client/Public/PublicParticipantDetailDto.cs` — 4 DTOs: `PublicParticipantDetailDto`, `PublicParticipantInfoDto`, `PublicTimeDetailDto`, `PublicSplitDetailDto`
+- **Decisions made**:
+  - Excel export: bypasses leaderboard visibility pipeline entirely — admin always sees all results regardless of MaxDisplayedRecords/NumberOfResultsToShowOverall
+  - Column control for export still honors leaderboard settings (ShowPace, ShowSplitTimes, ShowGenderResults, etc.)
+  - Public grouped leaderboard: default shows top 3 per category (or `NumberOfResultsToShowCategory` from settings); `showAll=true` returns all
+  - Participant detail URL format: `/p/{encryptedParticipantId}` built in service layer
+  - `GetPublicGroupedLeaderboardAsync` accepts encrypted IDs (same as admin endpoints)
+  - `GetPublicParticipantDetailAsync` accepts encrypted participantId
+  - `ResultsExportService` no longer depends on `IResultsService` — removed that dependency, replaced with `RaceSyncDbContext` + `IEncryptionService`

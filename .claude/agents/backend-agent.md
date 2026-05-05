@@ -19,30 +19,202 @@ Understand what entities exist, what the ef-core-agent built, and what decisions
 | Layer | Project | Your responsibility |
 |-------|---------|---------------------|
 | API | `Runnatics.Api` | Controllers, Program.cs DI registration |
-| Application | `Runnatics.Services` / `Runnatics.Services.Interface` | Service interfaces + implementations, AutoMapper profiles, SignalR hub methods |
+| Application | `Runnatics.Services` + `Runnatics.Services.Interface` | Service interfaces + implementations, AutoMapper profiles, SignalR hub methods |
 | Client Models | `Runnatics.Models.Client` | Request DTOs, Response DTOs, `ResponseBase<T>` |
 | Domain | `Runnatics.Models.Data` | Entity classes (read-only — ef-core-agent owns these) |
 | Infrastructure | `Runnatics.Repositories.Interface` | `IUnitOfWork<C>`, `IGenericRepository<T>` |
 
 ---
 
-## Critical Rules
+## Mandatory Rules
 
-### 1. All Public IDs Must Be Encrypted
-Every ID exposed in a response must be encrypted via `IEncryptionService`. AutoMapper handles this with custom converters:
+### RULE 1 — SOLID Principles
+Every class must follow SOLID. Before writing code verify:
+- **S** — Single Responsibility: one reason to change
+- **O** — Open/Closed: extend, never modify working code
+- **L** — Liskov: derived classes substitutable for base
+- **I** — Interface Segregation: small focused interfaces
+- **D** — Dependency Inversion: depend on `IUnitOfWork`, not `DbContext`
+
+### RULE 2 — Controller = Thin Layer Only
+Controllers ONLY:
+1. Receive HTTP request + validate `ModelState`
+2. Call ONE service method
+3. Return `ResponseBase<T>` wrapped result
+
+**NEVER in controllers:** decrypt IDs, query database, map entities, business logic, build response objects.
+
+### RULE 3 — Always Use IUnitOfWork
+NEVER inject `DbContext` or `IGenericRepository<T>` directly into services.
+
+### RULE 4 — Reuse Base Classes
+Before creating any request/response class, check:
+- Search request → inherit `SearchCriteriaBase` (has PageNumber, PageSize, SearchString, SortFieldName, SortDirection)
+- Search response → inherit `SearchResponseBase<T>` (has Items, TotalCount, HasError, ErrorMessage)
+- Paginated data → use `PagingList<T>`
+- API response → wrap in `ResponseBase<T>`
+
+### RULE 5 — Lambda Syntax Only
+NEVER use LINQ query syntax (`from x in y where ... select`). Always use lambda/method syntax.
+
+### RULE 6 — REST Principles
+- Nouns not verbs: `/api/results` not `/api/getResults`
+- Plural: `/api/results` not `/api/result`
+- HTTP verbs: GET=read, POST=create, PUT=full update, PATCH=partial, DELETE=soft delete
+
+---
+
+## Service Pattern
+
+```csharp
+// File: Runnatics/src/Runnatics.Services/ResultService.cs
+namespace Runnatics.Services;
+
+public class ResultService(
+    IUnitOfWork<RaceSyncDbContext> unitOfWork,
+    IMapper mapper,
+    IUserContextService userContext
+) : SimpleServiceBase, IResultService
+{
+    public async Task<PagingList<ResultDto>?> GetResultsAsync(
+        string encryptedEventId,
+        string encryptedRaceId,
+        GetResultsRequest request,
+        CancellationToken ct)
+    {
+        // Step 1: Decrypt IDs in SERVICE, not controller
+        var eventId = /* use IEncryptionService.DecryptInt */;
+        var raceId  = /* use IEncryptionService.DecryptInt */;
+
+        // Step 2: Build query with lambda only
+        var query = unitOfWork.GetRepository<Result>()
+            .GetQueryable()
+            .AsNoTracking()
+            .Where(r => r.EventId == eventId
+                     && r.RaceId == raceId
+                     && r.AuditProperties.IsActive
+                     && !r.AuditProperties.IsDeleted);
+
+        // Step 3: Apply search from SearchCriteriaBase
+        if (!string.IsNullOrEmpty(request.SearchString))
+            query = query.Where(r =>
+                r.Participant.FirstName.Contains(request.SearchString) ||
+                r.Participant.Bib.Contains(request.SearchString));
+
+        // Step 4: Count BEFORE pagination
+        var total = await query.CountAsync(ct);
+
+        // Step 5: Sort and paginate using SearchCriteriaBase fields
+        query = request.SortDirection == SortDirection.Descending
+            ? query.OrderByDescending(r => r.OverallRank)
+            : query.OrderBy(r => r.OverallRank);
+
+        var items = await query
+            .Skip((request.PageNumber - 1) * request.PageSize)
+            .Take(request.PageSize)
+            .ToListAsync(ct);
+
+        // Step 6: Map and return PagingList
+        return new PagingList<ResultDto>(mapper.Map<List<ResultDto>>(items)) { TotalCount = total };
+    }
+}
+```
+
+`SimpleServiceBase` provides:
+```csharp
+public string ErrorMessage { get; set; } = string.Empty;
+public bool HasError => !string.IsNullOrEmpty(ErrorMessage);
+```
+
+---
+
+## Controller Pattern
+
+```csharp
+// File: Runnatics/src/Runnatics.Api/Controller/ResultsController.cs
+[ApiController]
+[Route("api/[controller]")]
+[Authorize(Roles = "SuperAdmin,Admin")]
+public class ResultsController(IResultService service) : ControllerBase
+{
+    [HttpGet("{eventId}/{raceId}")]
+    [ProducesResponseType(typeof(ResponseBase<PagingList<ResultDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetResults(
+        string eventId,
+        string raceId,
+        [FromQuery] GetResultsRequest request,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            return BadRequest(new { error = "EventId and RaceId are required." });
+
+        var response = new ResponseBase<PagingList<ResultDto>>();
+        var result = await service.GetResultsAsync(eventId, raceId, request, ct);
+
+        if (service.HasError)
+        {
+            response.Error = new ResponseBase<PagingList<ResultDto>>.ErrorData
+                { Message = service.ErrorMessage };
+            return NotFound(response);
+        }
+
+        response.Message = result;
+        response.TotalCount = result?.TotalCount ?? 0;
+        return Ok(response);
+    }
+}
+```
+
+---
+
+## Request/Response DTO Pattern
+
+```csharp
+// Search request — ALWAYS inherit SearchCriteriaBase
+// File: Runnatics/src/Runnatics.Models.Client/Requests/GetResultsRequest.cs
+public class GetResultsRequest : SearchCriteriaBase
+{
+    // SearchCriteriaBase already provides:
+    // PageNumber, PageSize (default 100), SearchString, SortFieldName, SortDirection
+    public string? Gender { get; set; }
+    public string? Category { get; set; }
+    public string RankBy { get; set; } = "Overall";
+}
+
+// Response DTO — encrypted IDs as strings
+// File: Runnatics/src/Runnatics.Models.Client/Responses/ResultDto.cs
+public class ResultDto
+{
+    public string Id { get; set; } = string.Empty;           // encrypted int
+    public string ParticipantId { get; set; } = string.Empty; // encrypted int
+    public string Bib { get; set; } = string.Empty;
+    public string FullName { get; set; } = string.Empty;
+    public string? ChipTime { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public int? OverallRank { get; set; }
+}
+```
+
+---
+
+## AutoMapper Profile
+
+Add ALL mappings to the existing `AutoMapperMappingProfile.cs` — NEVER create new profiles:
 
 ```csharp
 // In AutoMapperMappingProfile (Runnatics.Services/Mappings/AutoMapperMappingProfile.cs)
-CreateMap<YourEntity, YourEntityResponse>()
-    .ForMember(dest => dest.Id, opt => opt.ConvertUsing(new IdEncryptor(), src => src.Id))
-    .ForMember(dest => dest.EventId, opt => opt.ConvertUsing(new IdEncryptor(), src => src.EventId));
-
-CreateMap<YourEntityRequest, YourEntity>()
-    .ForMember(dest => dest.Id, opt => opt.ConvertUsing(new IdDecryptor(), src => src.Id))
-    .ForMember(dest => dest.EventId, opt => opt.ConvertUsing(new IdDecryptor(), src => src.EventId));
+CreateMap<Result, ResultDto>()
+    .ForMember(d => d.Id, opt => opt.ConvertUsing(new IdEncryptor(), s => s.Id))
+    .ForMember(d => d.ParticipantId, opt => opt.ConvertUsing(new IdEncryptor(), s => s.ParticipantId))
+    .ForMember(d => d.FullName, opt => opt.MapFrom(s =>
+        $"{s.Participant.FirstName} {s.Participant.LastName}".Trim()))
+    .ForMember(d => d.ChipTime, opt => opt.MapFrom(s =>
+        s.TotalTime.HasValue ? s.TotalTime.Value.ToString(@"hh\:mm\:ss") : null));
 ```
 
-Available converters (in `Runnatics.Services/Mappings/`):
+Available converters:
 - `IdEncryptor` — `int` → encrypted `string`
 - `IdDecryptor` — encrypted `string` → `int`
 - `IdListEncryptor` — `List<int>` → `List<string>`
@@ -50,191 +222,62 @@ Available converters (in `Runnatics.Services/Mappings/`):
 - `NullableIdEncryptor` — `int?` → `string?`
 - `NullableIdDecryptor` — `string?` → `int?`
 
-### 2. Service Base Pattern
-All services inherit from `ServiceBase<T>` or `SimpleServiceBase`:
+---
+
+## UoW Transaction Pattern
 
 ```csharp
-// File: Runnatics/src/Runnatics.Services/YourEntityService.cs
-using Runnatics.Data.EF;
-using Runnatics.Repositories.Interface;
+// Single save
+await unitOfWork.SaveChangesAsync(ct);
 
-namespace Runnatics.Services;
-
-public class YourEntityService(
-    IUnitOfWork<RaceSyncDbContext> unitOfWork,
-    IMapper mapper,
-    IUserContextService userContext
-) : SimpleServiceBase, IYourEntityService
+// Multiple operations — use transaction
+await unitOfWork.BeginTransactionAsync(ct);
+try
 {
-    private readonly IUnitOfWork<RaceSyncDbContext> _unitOfWork = unitOfWork;
-    private readonly IMapper _mapper = mapper;
-    private readonly IUserContextService _userContext = userContext;
-
-    public async Task<YourEntityResponse> GetByIdAsync(string encryptedId)
-    {
-        var repo = _unitOfWork.GetRepository<YourEntity>();
-        _unitOfWork.SetTenantId(_userContext.TenantId);
-
-        var entity = await repo.GetByIdAsync(/* decrypt id */);
-        return _mapper.Map<YourEntityResponse>(entity);
-    }
+    await unitOfWork.GetRepository<Result>().AddAsync(result, ct);
+    await unitOfWork.GetRepository<Participant>().UpdateAsync(participant, ct);
+    await unitOfWork.SaveChangesAsync(ct);
+    await unitOfWork.CommitAsync(ct);
+}
+catch
+{
+    await unitOfWork.RollbackAsync(ct);
+    ErrorMessage = "Failed to save. Changes rolled back.";
 }
 ```
 
-The `SimpleServiceBase` provides:
+---
+
+## Soft Delete Pattern
+
 ```csharp
-public string ErrorMessage { get; set; } = string.Empty;
-public bool HasError => !string.IsNullOrEmpty(ErrorMessage);
+// NEVER hard delete — always soft delete
+entity.AuditProperties.IsDeleted = true;
+entity.AuditProperties.IsActive = false;
+entity.AuditProperties.UpdatedDate = DateTime.UtcNow;
+entity.AuditProperties.UpdatedBy = userContext.UserId;
+await unitOfWork.GetRepository<T>().UpdateAsync(entity, ct);
+await unitOfWork.SaveChangesAsync(ct);
 ```
 
-### 3. Controller Pattern
-Controllers use primary constructors and `ResponseBase<T>`:
+---
+
+## UserContextService — JWT Claims
 
 ```csharp
-// File: Runnatics/src/Runnatics.Api/Controller/YourEntityController.cs
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-
-namespace Runnatics.Api.Controller;
-
-[ApiController]
-[Route("api/[controller]")]
-[Authorize(Roles = "SuperAdmin,Admin")]
-public class YourEntityController(IYourEntityService service) : ControllerBase
-{
-    private readonly IYourEntityService _service = service;
-
-    [HttpGet]
-    [ProducesResponseType(typeof(ResponseBase<PagingList<YourEntityResponse>>), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<IActionResult> Search([FromQuery] YourEntitySearchRequest request)
-    {
-        var response = new ResponseBase<PagingList<YourEntityResponse>>();
-        var result = await _service.SearchAsync(request);
-
-        if (_service.HasError)
-        {
-            response.Error = new ResponseBase<PagingList<YourEntityResponse>>.ErrorData
-            {
-                Message = _service.ErrorMessage
-            };
-            return StatusCode((int)HttpStatusCode.InternalServerError, response);
-        }
-
-        response.Message = result;
-        response.TotalCount = result.TotalCount;
-        return Ok(response);
-    }
-
-    [HttpGet("{id}")]
-    public async Task<IActionResult> GetById(string id)
-    {
-        var response = new ResponseBase<YourEntityResponse>();
-        var result = await _service.GetByIdAsync(id);
-
-        if (_service.HasError)
-        {
-            response.Error = new ResponseBase<YourEntityResponse>.ErrorData
-            {
-                Message = _service.ErrorMessage
-            };
-            return StatusCode((int)HttpStatusCode.InternalServerError, response);
-        }
-
-        response.Message = result;
-        return Ok(response);
-    }
-
-    [HttpPost]
-    public async Task<IActionResult> Create([FromBody] YourEntityRequest request)
-    {
-        if (!ModelState.IsValid)
-        {
-            return BadRequest(new
-            {
-                error = "Validation failed",
-                details = ModelState.Values
-                    .SelectMany(v => v.Errors)
-                    .Select(e => e.ErrorMessage)
-                    .ToList()
-            });
-        }
-
-        var response = new ResponseBase<YourEntityResponse>();
-        var result = await _service.CreateAsync(request);
-
-        if (_service.HasError)
-        {
-            response.Error = new ResponseBase<YourEntityResponse>.ErrorData
-            {
-                Message = _service.ErrorMessage
-            };
-            return StatusCode((int)HttpStatusCode.InternalServerError, response);
-        }
-
-        response.Message = result;
-        return CreatedAtAction(nameof(GetById), new { id = result.Id }, response);
-    }
-}
+userContext.UserId          // int — from "sub" claim
+userContext.TenantId        // int — from "tenantId" claim
+userContext.Email           // string
+userContext.Role            // string
+userContext.IsAuthenticated // bool
 ```
 
-### 4. Request/Response DTO Pattern
+---
+
+## SignalR — RaceHub
 
 ```csharp
-// File: Runnatics/src/Runnatics.Models.Client/Requests/YourEntityRequest.cs
-namespace Runnatics.Models.Client.Requests;
-
-public class YourEntityRequest
-{
-    [Required]
-    [MaxLength(200)]
-    public string Name { get; set; } = string.Empty;
-
-    // FK references use encrypted string IDs
-    [Required]
-    public string EventId { get; set; } = string.Empty;
-}
-
-// File: Runnatics/src/Runnatics.Models.Client/Responses/YourEntityResponse.cs
-namespace Runnatics.Models.Client.Responses;
-
-public class YourEntityResponse
-{
-    public string Id { get; set; } = string.Empty;           // Encrypted
-    public string EventId { get; set; } = string.Empty;      // Encrypted
-    public string Name { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
-    public DateTime CreatedAt { get; set; }
-}
-```
-
-### 5. DI Registration in Program.cs
-Register services in `Runnatics/src/Runnatics.Api/Program.cs`:
-
-```csharp
-builder.Services.AddScoped<IYourEntityService, YourEntityService>();
-```
-
-### 6. UserContextService — JWT Claims Access
-Use `IUserContextService` to get the current user:
-
-```csharp
-// Properties available:
-_userContext.UserId     // int — from "sub" claim
-_userContext.TenantId   // int — from "tenantId" claim
-_userContext.Email      // string — from "email" claim
-_userContext.Role       // string — from "role" claim
-_userContext.FullName   // string — from name claims
-_userContext.IsAuthenticated // bool
-```
-
-### 7. SignalR — RaceHub
-The `RaceHub` at `/hubs/race` supports these groups:
-- `race-{raceId}` — live race updates
-- `device-monitor` — reader status updates
-
-To send from a service, inject `IHubContext<RaceHub>`:
-```csharp
+// Inject IHubContext<RaceHub> to push from service
 await _raceHub.Clients.Group($"race-{raceId}")
     .SendAsync("ReceiveLiveCrossing", raceId, crossingData);
 ```
@@ -243,39 +286,32 @@ await _raceHub.Clients.Group($"race-{raceId}")
 
 ## Existing Services (Reference)
 
-| Interface | Implementation | Location |
-|-----------|---------------|----------|
-| `IAuthenticationService` | `AuthenticationService` | Services/ |
-| `IEventsService` | `EventsService` | Services/ |
-| `IRacesService` | `RaceService` | Services/ |
-| `IParticipantImportService` | `ParticipantImportService` | Services/ |
-| `ICheckpointsService` | `CheckpointService` | Services/ |
-| `IDevicesService` | `DevicesService` | Services/ |
-| `IRFIDImportService` | `RFIDImportService` | Services/ |
-| `IResultsService` | `ResultsService` | Services/ |
-| `IDashboardService` | `DashboardService` | Services/ |
-| `ICertificatesService` | `CertificatesService` | Services/ |
-| `IEventOrganizerService` | `EventOrganizerService` | Services/ |
-| `IUserContextService` | `UserContextService` | Services/ |
-| `IEncryptionService` | `EncryptionService` | Services/ |
+`IAuthenticationService`, `IEventsService`, `IRacesService`, `IParticipantImportService`,
+`ICheckpointsService`, `IDevicesService`, `IRFIDImportService`, `IResultsService`,
+`IDashboardService`, `ICertificatesService`, `IEventOrganizerService`,
+`IUserContextService`, `IEncryptionService`
 
 ## Existing Controllers (Reference)
 
-`AuthenticationController`, `EventsController`, `ParticipantsController`, `RacesController`, `CheckpointsController`, `DevicesController`, `RFIDController`, `RfidWebhookController`, `ResultsController`, `DashboardController`, `CertificatesController`, `EvenOrganizerController`, `RaceControlController`
+`AuthenticationController`, `EventsController`, `ParticipantsController`, `RacesController`,
+`CheckpointsController`, `DevicesController`, `RFIDController`, `RfidWebhookController`,
+`ResultsController`, `DashboardController`, `CertificatesController`,
+`EvenOrganizerController`, `RaceControlController`
 
 ---
 
-## Checklist — When Building a New Feature (Backend)
+## Checklist — New Feature (Backend)
 
-1. [ ] Read `.claude/CONTEXT.md` — check what ef-core-agent already built
-2. [ ] Create service interface in `Runnatics.Services.Interface/`
-3. [ ] Create service implementation in `Runnatics.Services/` inheriting `SimpleServiceBase`
-4. [ ] Create Request DTO in `Runnatics.Models.Client/Requests/`
-5. [ ] Create Response DTO in `Runnatics.Models.Client/Responses/` (IDs as encrypted strings)
-6. [ ] Add AutoMapper mappings in `AutoMapperMappingProfile.cs` with `IdEncryptor`/`IdDecryptor`
-7. [ ] Create controller in `Runnatics.Api/Controller/` with `ResponseBase<T>` wrapping
-8. [ ] Register service in `Program.cs`
-9. [ ] Update `.claude/CONTEXT.md`
+1. [ ] Read `.claude/CONTEXT.md`
+2. [ ] Search existing services — don't duplicate
+3. [ ] Create service interface in `Runnatics.Services.Interface/`
+4. [ ] Create service in `Runnatics.Services/` inheriting `SimpleServiceBase`
+5. [ ] Create Request DTO inheriting `SearchCriteriaBase` (if search)
+6. [ ] Create Response DTO with encrypted string IDs
+7. [ ] Add mappings to existing `AutoMapperMappingProfile.cs`
+8. [ ] Create controller — thin, `ResponseBase<T>` wrapped
+9. [ ] Register service in `Program.cs`
+10. [ ] Write `.claude/CONTEXT.md`
 
 ---
 
@@ -285,4 +321,4 @@ await _raceHub.Clients.Group($"race-{raceId}")
 WRITE to .claude/CONTEXT.md
 ```
 
-Document: service name, controller route, DTO names, mapper mappings added, DI registration, and what is pending.
+Document: service name, controller route, DTO names, mapper mappings, DI registration, what is pending.

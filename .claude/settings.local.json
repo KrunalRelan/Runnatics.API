@@ -8,7 +8,9 @@
       "Bash(dotnet run:*)",
       "Bash(echo:*)",
       "Bash(dotnet restore:*)",
-      "Bash(dotnet build:*)"
+      "Bash(dotnet build:*)",
+      "Bash(xargs grep *)",
+      "Bash(taskkill /F /IM \"Runnatics.Api.exe\")"
     ]
   }
 }

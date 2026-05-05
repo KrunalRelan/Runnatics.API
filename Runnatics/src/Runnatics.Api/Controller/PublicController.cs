@@ -23,11 +23,11 @@ namespace Runnatics.Api.Controller
     [EnableCors("PublicSite")]
     public class PublicController(
         IEventsService eventsService,
-        IResultsService resultsService,
+        IPublicResultsService publicResultsService,
         ISupportQueryService supportQueryService) : ControllerBase
     {
         private readonly IEventsService _eventsService = eventsService;
-        private readonly IResultsService _resultsService = resultsService;
+        private readonly IPublicResultsService _resultsService = publicResultsService;
         private readonly ISupportQueryService _supportQueryService = supportQueryService;
 
         #region Events
@@ -261,6 +261,60 @@ namespace Runnatics.Api.Controller
                 return NotFound(CreateErrorResponse<PublicResultDto>($"No result found for bib '{bib}'."));
 
             return Ok(new ResponseBase<PublicResultDto> { Message = MapToResultDto(match) });
+        }
+
+        /// <summary>
+        /// Returns finishers grouped by gender and age category for the public leaderboard.
+        /// Supports optional search, gender filter, category filter, and showAll flag.
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/leaderboard")]
+        [EnableRateLimiting("PublicRead")]
+        [ProducesResponseType(typeof(ResponseBase<PublicGroupedLeaderboardDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetGroupedLeaderboard(
+            string eventId, string raceId,
+            [FromQuery] string? search = null,
+            [FromQuery] string? gender = null,
+            [FromQuery] string? category = null,
+            [FromQuery] bool showAll = false,
+            CancellationToken cancellationToken = default)
+        {
+            var dto = await _resultsService.GetPublicGroupedLeaderboardAsync(
+                eventId, raceId, search, gender, category, showAll, cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<PublicGroupedLeaderboardDto>(_resultsService.ErrorMessage));
+
+            if (dto == null)
+                return NotFound(CreateErrorResponse<PublicGroupedLeaderboardDto>("Event or race not found."));
+
+            return Ok(new ResponseBase<PublicGroupedLeaderboardDto> { Message = dto });
+        }
+
+        /// <summary>
+        /// Returns full result details for a single participant by encrypted participant ID.
+        /// </summary>
+        [HttpGet("participant/{participantId}")]
+        [EnableRateLimiting("PublicRead")]
+        [ProducesResponseType(typeof(ResponseBase<PublicParticipantDetailDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetParticipantDetail(
+            string participantId,
+            CancellationToken cancellationToken = default)
+        {
+            var dto = await _resultsService.GetPublicParticipantDetailAsync(participantId, cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<PublicParticipantDetailDto>(_resultsService.ErrorMessage));
+
+            if (dto == null)
+                return NotFound(CreateErrorResponse<PublicParticipantDetailDto>("Participant not found."));
+
+            return Ok(new ResponseBase<PublicParticipantDetailDto> { Message = dto });
         }
 
         #endregion

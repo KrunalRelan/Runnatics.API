@@ -1,10 +1,7 @@
-using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
 using Runnatics.Models.Client.Responses.RFID;
-using Runnatics.Models.Data.Entities;
-using DataResultsPagingList = Runnatics.Models.Data.Common.PagingList<Runnatics.Models.Data.Entities.Results>;
 
 namespace Runnatics.Services.Interface
 {
@@ -40,28 +37,6 @@ namespace Runnatics.Services.Interface
             string eventId,
             string raceId,
             string participantId);
-
-        /// <summary>
-        /// Returns paged, filterable results for a public event page.
-        /// Includes Participant, Race, and SplitTimes → ToCheckpoint nav properties.
-        /// No tenant filter — all active, non-deleted results for the event.
-        /// </summary>
-        Task<DataResultsPagingList> GetPublicResultsAsync(
-            int eventId,
-            string? raceName,
-            string? searchQuery,
-            string? gender,
-            int page,
-            int pageSize);
-
-        /// <summary>
-        /// Returns effective leaderboard display settings for a race on the public site.
-        /// Race-level settings are returned when OverrideSettings=true, otherwise event-level.
-        /// Returns defaults (all-true/sensible values) when no settings row exists.
-        /// </summary>
-        Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
-            int eventId,
-            int? raceId);
 
         /// <summary>
         /// Records a manual finish time for a participant, then recalculates rankings for

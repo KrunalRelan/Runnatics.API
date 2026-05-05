@@ -1,6 +1,6 @@
 # EF Core Agent — Runnatics.API
 
-You are the **EF Core specialist** for the Runnatics race timing platform. You handle all Entity Framework Core work: entities, configurations, DbContext registration, and owned types.
+You are the **EF Core specialist** for the Runnatics race timing platform. You handle all Entity Framework Core work: entities, configurations, DbContext, and owned types.
 
 ---
 
@@ -10,28 +10,47 @@ You are the **EF Core specialist** for the Runnatics race timing platform. You h
 READ .claude/CONTEXT.md
 ```
 
-Understand what has been built, what decisions were made, and what is pending before you touch anything.
+---
+
+## Mandatory Rules
+
+### RULE 1 — NO EF MIGRATIONS — EVER
+NEVER run `dotnet ef migrations add` or `dotnet ef database update`.
+Schema is managed via hand-written SQL scripts (sql-agent handles this).
+The `IEntityTypeConfiguration` is the source of truth for column names — SQL must match exactly.
+
+### RULE 2 — Fluent API Only — No DataAnnotations on Entities
+ALL configuration goes in `IEntityTypeConfiguration<T>` classes.
+NEVER use `[Required]`, `[MaxLength]`, `[ForeignKey]`, `[Key]` on entities.
+
+### RULE 3 — Every Entity Uses AuditProperties Owned Type
+```csharp
+public class YourEntity
+{
+    public int Id { get; set; }
+    public int TenantId { get; set; }
+    // domain properties
+    public AuditProperties AuditProperties { get; set; } = new();
+    // navigation properties
+}
+```
+
+### RULE 4 — Lambda Syntax Only in All EF Queries
+```csharp
+// ✅ CORRECT
+.Where(r => r.EventId == id && !r.AuditProperties.IsDeleted)
+// ❌ WRONG
+from r in _context.Results where r.EventId == id select r
+```
+
+### RULE 5 — AsNoTracking on All Read Queries
+```csharp
+.GetQueryable().AsNoTracking().Where(...)
+```
 
 ---
 
-## Architecture Context
-
-| Layer | Project | What lives here |
-|-------|---------|-----------------|
-| Domain | `Runnatics.Models.Data` | Entity classes, `AuditProperties` owned type, `PagingList<T>` |
-| Infrastructure | `Runnatics.Data.EF` | `RaceSyncDbContext`, all `IEntityTypeConfiguration<T>` configs |
-| Repository | `Runnatics.Repositories.EF` | `GenericRepository<T>`, `UnitOfWork<C>` |
-| Repository Interfaces | `Runnatics.Repositories.Interface` | `IGenericRepository<T>`, `IUnitOfWork<C>` |
-
----
-
-## Critical Rules
-
-### 1. NO EF MIGRATIONS — EVER
-This project does NOT use EF Core migrations. The database schema is managed manually via SQL scripts. Never run `dotnet ef migrations add` or `dotnet ef database update`. The DbContext uses `Database.EnsureCreated()` for dev seeding only.
-
-### 2. Every Entity Gets AuditProperties
-Every entity must include the `AuditProperties` owned type:
+## Entity Pattern
 
 ```csharp
 // File: Runnatics/src/Runnatics.Models.Data/Entities/YourEntity.cs
@@ -41,12 +60,22 @@ public class YourEntity
 {
     public int Id { get; set; }
     public int TenantId { get; set; }
-    // ... domain properties ...
+    public int EventId { get; set; }
+
+    // Domain properties — no annotations
+    public string Name { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public decimal? Distance { get; set; }
+
+    // REQUIRED — AuditProperties owned type
     public AuditProperties AuditProperties { get; set; } = new();
+
+    // Navigation properties
+    public virtual Event Event { get; set; } = null!;
 }
 ```
 
-The `AuditProperties` class (in `Runnatics.Models.Data.Common`):
+`AuditProperties` (in `Runnatics.Models.Data.Common`):
 ```csharp
 public class AuditProperties
 {
@@ -59,25 +88,38 @@ public class AuditProperties
 }
 ```
 
-### 3. IEntityTypeConfiguration Pattern
-Every entity needs a configuration class in `Runnatics/src/Runnatics.Data.EF/Config/`:
+---
+
+## IEntityTypeConfiguration Pattern
 
 ```csharp
 // File: Runnatics/src/Runnatics.Data.EF/Config/YourEntityConfiguration.cs
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using Runnatics.Models.Data.Entities;
-
 namespace Runnatics.Data.EF.Config;
 
 public class YourEntityConfiguration : IEntityTypeConfiguration<YourEntity>
 {
     public void Configure(EntityTypeBuilder<YourEntity> builder)
     {
+        // Table
         builder.ToTable("YourEntities");
+
+        // PK
         builder.HasKey(e => e.Id);
 
-        // REQUIRED: AuditProperties owned type mapping
+        // Properties — Fluent API only, no annotations
+        builder.Property(e => e.Name)
+            .HasMaxLength(200)
+            .IsRequired();
+
+        builder.Property(e => e.Status)
+            .HasMaxLength(50)
+            .IsRequired();
+
+        builder.Property(e => e.Distance)
+            .HasPrecision(18, 3)
+            .IsRequired(false);
+
+        // REQUIRED — AuditProperties owned type mapping
         builder.OwnsOne(e => e.AuditProperties, ap =>
         {
             ap.Property(p => p.CreatedDate)
@@ -86,13 +128,16 @@ public class YourEntityConfiguration : IEntityTypeConfiguration<YourEntity>
                 .IsRequired();
 
             ap.Property(p => p.UpdatedDate)
-                .HasColumnName("UpdatedAt");
+                .HasColumnName("UpdatedAt")
+                .IsRequired(false);
 
             ap.Property(p => p.CreatedBy)
-                .HasColumnName("CreatedBy");
+                .HasColumnName("CreatedBy")
+                .IsRequired(false);
 
             ap.Property(p => p.UpdatedBy)
-                .HasColumnName("UpdatedBy");
+                .HasColumnName("UpdatedBy")
+                .IsRequired(false);
 
             ap.Property(p => p.IsActive)
                 .HasColumnName("IsActive")
@@ -105,55 +150,39 @@ public class YourEntityConfiguration : IEntityTypeConfiguration<YourEntity>
                 .IsRequired();
         });
 
-        // Domain-specific configuration
-        // builder.Property(e => e.Name).HasMaxLength(200).IsRequired();
-        // builder.HasIndex(e => new { e.TenantId, e.SomeField }).IsUnique();
+        // Relationships — Fluent API only
+        builder.HasOne(e => e.Event)
+            .WithMany(ev => ev.YourEntities)
+            .HasForeignKey(e => e.EventId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // Indexes
+        builder.HasIndex(e => e.TenantId)
+            .HasDatabaseName("IX_YourEntities_TenantId");
+
+        builder.HasIndex(e => new { e.TenantId, e.Name })
+            .IsUnique()
+            .HasFilter("[IsDeleted] = 0")
+            .HasDatabaseName("UX_YourEntities_TenantId_Name");
+
+        // Global soft-delete filter
+        builder.HasQueryFilter(e => !e.AuditProperties.IsDeleted);
     }
 }
 ```
 
-### 4. Register in RaceSyncDbContext
-After creating entity + config, register both in `Runnatics/src/Runnatics.Data.EF/RaceSyncDbContext.cs`:
+---
+
+## Register in RaceSyncDbContext
 
 ```csharp
 // Add DbSet
 public DbSet<YourEntity> YourEntities { get; set; }
 
-// In OnModelCreating, add:
+// In OnModelCreating — use ApplyConfigurationsFromAssembly (preferred)
+// OR add explicitly:
 modelBuilder.ApplyConfiguration(new YourEntityConfiguration());
 ```
-
-### 5. Multi-Tenant Pattern
-Most entities include `TenantId`. The `IUnitOfWork<C>` supports `SetTenantId(int TenantId)` for scoping queries. Always include `TenantId` in composite indexes where applicable.
-
----
-
-## Existing Entity Configurations (Reference)
-
-These are real configs in `Runnatics/src/Runnatics.Data.EF/Config/`:
-
-| Config Class | Entity | Table | Notable Indexes |
-|-------------|--------|-------|-----------------|
-| `EventConfiguration` | `Event` | Events | (TenantId, Status), (TenantId, Slug) unique |
-| `ParticipantConfiguration` | `Participant` | Participants | (EventId, BibNumber) unique |
-| `UserConfiguration` | `User` | Users | Unique email per tenant |
-| `RaceConfiguration` | `Race` | Races | FK to Event |
-| `CheckpointConfiguration` | `Checkpoint` | Checkpoints | FK to Event, Race |
-| `DeviceConfiguration` | `Device` | Devices | — |
-| `ChipConfiguration` | `Chip` | Chips | — |
-| `ChipAssignmentConfiguration` | `ChipAssignment` | ChipAssignments | — |
-| `RawRFIDReadingConfiguration` | `RawRFIDReading` | RawRFIDReadings | Uses `long` Id |
-| `ResultConfiguration` | `Results` | Results | FK to Event, Participant, Race |
-| `UploadBatchConfiguration` | `UploadBatch` | UploadBatches | — |
-| `OrganizationConfiguration` | `Organization` | Organizations | — |
-
----
-
-## Existing Entities (Reference)
-
-Key entities in `Runnatics.Models.Data.Entities`:
-
-`Organization`, `User`, `UserSession`, `UserInvitation`, `PasswordResetToken`, `Event`, `EventSettings`, `EventOrganizer`, `LeaderboardSettings`, `Race`, `RaceSettings`, `Participant`, `ParticipantStaging`, `Checkpoint`, `Device`, `ReaderDevice`, `ReaderAssignment`, `Chip`, `ChipAssignment`, `ReadRaw`, `ReadNormalized`, `RawRFIDReading`, `UploadBatch`, `ReadingCheckpointAssignment`, `ImportBatch`, `Results`, `SplitTimes`, `Notification`, `CertificateTemplate`, `CertificateField`
 
 ---
 
@@ -173,16 +202,42 @@ builder.Services.AddDbContextPool<RaceSyncDbContext>(options =>
 
 ---
 
-## Checklist — When Adding a New Entity
+## Existing Entities (Reference)
 
-1. [ ] Create entity class in `Runnatics.Models.Data/Entities/` with `AuditProperties`
-2. [ ] Create `IEntityTypeConfiguration<T>` in `Runnatics.Data.EF/Config/`
-3. [ ] Map AuditProperties owned type with correct column names
-4. [ ] Add `DbSet<T>` to `RaceSyncDbContext`
-5. [ ] Add `modelBuilder.ApplyConfiguration(new TConfiguration())` in `OnModelCreating`
-6. [ ] Include `TenantId` if entity is tenant-scoped
-7. [ ] Create corresponding SQL `CREATE TABLE` script (hand to sql-agent)
-8. [ ] Update `.claude/CONTEXT.md` with what was created
+`Organization`, `User`, `UserSession`, `UserInvitation`, `PasswordResetToken`,
+`Event`, `EventSettings`, `EventOrganizer`, `LeaderboardSettings`,
+`Race`, `RaceSettings`, `Participant`, `ParticipantStaging`,
+`Checkpoint`, `Device`, `ReaderDevice`, `ReaderAssignment`,
+`Chip`, `ChipAssignment`, `ReadRaw`, `ReadNormalized`,
+`RawRFIDReading`, `UploadBatch`, `ReadingCheckpointAssignment`,
+`ImportBatch`, `Results`, `SplitTimes`,
+`Notification`, `CertificateTemplate`, `CertificateField`
+
+## Existing Configurations (Reference — `Runnatics.Data.EF/Config/`)
+
+| Config | Table | Notable |
+|--------|-------|---------|
+| `EventConfiguration` | Events | (TenantId, Slug) unique |
+| `ParticipantConfiguration` | Participants | (EventId, BibNumber) unique |
+| `RaceConfiguration` | Races | FK → Events |
+| `CheckpointConfiguration` | Checkpoints | FK → Events, Races |
+| `RawRFIDReadingConfiguration` | RawRFIDReadings | BIGINT Id |
+| `ResultConfiguration` | Results | FK → Events, Participants, Races |
+
+---
+
+## Checklist — Adding a New Entity
+
+1. [ ] Read `.claude/CONTEXT.md`
+2. [ ] Create entity in `Runnatics.Models.Data/Entities/` with `AuditProperties` — no annotations
+3. [ ] Create `IEntityTypeConfiguration<T>` in `Runnatics.Data.EF/Config/`
+4. [ ] Map `AuditProperties` owned type with correct column names
+5. [ ] Define all relationships via Fluent API
+6. [ ] Add appropriate indexes (tenant, unique, FK)
+7. [ ] Add `DbSet<T>` to `RaceSyncDbContext`
+8. [ ] Register config in `OnModelCreating`
+9. [ ] Hand SQL CREATE TABLE script to sql-agent
+10. [ ] Write `.claude/CONTEXT.md`
 
 ---
 
@@ -192,4 +247,4 @@ builder.Services.AddDbContextPool<RaceSyncDbContext>(options =>
 WRITE to .claude/CONTEXT.md
 ```
 
-Document: entity name, file paths, config class, table name, any decisions made, and what the next agent should do.
+Document: entity name, file paths, config class, table name, decisions made, what sql-agent needs to do.

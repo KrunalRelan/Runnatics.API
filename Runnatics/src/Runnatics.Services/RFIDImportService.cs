@@ -3748,13 +3748,40 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 // FIX #2: Resolve by BOTH Device.DeviceId (MAC) and Device.Name (friendly name)
+                // FIX #9: Also register short MAC suffix variants so batch serials like "ebf3"
+                //         (last 4 of MAC "00162511ebf3") resolve correctly.
+                //         Priority: full MAC > last-6 suffix > last-4 suffix > name variants.
+                //         Short suffixes use TryAdd so the first (most-specific) registration wins
+                //         if two devices share the same suffix.
                 var deviceLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 foreach (var device in devices)
                 {
                     if (!string.IsNullOrEmpty(device.DeviceMacAddress))
-                        deviceLookup[device.DeviceMacAddress] = device.Id;    // MAC: "0016251292a1" → 12
+                    {
+                        var mac = device.DeviceMacAddress;
+                        deviceLookup[mac] = device.Id;                          // full: "00162511ebf3"
+
+                        // Strip colon/hyphen separators: "00:16:25:11:eb:f3" → "00162511ebf3"
+                        var macStripped = mac.Replace(":", "").Replace("-", "");
+                        if (macStripped.Length != mac.Length)
+                            deviceLookup[macStripped] = device.Id;
+
+                        // Last-6 suffix: "11ebf3" — use TryAdd to avoid overwriting a full-MAC match
+                        if (macStripped.Length >= 6)
+                            deviceLookup.TryAdd(macStripped[^6..], device.Id);
+
+                        // Last-4 suffix: "ebf3" — common format stored in UploadBatches.DeviceId
+                        if (macStripped.Length >= 4)
+                            deviceLookup.TryAdd(macStripped[^4..], device.Id);
+                    }
                     if (!string.IsNullOrEmpty(device.Name))
-                        deviceLookup[device.Name] = device.Id;         // Name: "Box 16" → 12
+                    {
+                        deviceLookup[device.Name] = device.Id;                  // "Box 16" → 12
+                        // Also register name without spaces: "Box16" → 12
+                        var nameNoSpace = device.Name.Replace(" ", "");
+                        if (nameNoSpace.Length != device.Name.Length)
+                            deviceLookup.TryAdd(nameNoSpace, device.Id);
+                    }
                 }
 
                 // 1c. Checkpoints
@@ -3880,11 +3907,14 @@ namespace Runnatics.Services
                 }
 
                 // ================================================================
-                // 1f. Load ALL readings (Success status) across all batches
+                // 1f. Load ALL readings (Success OR Pending) across all batches
                 //     FIX #4: Filter readings after race start time
+                //     FIX #10: Include Pending readings — Phase 1 skips shared-device
+                //     batches (2 checkpoints → deferred), leaving them as Pending.
+                //     Phase 1.5 must pick them up here or they are never assigned.
                 // ================================================================
                 var allReadings = await readingRepo.GetQuery(r =>
-                    r.ProcessResult == "Success" &&
+                    (r.ProcessResult == "Success" || r.ProcessResult == "Pending") &&
                     batchIds.Contains(r.BatchId) &&
                     r.ReadTimeUtc >= raceStartTime &&  // FIX #4: Only readings after race starts
                     r.AuditProperties.IsActive &&
@@ -3893,7 +3923,7 @@ namespace Runnatics.Services
 
                 _logger.LogInformation(
                     "Step 1: Loaded {Checkpoints} checkpoints, {Devices} devices, " +
-                    "{Participants} EPC mappings, {Readings} valid readings (after race start)",
+                    "{Participants} EPC mappings, {Readings} readings (Success+Pending, after race start)",
                     checkpoints.Count, devices.Count, epcToParticipant.Count, allReadings.Count);
 
                 if (allReadings.Count == 0)
@@ -3963,6 +3993,16 @@ namespace Runnatics.Services
                     if (deviceId == 0)
                     {
                         unresolvedDevices++;
+                        // Log the first 3 failures so the exact serial mismatch is visible in logs
+                        if (unresolvedDevices <= 3)
+                        {
+                            _logger.LogWarning(
+                                "FIX #9: Device resolution failed — BatchId: {BatchId}, " +
+                                "DeviceSerial from batch: '{Serial}', r.DeviceId: '{RDeviceId}'. " +
+                                "Sample deviceLookup keys: [{Keys}]",
+                                r.BatchId, deviceSerial ?? "(null)", r.DeviceId ?? "(null)",
+                                string.Join(", ", deviceLookup.Keys.Take(10)));
+                        }
                         continue;
                     }
 

@@ -16,5 +16,12 @@ namespace Runnatics.Models.Client.Requests.Results
         public string? Category { get; set; }
 
         public bool IncludeSplits { get; set; } = false;
+
+        /// <summary>
+        /// When true, bypasses the ShowLeaderboard and Published visibility gates.
+        /// Set by admin-only callers (e.g. Excel export) that must see results
+        /// regardless of public-facing visibility settings.
+        /// </summary>
+        public bool SkipPublishGates { get; set; } = false;
     }
 }

@@ -462,17 +462,20 @@ namespace Runnatics.Services
                     !ls.AuditProperties.IsDeleted)
                     .FirstOrDefaultAsync();
 
-                // Check if leaderboard is allowed
-                if (raceSettings != null && !raceSettings.ShowLeaderboard)
+                // Check if leaderboard is allowed — skipped for admin export callers
+                if (!request.SkipPublishGates)
                 {
-                    ErrorMessage = "Leaderboard is not enabled for this race";
-                    return new LeaderboardResponse();
-                }
+                    if (raceSettings != null && !raceSettings.ShowLeaderboard)
+                    {
+                        ErrorMessage = "Leaderboard is not enabled for this race";
+                        return new LeaderboardResponse();
+                    }
 
-                if (eventSettings != null && !eventSettings.Published)
-                {
-                    ErrorMessage = "Event results are not published yet";
-                    return new LeaderboardResponse();
+                    if (eventSettings != null && !eventSettings.Published)
+                    {
+                        ErrorMessage = "Event results are not published yet";
+                        return new LeaderboardResponse();
+                    }
                 }
 
                 // Validate requested RankBy against allowed views

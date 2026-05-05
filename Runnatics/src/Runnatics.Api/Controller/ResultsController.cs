@@ -377,6 +377,7 @@ namespace Runnatics.Api.Controller
                 PageNumber = 1,
                 PageSize = 10000,
                 IncludeSplits = true,
+                SkipPublishGates = true,  // admin export must see results regardless of publish state
             };
 
             var result = await _exportService.ExportResultsExcelAsync(request, cancellationToken);

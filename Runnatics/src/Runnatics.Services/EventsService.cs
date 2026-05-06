@@ -6,6 +6,7 @@ using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Events;
+using Runnatics.Models.Client.Requests.Public;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
@@ -898,16 +899,16 @@ namespace Runnatics.Services
         private const int MaxPublicPageSize = 100;
 
         public async Task<PublicPagedResultDto<PublicEventSummaryDto>> GetPublicEventsAsync(
-            string? status, string? city, string? searchQuery, int page, int pageSize,
-            int? take = null, int? year = null)
+            GetPublicEventsRequest request, CancellationToken ct = default)
         {
             try
             {
-                page = Math.Max(1, page);
-                pageSize = Math.Clamp(pageSize, 1, MaxPublicPageSize);
+                var page = Math.Max(1, request.PageNumber);
+                var pageSize = Math.Clamp(request.PageSize, 1, MaxPublicPageSize);
 
                 var today = DateTime.UtcNow.Date;
-                var normalizedStatus = status?.ToLowerInvariant();
+                var normalizedStatus = request.Status?.ToLowerInvariant();
+                var searchQuery = string.IsNullOrEmpty(request.SearchString) ? null : request.SearchString;
                 var eventRepo = _repository.GetRepository<Event>();
 
                 var query = eventRepo.GetQuery(e =>
@@ -915,9 +916,9 @@ namespace Runnatics.Services
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
                     (e.EventSettings.Published || e.EventSettings.ConfirmedEvent) &&
-                    (city == null || (e.City != null && e.City.Contains(city))) &&
+                    (request.City == null || (e.City != null && e.City.Contains(request.City))) &&
                     (searchQuery == null || e.Name.Contains(searchQuery)) &&
-                    (year == null || e.EventDate.Year == year.Value))
+                    (request.Year == null || e.EventDate.Year == request.Year.Value))
                     .Include(e => e.EventSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
                         .ThenInclude(r => r.RaceSettings)
@@ -931,13 +932,13 @@ namespace Runnatics.Services
                 else
                     orderedQuery = query.OrderByDescending(e => e.EventDate);
 
-                var totalCount = await orderedQuery.CountAsync();
+                var totalCount = await orderedQuery.CountAsync(ct);
 
-                var effectiveSize = (take.HasValue && take.Value > 0) ? take.Value : pageSize;
+                var effectiveSize = (request.Take.HasValue && request.Take.Value > 0) ? request.Take.Value : pageSize;
                 var items = await orderedQuery
                     .Skip((page - 1) * effectiveSize)
                     .Take(effectiveSize)
-                    .ToListAsync();
+                    .ToListAsync(ct);
 
                 _logger.LogInformation("Public event search ({Filter}) returned {Count}/{Total}.",
                     normalizedStatus ?? "all", items.Count, totalCount);

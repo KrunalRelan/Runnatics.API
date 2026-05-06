@@ -1,6 +1,7 @@
 ﻿using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Events;
+using Runnatics.Models.Client.Requests.Public;
 using Runnatics.Models.Client.Responses.Events;
 
 namespace Runnatics.Services.Interface
@@ -21,11 +22,9 @@ namespace Runnatics.Services.Interface
         /// <summary>
         /// Returns a paged list of public events mapped to summary DTOs (no tenant filter).
         /// status: "upcoming" = future, "past" = past, null/"recent" = all (desc).
-        /// take overrides pageSize when provided and > 0.
         /// </summary>
         Task<PublicPagedResultDto<PublicEventSummaryDto>> GetPublicEventsAsync(
-            string? status, string? city, string? searchQuery, int page, int pageSize,
-            int? take = null, int? year = null);
+            GetPublicEventsRequest request, CancellationToken ct = default);
 
         /// <summary>
         /// Returns full public event detail by URL slug, mapped to a DTO.

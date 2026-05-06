@@ -30,29 +30,20 @@ namespace Runnatics.Api.Controller
 
         #region Events
 
-        [HttpGet("events")]
+        [HttpPost("events/search")]
         [EnableRateLimiting("PublicRead")]
-        [ResponseCache(Duration = 60, VaryByQueryKeys = ["status", "city", "q", "year", "page", "pageSize", "take"])]
         [ProducesResponseType(typeof(ResponseBase<PublicPagedResultDto<PublicEventSummaryDto>>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> GetEvents(
-            [FromQuery] string? status = "upcoming",
-            [FromQuery] string? city = null,
-            [FromQuery] string? q = null,
-            [FromQuery] string? year = null,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 12,
-            [FromQuery] int? take = null,
+            [FromBody] GetPublicEventsRequest request,
             CancellationToken cancellationToken = default)
         {
-            if (page < 1 || pageSize < 1 || pageSize > 100)
+            if (request.PageNumber < 1 || request.PageSize < 1 || request.PageSize > 100)
                 return BadRequest(CreateErrorResponse<PublicPagedResultDto<PublicEventSummaryDto>>(
-                    "page must be >= 1 and pageSize must be between 1 and 100."));
+                    "PageNumber must be >= 1 and PageSize must be between 1 and 100."));
 
-            int? yearFilter = int.TryParse(year, out var y) ? y : null;
-
-            var dto = await _eventsService.GetPublicEventsAsync(status, city, q, page, pageSize, take, yearFilter);
+            var dto = await _eventsService.GetPublicEventsAsync(request, cancellationToken);
 
             if (_eventsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,
@@ -89,27 +80,22 @@ namespace Runnatics.Api.Controller
 
         #region Results
 
-        [HttpGet("events/{slug}/results")]
+        [HttpPost("events/{slug}/results")]
         [EnableRateLimiting("PublicRead")]
-        [ResponseCache(Duration = 30)]
         [ProducesResponseType(typeof(ResponseBase<PublicResultsResponseDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> GetEventResults(
             string slug,
-            [FromQuery] string? q,
-            [FromQuery] string? race,
-            [FromQuery] string? gender,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 50,
+            [FromBody] GetPublicEventResultsRequest request,
             CancellationToken cancellationToken = default)
         {
-            if (page < 1 || pageSize < 1 || pageSize > 100)
+            if (request.PageNumber < 1 || request.PageSize < 1 || request.PageSize > 100)
                 return BadRequest(CreateErrorResponse<PublicResultsResponseDto>(
-                    "page must be >= 1 and pageSize must be between 1 and 100."));
+                    "PageNumber must be >= 1 and PageSize must be between 1 and 100."));
 
-            var dto = await _resultsService.GetPublicEventResultsAsync(slug, race, q, gender, page, pageSize, cancellationToken);
+            var dto = await _resultsService.GetPublicEventResultsAsync(slug, request, cancellationToken);
 
             if (_resultsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,
@@ -148,21 +134,18 @@ namespace Runnatics.Api.Controller
             return Ok(new ResponseBase<PublicResultDto> { Message = dto });
         }
 
-        [HttpGet("{eventId}/{raceId}/leaderboard")]
+        [HttpPost("{eventId}/{raceId}/leaderboard")]
         [EnableRateLimiting("PublicRead")]
         [ProducesResponseType(typeof(ResponseBase<PublicGroupedLeaderboardDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> GetGroupedLeaderboard(
             string eventId, string raceId,
-            [FromQuery] string? search = null,
-            [FromQuery] string? gender = null,
-            [FromQuery] string? category = null,
-            [FromQuery] bool showAll = false,
+            [FromBody] GetPublicLeaderboardRequest request,
             CancellationToken cancellationToken = default)
         {
             var dto = await _resultsService.GetPublicGroupedLeaderboardAsync(
-                eventId, raceId, search, gender, category, showAll, cancellationToken);
+                eventId, raceId, request, cancellationToken);
 
             if (_resultsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,

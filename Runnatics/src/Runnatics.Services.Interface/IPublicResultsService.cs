@@ -1,4 +1,5 @@
 using Runnatics.Models.Client.Public;
+using Runnatics.Models.Client.Requests.Public;
 
 namespace Runnatics.Services.Interface
 {
@@ -10,11 +11,7 @@ namespace Runnatics.Services.Interface
         /// </summary>
         Task<PublicResultsResponseDto?> GetPublicEventResultsAsync(
             string slug,
-            string? race,
-            string? q,
-            string? gender,
-            int page,
-            int pageSize,
+            GetPublicEventResultsRequest request,
             CancellationToken ct = default);
 
         /// <summary>
@@ -32,10 +29,7 @@ namespace Runnatics.Services.Interface
         Task<PublicGroupedLeaderboardDto?> GetPublicGroupedLeaderboardAsync(
             string eventId,
             string raceId,
-            string? search,
-            string? gender,
-            string? category,
-            bool showAll,
+            GetPublicLeaderboardRequest request,
             CancellationToken ct = default);
 
         /// <summary>

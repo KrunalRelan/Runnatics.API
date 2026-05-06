@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Public;
+using Runnatics.Models.Client.Requests.Public;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -25,13 +26,15 @@ namespace Runnatics.Services
         }
 
         public async Task<PublicResultsResponseDto?> GetPublicEventResultsAsync(
-            string slug, string? race, string? q, string? gender,
-            int page, int pageSize, CancellationToken ct = default)
+            string slug, GetPublicEventResultsRequest request, CancellationToken ct = default)
         {
             try
             {
-                page = Math.Max(1, page);
-                pageSize = Math.Clamp(pageSize, 1, 100);
+                var page = Math.Max(1, request.PageNumber);
+                var pageSize = Math.Clamp(request.PageSize, 1, 100);
+                var race = request.Race;
+                var q = string.IsNullOrEmpty(request.SearchString) ? null : request.SearchString;
+                var gender = request.Gender;
 
                 var eventRepo = _repository.GetRepository<Event>();
                 var eventEntity = await eventRepo.GetQuery(e =>
@@ -293,11 +296,14 @@ namespace Runnatics.Services
 
         public async Task<PublicGroupedLeaderboardDto?> GetPublicGroupedLeaderboardAsync(
             string eventId, string raceId,
-            string? search, string? gender, string? category,
-            bool showAll, CancellationToken ct = default)
+            GetPublicLeaderboardRequest request, CancellationToken ct = default)
         {
             try
             {
+                var search = request.Search;
+                var gender = request.Gender;
+                var category = request.Category;
+                var showAll = request.ShowAll;
                 int decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
                 int decryptedRaceId  = Convert.ToInt32(_encryptionService.Decrypt(raceId));
 

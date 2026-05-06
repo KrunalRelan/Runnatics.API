@@ -166,7 +166,7 @@ builder.Services.AddCors(options =>
               .AllowCredentials();
     });
 
-    // Public site — restricted to GET/POST, no credentials needed
+    // Public site — no credentials needed
     options.AddPolicy("PublicSite", policy =>
     {
         var publicOrigins = builder.Configuration
@@ -183,8 +183,8 @@ builder.Services.AddCors(options =>
                 });
 
         policy.WithOrigins(publicOrigins)
-              .WithMethods("GET", "POST", "OPTIONS")
-              .WithHeaders("Content-Type", "Accept");
+              .AllowAnyMethod()
+              .AllowAnyHeader();
     });
 });
 

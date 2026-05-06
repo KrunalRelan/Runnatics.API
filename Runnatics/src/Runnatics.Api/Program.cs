@@ -329,6 +329,7 @@ else
 
 app.UseHttpsRedirection();
 app.UseRouting();
+app.UseCors("AllowFrontend");
 
 // X-Public-Key guard for all /api/public/* routes
 // Skip OPTIONS — browser preflight requests never carry custom headers
@@ -351,8 +352,6 @@ app.Use(async (context, next) =>
     }
     await next(context);
 });
-
-app.UseCors("AllowFrontend");
 
 app.UseResponseCaching();
 app.UseRateLimiter();

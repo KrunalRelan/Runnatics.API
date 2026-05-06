@@ -202,7 +202,84 @@ await query.AnyAsync(r => r.Bib == bib, ct)       // existence check, not Count 
 public async Task<IActionResult> Get(CancellationToken ct) // always pass CancellationToken
 ```
 
-### RULE 11 — Error Handling
+### RULE 11 — Parameter Limit: 3 or More Parameters → POST + Request Class
+
+**If a controller action needs 3 or more input parameters, NEVER pass them as individual query params. Instead:**
+1. Create a request class inheriting `SearchCriteriaBase` (if paginated) or a plain request class
+2. Use `[HttpPost]` with `[FromBody]` instead of `[HttpGet]` with `[FromQuery]`
+3. Place the class in `Runnatics.Models.Client/Requests/{Feature}/`
+
+```csharp
+// ❌ WRONG — more than 2 query params
+[HttpGet]
+public async Task<IActionResult> Search(
+    string? name,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    EventStatus? status,
+    int pageNumber = 1,
+    int pageSize = 20,
+    CancellationToken ct = default)
+
+// ✅ CORRECT — request class + POST
+[HttpPost("search")]
+public async Task<IActionResult> Search(
+    [FromBody] EventSearchRequest request,
+    CancellationToken ct = default)
+```
+
+**Request class pattern — always inherit `SearchCriteriaBase` when paginated:**
+
+```csharp
+// File: Runnatics/src/Runnatics.Models.Client/Requests/Events/EventSearchRequest.cs
+using Runnatics.Models.Client.Common;
+
+namespace Runnatics.Models.Client.Requests.Events
+{
+    public class EventSearchRequest : SearchCriteriaBase
+    {
+        // Override defaults in constructor if needed
+        public EventSearchRequest()
+        {
+            SortFieldName = "Id";
+            SortDirection = SortDirection.Descending;
+            // PageNumber = 1 and PageSize = 100 come from SearchCriteriaBase
+        }
+
+        /// <summary>Event name for partial match search (optional)</summary>
+        public string? Name { get; set; }
+
+        /// <summary>Start date for date range filter (optional)</summary>
+        public DateTime? EventDateFrom { get; set; }
+
+        /// <summary>End date for date range filter (optional)</summary>
+        public DateTime? EventDateTo { get; set; }
+
+        /// <summary>Event status filter (optional)</summary>
+        public EventStatus? Status { get; set; }
+    }
+}
+```
+
+**`SearchCriteriaBase` already provides (never duplicate these):**
+```
+SearchString   — text search across relevant fields
+SortFieldName  — column to sort by (default: "")
+SortDirection  — Ascending or Descending (default: Ascending)
+PageNumber     — current page (default: 1)
+PageSize       — items per page (default: 100)
+```
+
+**Decision table:**
+
+| Parameters | Has pagination? | Action |
+|---|---|---|
+| 1-2 params, no pagination | No | `[HttpGet]` with `[FromQuery]` is fine |
+| 1-2 params, with pagination | Yes | Create class inheriting `SearchCriteriaBase`, use `[HttpPost("search")]` |
+| 3+ params, any | Any | Create class (inherit `SearchCriteriaBase` if paginated), use `[HttpPost("search")]` |
+| ID only | No | `[HttpGet("{id}")]` — single encrypted ID is always fine as route param |
+
+### RULE 12 — Error Handling
 - Use `GlobalExceptionMiddleware` — no try/catch in every service method
 - Services inherit `SimpleServiceBase` — use `HasError`/`ErrorMessage`
 - Never throw exceptions to controllers

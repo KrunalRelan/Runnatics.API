@@ -1,29 +1,30 @@
 using Runnatics.Models.Client.Public;
-using Runnatics.Models.Data.Entities;
-using DataResultsPagingList = Runnatics.Models.Data.Common.PagingList<Runnatics.Models.Data.Entities.Results>;
 
 namespace Runnatics.Services.Interface
 {
     public interface IPublicResultsService : ISimpleServiceBase
     {
         /// <summary>
-        /// Returns paged, filterable results for a public event page. No tenant filter.
+        /// Returns the full results response for a public event page, including publish-gate checks,
+        /// leaderboard settings, and DNF filtering. Returns null when the event is not found.
         /// </summary>
-        Task<DataResultsPagingList> GetPublicResultsAsync(
-            int eventId,
-            string? raceName,
-            string? searchQuery,
+        Task<PublicResultsResponseDto?> GetPublicEventResultsAsync(
+            string slug,
+            string? race,
+            string? q,
             string? gender,
             int page,
-            int pageSize);
+            int pageSize,
+            CancellationToken ct = default);
 
         /// <summary>
-        /// Returns effective leaderboard display settings for a race on the public site.
-        /// Race-level settings are returned when OverrideSettings=true, otherwise event-level.
+        /// Returns the result DTO for a single participant identified by bib number within a public event.
+        /// Returns null when the event or bib is not found.
         /// </summary>
-        Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
-            int eventId,
-            int? raceId);
+        Task<PublicResultDto?> GetPublicResultByBibAsync(
+            string slug,
+            string bib,
+            CancellationToken ct = default);
 
         /// <summary>
         /// Returns finishers grouped by gender then age category for the public leaderboard page.

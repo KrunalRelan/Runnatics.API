@@ -199,6 +199,70 @@ public class ResultDto
 
 ---
 
+## RULE: 3+ Parameters → POST + Request Class
+
+If a controller action needs **3 or more input parameters**, NEVER use individual `[FromQuery]` params.
+
+```csharp
+// ❌ WRONG — too many individual query params
+[HttpGet]
+public async Task<IActionResult> Search(
+    string? name, DateTime? from, DateTime? to,
+    EventStatus? status, int page = 1, int size = 20, CancellationToken ct = default) { }
+
+// ✅ CORRECT — POST with request class
+[HttpPost("search")]
+public async Task<IActionResult> Search(
+    [FromBody] EventSearchRequest request,
+    CancellationToken ct = default) { }
+```
+
+**Request class — always inherit `SearchCriteriaBase` when paginated:**
+
+```csharp
+// File: Runnatics.Models.Client/Requests/Events/EventSearchRequest.cs
+using Runnatics.Models.Client.Common;
+
+namespace Runnatics.Models.Client.Requests.Events
+{
+    public class EventSearchRequest : SearchCriteriaBase
+    {
+        public EventSearchRequest()
+        {
+            SortFieldName = "Id";
+            SortDirection = SortDirection.Descending;
+            // PageNumber = 1 and PageSize = 100 are already set by SearchCriteriaBase
+        }
+
+        // Only add fields NOT already in SearchCriteriaBase.
+        // NEVER re-declare: SearchString, SortFieldName, SortDirection, PageNumber, PageSize
+
+        /// <summary>Event name for partial match (optional)</summary>
+        public string? Name { get; set; }
+
+        /// <summary>Start date filter (optional)</summary>
+        public DateTime? EventDateFrom { get; set; }
+
+        /// <summary>End date filter (optional)</summary>
+        public DateTime? EventDateTo { get; set; }
+
+        /// <summary>Status filter (optional)</summary>
+        public EventStatus? Status { get; set; }
+    }
+}
+```
+
+**Decision table:**
+
+| Scenario | Approach |
+|---|---|
+| 1–2 query params, no pagination | `[HttpGet]` `[FromQuery]` individual params |
+| Any search with pagination | `SearchCriteriaBase` subclass + `[HttpPost("search")]` |
+| 3+ params, any | Request class + `[HttpPost("search")]` |
+| Single encrypted ID | `[HttpGet("{id}")]` route param — always fine |
+
+---
+
 ## AutoMapper Profile
 
 Add ALL mappings to the existing `AutoMapperMappingProfile.cs` — NEVER create new profiles:

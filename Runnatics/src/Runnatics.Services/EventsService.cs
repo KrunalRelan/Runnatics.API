@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
+using Runnatics.Models.Client.Public;
 using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Responses.Events;
 using Runnatics.Models.Data.Entities;
@@ -896,8 +897,9 @@ namespace Runnatics.Services
 
         private const int MaxPublicPageSize = 100;
 
-        public async Task<Models.Data.Common.PagingList<Event>> GetPublicEventsAsync(
-            string? status, string? city, string? searchQuery, int page, int pageSize, int? take = null)
+        public async Task<PublicPagedResultDto<PublicEventSummaryDto>> GetPublicEventsAsync(
+            string? status, string? city, string? searchQuery, int page, int pageSize,
+            int? take = null, int? year = null)
         {
             try
             {
@@ -914,7 +916,8 @@ namespace Runnatics.Services
                     e.EventSettings != null &&
                     (e.EventSettings.Published || e.EventSettings.ConfirmedEvent) &&
                     (city == null || (e.City != null && e.City.Contains(city))) &&
-                    (searchQuery == null || e.Name.Contains(searchQuery)))
+                    (searchQuery == null || e.Name.Contains(searchQuery)) &&
+                    (year == null || e.EventDate.Year == year.Value))
                     .Include(e => e.EventSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
                         .ThenInclude(r => r.RaceSettings)
@@ -936,24 +939,26 @@ namespace Runnatics.Services
                     .Take(effectiveSize)
                     .ToListAsync();
 
-                var result = new Models.Data.Common.PagingList<Event>();
-                result.AddRange(items);
-                result.TotalCount = totalCount;
-
                 _logger.LogInformation("Public event search ({Filter}) returned {Count}/{Total}.",
                     normalizedStatus ?? "all", items.Count, totalCount);
 
-                return result;
+                return new PublicPagedResultDto<PublicEventSummaryDto>
+                {
+                    Items = items.Select(MapToEventSummaryDto).ToList(),
+                    Page = page,
+                    PageSize = pageSize,
+                    TotalCount = totalCount
+                };
             }
             catch (Exception ex)
             {
                 this.ErrorMessage = "Error retrieving public events.";
                 _logger.LogError(ex, "Error in GetPublicEventsAsync");
-                return [];
+                return new PublicPagedResultDto<PublicEventSummaryDto>();
             }
         }
 
-        public async Task<(Event? Event, Dictionary<int, int>? RaceParticipantCounts)> GetPublicEventBySlugAsync(string slug)
+        public async Task<PublicEventDetailDto?> GetPublicEventBySlugAsync(string slug)
         {
             try
             {
@@ -977,7 +982,7 @@ namespace Runnatics.Services
                     .FirstOrDefaultAsync();
 
                 if (eventEntity == null)
-                    return (null, null);
+                    return null;
 
                 // Lightweight per-race participant counts via GROUP BY � no entity materialisation
                 var participantRepo = _repository.GetRepository<Participant>();
@@ -991,16 +996,129 @@ namespace Runnatics.Services
                     .Select(g => new { RaceId = g.Key, Count = g.Count() })
                     .ToListAsync();
 
-                var counts = countRows.ToDictionary(c => c.RaceId, c => c.Count);
+                var raceCounts = countRows.ToDictionary(c => c.RaceId, c => c.Count);
 
-                return (eventEntity, counts);
+                return MapToEventDetailDto(eventEntity, raceCounts);
             }
             catch (Exception ex)
             {
                 this.ErrorMessage = "Error retrieving event.";
                 _logger.LogError(ex, "Error in GetPublicEventBySlugAsync for slug: {Slug}", slug);
-                return (null, null);
+                return null;
             }
+        }
+
+        public async Task<PublicStatsDto> GetPublicStatsAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var today = DateTime.UtcNow.Date;
+                var eventRepo = _repository.GetRepository<Event>();
+                var baseQuery = eventRepo.GetQuery(e =>
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted &&
+                    e.EventSettings != null &&
+                    (e.EventSettings.Published || e.EventSettings.ConfirmedEvent));
+
+                int upcoming = await baseQuery.Where(e => e.EventDate.Date >= today).CountAsync(ct);
+                int past = await baseQuery.Where(e => e.EventDate.Date < today).CountAsync(ct);
+
+                return new PublicStatsDto
+                {
+                    UpcomingEvents = upcoming,
+                    PastEvents = past,
+                    TotalEvents = upcoming + past
+                };
+            }
+            catch (Exception ex)
+            {
+                this.ErrorMessage = "Error retrieving public stats.";
+                _logger.LogError(ex, "Error in GetPublicStatsAsync");
+                return new PublicStatsDto();
+            }
+        }
+
+        private static string? GetEventBannerBase64(Event e)
+        {
+            if (e.EventSettings?.RemoveBanner == true || string.IsNullOrEmpty(e.BannerImage))
+                return null;
+            return e.BannerImage;
+        }
+
+        private static PublicEventSummaryDto MapToEventSummaryDto(Event e)
+        {
+            var publishedRaces = e.Races?
+                .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
+                .ToList() ?? [];
+
+            var hasPublishedResults = e.EventDate.Date < DateTime.UtcNow.Date &&
+                publishedRaces.Any(r => r.RaceSettings == null || r.RaceSettings.ShowResultTable);
+
+            return new PublicEventSummaryDto
+            {
+                Slug = e.Slug,
+                Name = e.Name,
+                City = e.City,
+                State = e.State,
+                EventDate = e.EventDate,
+                HeroImageUrl = null,
+                BannerBase64 = GetEventBannerBase64(e),
+                Description = e.Description != null && e.Description.Length > 200
+                    ? e.Description[..200] + "..."
+                    : e.Description,
+                RaceCategories = e.Races?.Select(r => r.Title).ToList() ?? [],
+                ParticipantCount = null,
+                RegistrationOpen = e.RegistrationDeadline.HasValue
+                    ? e.RegistrationDeadline.Value > DateTime.UtcNow
+                    : e.EventDate > DateTime.UtcNow,
+                RegistrationUrl = null,
+                Venue = e.VenueName,
+                HasPublishedResults = hasPublishedResults
+            };
+        }
+
+        private static PublicEventDetailDto MapToEventDetailDto(Event e, Dictionary<int, int>? raceCounts)
+        {
+            var settings = e.EventSettings;
+            var publishedRaces = e.Races?
+                .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
+                .ToList() ?? [];
+
+            return new PublicEventDetailDto
+            {
+                Slug = e.Slug,
+                Name = e.Name,
+                City = e.City,
+                State = e.State,
+                EventDate = e.EventDate,
+                HeroImageUrl = null,
+                BannerBase64 = GetEventBannerBase64(e),
+                Description = e.Description != null && e.Description.Length > 200
+                    ? e.Description[..200] + "..."
+                    : e.Description,
+                RaceCategories = publishedRaces.Select(r => r.Title).ToList(),
+                ParticipantCount = raceCounts?.Values.Sum() ?? 0,
+                RegistrationOpen = e.RegistrationDeadline.HasValue
+                    ? e.RegistrationDeadline.Value > DateTime.UtcNow
+                    : e.EventDate > DateTime.UtcNow,
+                RegistrationUrl = null,
+                Venue = e.VenueName,
+                FullDescription = e.Description,
+                Schedule = null,
+                RouteMapUrl = null,
+                Races = publishedRaces.Select(r => new PublicRaceCategoryDto
+                {
+                    Name = r.Title,
+                    Distance = r.Distance?.ToString("0.##"),
+                    Price = null,
+                    ParticipantLimit = r.MaxParticipants,
+                    RegisteredCount = raceCounts != null && raceCounts.TryGetValue(r.Id, out var c) ? c : 0
+                }).ToList(),
+                RegistrationDeadline = e.RegistrationDeadline,
+                ContactEmail = null,
+                ShowResultSummary = settings?.ShowResultSummaryForRaces ?? false,
+                ShowBanner = !(settings?.RemoveBanner ?? false) && !string.IsNullOrEmpty(e.BannerImage)
+            };
         }
 
         public async Task<bool> UpdateBannerAsync(string eventId, string base64Image, string contentType)

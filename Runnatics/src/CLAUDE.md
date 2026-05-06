@@ -82,6 +82,67 @@ return Ok(response);
 
 ---
 
+## Parameter Limit Rule — 3+ Params → POST + Request Class
+
+| Scenario | Approach |
+|---|---|
+| 1–2 query params, no pagination | `[HttpGet]` `[FromQuery]` individual params — OK |
+| Any pagination needed | Create class inheriting `SearchCriteriaBase`, `[HttpPost("search")]` |
+| 3+ params, any combination | Create request class, `[HttpPost("search")]` |
+| Single ID | `[HttpGet("{id}")]` route param — always fine |
+
+```csharp
+// ❌ WRONG — too many query params
+[HttpGet]
+public async Task<IActionResult> Search(
+    string? name, DateTime? from, DateTime? to,
+    EventStatus? status, int page = 1, int size = 20) { }
+
+// ✅ CORRECT — request class with POST
+[HttpPost("search")]
+public async Task<IActionResult> Search(
+    [FromBody] EventSearchRequest request,
+    CancellationToken ct = default) { }
+```
+
+Request class — always inherit `SearchCriteriaBase` when paginated:
+```csharp
+// File: Runnatics.Models.Client/Requests/Events/EventSearchRequest.cs
+using Runnatics.Models.Client.Common;
+
+namespace Runnatics.Models.Client.Requests.Events
+{
+    public class EventSearchRequest : SearchCriteriaBase
+    {
+        public EventSearchRequest()
+        {
+            SortFieldName = "Id";           // override default sort
+            SortDirection = SortDirection.Descending; // override default direction
+            // PageNumber = 1 — inherited from SearchCriteriaBase
+            // PageSize = 100 — inherited from SearchCriteriaBase
+        }
+
+        // Only add fields NOT already in SearchCriteriaBase
+        // SearchCriteriaBase already has: SearchString, SortFieldName,
+        // SortDirection, PageNumber, PageSize
+
+        /// <summary>Event name for partial match (optional)</summary>
+        public string? Name { get; set; }
+
+        /// <summary>Start date filter (optional)</summary>
+        public DateTime? EventDateFrom { get; set; }
+
+        /// <summary>End date filter (optional)</summary>
+        public DateTime? EventDateTo { get; set; }
+
+        /// <summary>Status filter (optional)</summary>
+        public EventStatus? Status { get; set; }
+    }
+}
+```
+
+---
+
 ## Standard Paginated Service Method
 
 ```csharp

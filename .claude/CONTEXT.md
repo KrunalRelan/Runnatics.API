@@ -250,6 +250,23 @@ FORMAT:
   - `Results.ManualFinishTimeMs` stores the raw admin entry; `FinishTime`/`GunTime`/`NetTime` are all set to the same value (no gun-to-chip offset available for manual entry)
   - `Participant.IsManualTiming = true` is set so the UI can distinguish chip vs. manual finishers
 
+### 2026-05-05 — backend-agent — PublicController CLAUDE.md Compliance Fix
+
+- **What was fixed**: Refactored `PublicController` to comply with all CLAUDE.md rules (Rule 2: thin controller only)
+- **Violations removed**:
+  - Entity `using` aliases (`Event`, `Results`) — controller no longer touches domain entities
+  - All private mapping helpers (`MapToSummary`, `MapToDetail`, `MapToResultDto`, `GetBannerBase64`) — moved to service layer
+  - In-memory year filter in `GetEvents` — moved to `GetPublicEventsAsync` as a DB-side filter
+  - Multiple service calls per action (`GetEventResults`: 3 calls, `GetResultByBib`: 2 calls, `GetPublicStats`: 2 calls) — consolidated into single service calls
+  - Business logic in controller (publish gate, DNF filter, bib match, stats arithmetic) — moved to service layer
+- **Files modified**:
+  - `Runnatics.Models.Client/Public/PublicStatsDto.cs` — new DTO for stats endpoint
+  - `Runnatics.Services.Interface/IEventsService.cs` — `GetPublicEventsAsync` now returns `PublicPagedResultDto<PublicEventSummaryDto>` + `year` param; `GetPublicEventBySlugAsync` returns `PublicEventDetailDto?`; added `GetPublicStatsAsync`
+  - `Runnatics.Services/EventsService.cs` — implemented updated signatures; added `MapToEventSummaryDto`, `MapToEventDetailDto`, `GetEventBannerBase64` private helpers; implemented `GetPublicStatsAsync`
+  - `Runnatics.Services.Interface/IPublicResultsService.cs` — removed `GetPublicResultsAsync` and `GetEffectivePublicLeaderboardSettingsAsync` (now private); added `GetPublicEventResultsAsync` and `GetPublicResultByBibAsync`
+  - `Runnatics.Services/PublicResultsService.cs` — `GetPublicResultsAsync` and `GetEffectivePublicLeaderboardSettingsAsync` made private; added `GetPublicEventResultsAsync`, `GetPublicResultByBibAsync`, `MapToResultDto` private static helper
+  - `Runnatics.Api/Controller/PublicController.cs` — all actions now call exactly ONE service method; no entity types, no mapping, no business logic
+
 ### 2026-05-05 — backend-agent — SRP Refactoring of Public Results Changes
 
 - **What was built**: Applied Single Responsibility Principle to the 2026-05-05 changes

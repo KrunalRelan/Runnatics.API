@@ -5,6 +5,7 @@ using Runnatics.Models.Client.Public;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
+using DataResultsPagingList = Runnatics.Models.Data.Common.PagingList<Runnatics.Models.Data.Entities.Results>;
 
 namespace Runnatics.Services
 {
@@ -23,7 +24,135 @@ namespace Runnatics.Services
             _encryptionService = encryptionService;
         }
 
-        public async Task<Models.Data.Common.PagingList<Results>> GetPublicResultsAsync(
+        public async Task<PublicResultsResponseDto?> GetPublicEventResultsAsync(
+            string slug, string? race, string? q, string? gender,
+            int page, int pageSize, CancellationToken ct = default)
+        {
+            try
+            {
+                page = Math.Max(1, page);
+                pageSize = Math.Clamp(pageSize, 1, 100);
+
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventEntity = await eventRepo.GetQuery(e =>
+                    e.Slug == slug &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted &&
+                    e.EventSettings != null &&
+                    e.EventSettings.ConfirmedEvent &&
+                    !e.EventSettings.Published)
+                    .Include(e => e.EventSettings)
+                    .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
+                        .ThenInclude(r => r.RaceSettings)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(ct);
+
+                if (eventEntity == null)
+                    return null;
+
+                var isEventPublished = eventEntity.EventSettings?.Published ?? false;
+                var publishedRaces = eventEntity.Races?
+                    .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
+                    .ToList() ?? [];
+
+                if (!isEventPublished)
+                    return new PublicResultsResponseDto
+                    {
+                        IsPublished = false,
+                        StatusMessage = "Results not yet published for this event.",
+                        Results = [],
+                        Races = [],
+                        LeaderboardSettings = new PublicLeaderboardSettingsDto()
+                    };
+
+                var anyShowResultTable = publishedRaces.Any(r => r.RaceSettings == null || r.RaceSettings.ShowResultTable);
+                if (!anyShowResultTable)
+                    return new PublicResultsResponseDto
+                    {
+                        IsPublished = true,
+                        StatusMessage = "Results not available for this event.",
+                        Results = [],
+                        Races = publishedRaces.Select(r => r.Title).ToList(),
+                        LeaderboardSettings = new PublicLeaderboardSettingsDto()
+                    };
+
+                var selectedRace = !string.IsNullOrEmpty(race)
+                    ? publishedRaces.FirstOrDefault(r => r.Title.Equals(race, StringComparison.OrdinalIgnoreCase))
+                    : null;
+
+                var leaderboardSettings = await GetEffectivePublicLeaderboardSettingsAsync(eventEntity.Id, selectedRace?.Id);
+
+                var results = await GetPublicResultsAsync(eventEntity.Id, race, q, gender, page, pageSize);
+
+                var raceSettingsMap = publishedRaces
+                    .Where(r => r.RaceSettings != null)
+                    .ToDictionary(r => r.Id, r => r.RaceSettings!);
+
+                var filteredResults = results.Where(r =>
+                {
+                    if (!publishedRaces.Any(pr => pr.Id == r.RaceId))
+                        return false;
+                    if (raceSettingsMap.TryGetValue(r.RaceId, out var rs) && !rs.PublishDnf && r.Status == "DNF")
+                        return false;
+                    return true;
+                }).ToList();
+
+                return new PublicResultsResponseDto
+                {
+                    Results = filteredResults.Select(MapToResultDto).ToList(),
+                    Races = publishedRaces.Select(r => r.Title).ToList(),
+                    Page = page,
+                    PageSize = pageSize,
+                    TotalCount = results.TotalCount,
+                    LeaderboardSettings = leaderboardSettings,
+                    IsPublished = true
+                };
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = "Error retrieving event results.";
+                _logger.LogError(ex, "Error in GetPublicEventResultsAsync for slug {Slug}", slug);
+                return null;
+            }
+        }
+
+        public async Task<PublicResultDto?> GetPublicResultByBibAsync(
+            string slug, string bib, CancellationToken ct = default)
+        {
+            try
+            {
+                var eventRepo = _repository.GetRepository<Event>();
+                var eventEntity = await eventRepo.GetQuery(e =>
+                    e.Slug == slug &&
+                    e.AuditProperties.IsActive &&
+                    !e.AuditProperties.IsDeleted &&
+                    e.EventSettings != null &&
+                    e.EventSettings.ConfirmedEvent &&
+                    !e.EventSettings.Published)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(ct);
+
+                if (eventEntity == null)
+                    return null;
+
+                var results = await GetPublicResultsAsync(
+                    eventEntity.Id, raceName: null, searchQuery: bib, gender: null, page: 1, pageSize: 10);
+
+                var match = results.FirstOrDefault(r =>
+                    r.Participant?.BibNumber != null &&
+                    r.Participant.BibNumber.Equals(bib, StringComparison.OrdinalIgnoreCase));
+
+                return match == null ? null : MapToResultDto(match);
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = "Error retrieving result by bib.";
+                _logger.LogError(ex, "Error in GetPublicResultByBibAsync for slug {Slug}, bib {Bib}", slug, bib);
+                return null;
+            }
+        }
+
+        private async Task<DataResultsPagingList> GetPublicResultsAsync(
             int eventId,
             string? raceName,
             string? searchQuery,
@@ -92,7 +221,32 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
+        private static PublicResultDto MapToResultDto(Results r) => new()
+        {
+            BibNumber = r.Participant?.BibNumber ?? string.Empty,
+            ParticipantName = r.Participant?.FullName ?? string.Empty,
+            RaceName = r.Race?.Title ?? string.Empty,
+            AgeGroup = r.Participant?.AgeCategory,
+            Gender = r.Participant?.Gender,
+            GunTime = r.GunTime.HasValue ? TimeSpan.FromMilliseconds(r.GunTime.Value) : null,
+            NetTime = r.NetTime.HasValue ? TimeSpan.FromMilliseconds(r.NetTime.Value) : null,
+            OverallRank = r.OverallRank,
+            CategoryRank = r.CategoryRank,
+            GenderRank = r.GenderRank,
+            Splits = r.Participant?.SplitTimes?
+                .OrderBy(st => st.ToCheckpoint?.DistanceFromStart)
+                .Select(st => new PublicSplitDto
+                {
+                    CheckpointName = st.ToCheckpoint?.Name ?? string.Empty,
+                    Time = st.SplitTimeMs.HasValue
+                        ? TimeSpan.FromMilliseconds(st.SplitTimeMs.Value)
+                        : st.SplitTime,
+                    Rank = st.Rank
+                })
+                .ToList()
+        };
+
+        private async Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
             int eventId, int? raceId)
         {
             try

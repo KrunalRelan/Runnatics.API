@@ -56,15 +56,15 @@ namespace Runnatics.Api.Controller
             });
         }
 
-        [HttpGet("events/{slug}")]
+        [HttpGet("events/{eventId}")]
         [EnableRateLimiting("PublicRead")]
         [ResponseCache(Duration = 60)]
         [ProducesResponseType(typeof(ResponseBase<PublicEventDetailDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> GetEventBySlug(string slug, CancellationToken cancellationToken = default)
+        public async Task<IActionResult> GetEventById(string eventId, CancellationToken cancellationToken = default)
         {
-            var dto = await _eventsService.GetPublicEventBySlugAsync(slug);
+            var dto = await _eventsService.GetPublicEventByIdAsync(eventId);
 
             if (_eventsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,
@@ -80,14 +80,14 @@ namespace Runnatics.Api.Controller
 
         #region Results
 
-        [HttpPost("events/{slug}/results")]
+        [HttpPost("events/{eventId}/results")]
         [EnableRateLimiting("PublicRead")]
         [ProducesResponseType(typeof(ResponseBase<PublicResultsResponseDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> GetEventResults(
-            string slug,
+            string eventId,
             [FromBody] GetPublicEventResultsRequest request,
             CancellationToken cancellationToken = default)
         {
@@ -95,7 +95,7 @@ namespace Runnatics.Api.Controller
                 return BadRequest(CreateErrorResponse<PublicResultsResponseDto>(
                     "PageNumber must be >= 1 and PageSize must be between 1 and 100."));
 
-            var dto = await _resultsService.GetPublicEventResultsAsync(slug, request, cancellationToken);
+            var dto = await _resultsService.GetPublicEventResultsAsync(eventId, request, cancellationToken);
 
             if (_resultsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,
@@ -111,18 +111,18 @@ namespace Runnatics.Api.Controller
             });
         }
 
-        [HttpGet("events/{slug}/results/{bib}")]
+        [HttpGet("events/{eventId}/results/{bib}")]
         [EnableRateLimiting("PublicRead")]
         [ResponseCache(Duration = 30)]
         [ProducesResponseType(typeof(ResponseBase<PublicResultDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> GetResultByBib(
-            string slug,
+            string eventId,
             string bib,
             CancellationToken cancellationToken = default)
         {
-            var dto = await _resultsService.GetPublicResultByBibAsync(slug, bib, cancellationToken);
+            var dto = await _resultsService.GetPublicResultByBibAsync(eventId, bib, cancellationToken);
 
             if (_resultsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,

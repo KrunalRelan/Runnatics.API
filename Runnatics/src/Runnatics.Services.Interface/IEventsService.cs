@@ -27,10 +27,10 @@ namespace Runnatics.Services.Interface
             GetPublicEventsRequest request, CancellationToken ct = default);
 
         /// <summary>
-        /// Returns full public event detail by URL slug, mapped to a DTO.
+        /// Returns full public event detail by encrypted event ID, mapped to a DTO.
         /// Returns null when not found or deleted.
         /// </summary>
-        Task<PublicEventDetailDto?> GetPublicEventBySlugAsync(string slug);
+        Task<PublicEventDetailDto?> GetPublicEventByIdAsync(string encryptedEventId);
 
         /// <summary>
         /// Returns aggregate public statistics (upcoming/past event counts).

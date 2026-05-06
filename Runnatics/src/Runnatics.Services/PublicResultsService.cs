@@ -26,10 +26,11 @@ namespace Runnatics.Services
         }
 
         public async Task<PublicResultsResponseDto?> GetPublicEventResultsAsync(
-            string slug, GetPublicEventResultsRequest request, CancellationToken ct = default)
+            string encryptedEventId, GetPublicEventResultsRequest request, CancellationToken ct = default)
         {
             try
             {
+                int decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(encryptedEventId));
                 var page = Math.Max(1, request.PageNumber);
                 var pageSize = Math.Clamp(request.PageSize, 1, 100);
                 var race = request.Race;
@@ -38,7 +39,7 @@ namespace Runnatics.Services
 
                 var eventRepo = _repository.GetRepository<Event>();
                 var eventEntity = await eventRepo.GetQuery(e =>
-                    e.Slug == slug &&
+                    e.Id == decryptedEventId &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
@@ -114,19 +115,20 @@ namespace Runnatics.Services
             catch (Exception ex)
             {
                 ErrorMessage = "Error retrieving event results.";
-                _logger.LogError(ex, "Error in GetPublicEventResultsAsync for slug {Slug}", slug);
+                _logger.LogError(ex, "Error in GetPublicEventResultsAsync for eventId {EncryptedEventId}", encryptedEventId);
                 return null;
             }
         }
 
         public async Task<PublicResultDto?> GetPublicResultByBibAsync(
-            string slug, string bib, CancellationToken ct = default)
+            string encryptedEventId, string bib, CancellationToken ct = default)
         {
             try
             {
+                int decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(encryptedEventId));
                 var eventRepo = _repository.GetRepository<Event>();
                 var eventEntity = await eventRepo.GetQuery(e =>
-                    e.Slug == slug &&
+                    e.Id == decryptedEventId &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
@@ -150,7 +152,7 @@ namespace Runnatics.Services
             catch (Exception ex)
             {
                 ErrorMessage = "Error retrieving result by bib.";
-                _logger.LogError(ex, "Error in GetPublicResultByBibAsync for slug {Slug}, bib {Bib}", slug, bib);
+                _logger.LogError(ex, "Error in GetPublicResultByBibAsync for eventId {EncryptedEventId}, bib {Bib}", encryptedEventId, bib);
                 return null;
             }
         }

@@ -959,14 +959,15 @@ namespace Runnatics.Services
             }
         }
 
-        public async Task<PublicEventDetailDto?> GetPublicEventBySlugAsync(string slug)
+        public async Task<PublicEventDetailDto?> GetPublicEventByIdAsync(string encryptedEventId)
         {
             try
             {
+                int decryptedId = Convert.ToInt32(_encryptionService.Decrypt(encryptedEventId));
                 var eventRepo = _repository.GetRepository<Event>();
 
                 var eventEntity = await eventRepo.GetQuery(e =>
-                    e.Slug == slug &&
+                    e.Id == decryptedId &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
@@ -1004,7 +1005,7 @@ namespace Runnatics.Services
             catch (Exception ex)
             {
                 this.ErrorMessage = "Error retrieving event.";
-                _logger.LogError(ex, "Error in GetPublicEventBySlugAsync for slug: {Slug}", slug);
+                _logger.LogError(ex, "Error in GetPublicEventByIdAsync for encryptedEventId: {EncryptedEventId}", encryptedEventId);
                 return null;
             }
         }
@@ -1046,7 +1047,7 @@ namespace Runnatics.Services
             return e.BannerImage;
         }
 
-        private static PublicEventSummaryDto MapToEventSummaryDto(Event e)
+        private PublicEventSummaryDto MapToEventSummaryDto(Event e)
         {
             var publishedRaces = e.Races?
                 .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
@@ -1057,7 +1058,7 @@ namespace Runnatics.Services
 
             return new PublicEventSummaryDto
             {
-                Slug = e.Slug,
+                EncryptedId = _encryptionService.Encrypt(e.Id.ToString()),
                 Name = e.Name,
                 City = e.City,
                 State = e.State,
@@ -1078,7 +1079,7 @@ namespace Runnatics.Services
             };
         }
 
-        private static PublicEventDetailDto MapToEventDetailDto(Event e, Dictionary<int, int>? raceCounts)
+        private PublicEventDetailDto MapToEventDetailDto(Event e, Dictionary<int, int>? raceCounts)
         {
             var settings = e.EventSettings;
             var publishedRaces = e.Races?
@@ -1087,7 +1088,7 @@ namespace Runnatics.Services
 
             return new PublicEventDetailDto
             {
-                Slug = e.Slug,
+                EncryptedId = _encryptionService.Encrypt(e.Id.ToString()),
                 Name = e.Name,
                 City = e.City,
                 State = e.State,

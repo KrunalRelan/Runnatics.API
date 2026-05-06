@@ -10,7 +10,7 @@ namespace Runnatics.Services.Interface
         /// leaderboard settings, and DNF filtering. Returns null when the event is not found.
         /// </summary>
         Task<PublicResultsResponseDto?> GetPublicEventResultsAsync(
-            string slug,
+            string encryptedEventId,
             GetPublicEventResultsRequest request,
             CancellationToken ct = default);
 
@@ -19,7 +19,7 @@ namespace Runnatics.Services.Interface
         /// Returns null when the event or bib is not found.
         /// </summary>
         Task<PublicResultDto?> GetPublicResultByBibAsync(
-            string slug,
+            string encryptedEventId,
             string bib,
             CancellationToken ct = default);
 

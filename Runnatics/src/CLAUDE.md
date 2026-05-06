@@ -30,12 +30,16 @@
 public class SearchCriteriaBase
 {
     public const int DefaultPageSize = 100;
-    public string SearchString { get; set; } = string.Empty;
+    public string? SearchString { get; set; }            // nullable — always optional
     public string SortFieldName { get; set; } = string.Empty;
     public SortDirection SortDirection { get; set; }    // Ascending default
     public int PageNumber { get; set; }                  // default 1
     public int PageSize { get; set; }                    // default 100
 }
+// ⚠️ RULE: SearchString is nullable (string?) — NEVER make it non-nullable.
+// Always guard before filtering:
+//   if (!string.IsNullOrEmpty(request.SearchString))
+//       query = query.Where(r => r.Name.Contains(request.SearchString));
 
 // ✅ Use like this:
 public class GetParticipantsRequest : SearchCriteriaBase

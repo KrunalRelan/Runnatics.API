@@ -114,6 +114,8 @@ Runnatics.Models.Client.Common.ResponseBase<T>       ← ALL API responses wrap 
 ```csharp
 // ✅ CORRECT — search request always inherits SearchCriteriaBase
 // SearchCriteriaBase already has: PageNumber, PageSize, SearchString, SortFieldName, SortDirection
+// NOTE: SearchString is nullable (string?) — it is always optional free-text.
+// NEVER make SearchString non-nullable. Always guard with IsNullOrEmpty before filtering.
 public class GetResultsRequest : SearchCriteriaBase
 {
     public string? Gender { get; set; }

@@ -291,6 +291,21 @@ FORMAT:
   - `PublicResultsService` depends only on `IUnitOfWork`, `IEncryptionService`, `ILogger` — no `IMapper` or `IUserContextService` needed
   - One class per .cs file rule enforced across all 8 new DTO/service files
 
+### 2026-05-05 — backend-agent — Public API Security (Rate Limiting + CORS + X-Public-Key)
+
+- **What was built**: 3-layer security for `/api/public/*` endpoints
+- **Files modified**:
+  - `Runnatics.Api/Program.cs` — rate limiting changed from global to per-IP partitioned (`AddPolicy<string>` with `RateLimitPartition.GetSlidingWindowLimiter`); `PublicRead` now 60 req/min per IP, `PublicWrite` now 5 req/10 min per IP; added inline `X-Public-Key` middleware that short-circuits with 401 for requests to `/api/public/*` missing or with wrong key
+  - `Runnatics.Api/appsettings.json` — added `PublicApi:Key = "SET_IN_AZURE_ENV_VARS"` (real value must be set as Azure App Service environment variable)
+- **CORS**: `PublicSite` policy was already correct (explicit `racetik.com`/`www.racetik.com` origins, no `AllowAnyOrigin`) — no changes needed
+- **Decisions made**:
+  - X-Public-Key middleware placed between `UseRouting()` and `UseCors()` so it fires before auth and before route matching overhead
+  - Rate limiting uses `RateLimitPartition` keyed on `RemoteIpAddress` — each IP gets its own counter, not a shared global counter
+- **Pending**:
+  - Set `PublicApi__Key` environment variable in Azure App Service (override the placeholder)
+  - UI: add `'X-Public-Key': import.meta.env.VITE_PUBLIC_API_KEY` to the publicApi.ts fetch helper
+  - UI: add `VITE_PUBLIC_API_KEY=` to the `.env.example` file (UI repo not present in this workspace)
+
 ### 2026-05-05 — backend-agent — Excel Export Fix + Public Leaderboard + Public Participant Detail
 
 - **What was built**: 3 features — fixed admin Excel export (Task 1), added public grouped leaderboard endpoint (Task 2), added public participant detail endpoint (Task 3)

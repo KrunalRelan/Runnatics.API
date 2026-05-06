@@ -259,33 +259,37 @@ builder.Services.AddLogging(logging =>
     logging.AddDebug();
 });
 
-// Rate limiting — protects public (unauthenticated) endpoints
+// Rate limiting — protects public (unauthenticated) endpoints, partitioned per remote IP
 builder.Services.AddRateLimiter(options =>
 {
-    // Global 429 response
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-    // Policy: public GET endpoints — 30 requests / 60-second sliding window per IP
-    options.AddSlidingWindowLimiter("PublicRead", opt =>
-    {
-        opt.PermitLimit = 30;
-        opt.Window = TimeSpan.FromSeconds(60);
-        opt.SegmentsPerWindow = 6;         // 10-second segments
-        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        opt.QueueLimit = 0;                // reject immediately, don't queue
-    });
+    // 60 requests / 1 minute per IP
+    options.AddPolicy<string>("PublicRead", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 6,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
 
-    // Policy: public POST (contact form) — 5 requests / 60 seconds per IP
-    options.AddSlidingWindowLimiter("PublicWrite", opt =>
-    {
-        opt.PermitLimit = 5;
-        opt.Window = TimeSpan.FromSeconds(60);
-        opt.SegmentsPerWindow = 6;
-        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        opt.QueueLimit = 0;
-    });
+    // 5 requests / 10 minutes per IP
+    options.AddPolicy<string>("PublicWrite", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(10),
+                SegmentsPerWindow = 10,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
 
-    // Partition all rate-limit policies by remote IP
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.ContentType = "application/json";
@@ -325,6 +329,26 @@ else
 
 app.UseHttpsRedirection();
 app.UseRouting();
+
+// X-Public-Key guard for all /api/public/* routes
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api/public"))
+    {
+        var expectedKey = app.Configuration["PublicApi:Key"];
+        var providedKey = context.Request.Headers["X-Public-Key"].ToString();
+
+        if (string.IsNullOrEmpty(providedKey) || providedKey != expectedKey)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(
+                """{"error":{"code":401,"message":"Missing or invalid X-Public-Key header."}}""");
+            return;
+        }
+    }
+    await next(context);
+});
 
 app.UseCors("AllowFrontend");
 

@@ -341,6 +341,14 @@ app.Use(async (context, next) =>
         var expectedKey = app.Configuration["PublicApi:Key"];
         var providedKey = context.Request.Headers["X-Public-Key"].ToString();
 
+        // TEMPORARY DEBUG — remove after fix
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogWarning(
+            "PublicApi key check — Expected: '{Expected}' | Provided: '{Provided}' | Match: {Match}",
+            expectedKey ?? "NULL",
+            string.IsNullOrEmpty(providedKey) ? "EMPTY" : providedKey,
+            providedKey == expectedKey);
+
         if (string.IsNullOrEmpty(providedKey) || providedKey != expectedKey)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;

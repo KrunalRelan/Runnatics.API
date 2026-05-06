@@ -331,9 +331,11 @@ app.UseHttpsRedirection();
 app.UseRouting();
 
 // X-Public-Key guard for all /api/public/* routes
+// Skip OPTIONS — browser preflight requests never carry custom headers
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/api/public"))
+    if (context.Request.Path.StartsWithSegments("/api/public") &&
+        !HttpMethods.IsOptions(context.Request.Method))
     {
         var expectedKey = app.Configuration["PublicApi:Key"];
         var providedKey = context.Request.Headers["X-Public-Key"].ToString();

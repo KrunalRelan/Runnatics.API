@@ -21,18 +21,22 @@ namespace Runnatics.Services
         private readonly IUserContextService _userContext;
         private readonly IEncryptionService _encryptionService;
 
+        private readonly IRaceNotificationService _raceNotificationService;
+
         public ResultsService(
             IUnitOfWork<RaceSyncDbContext> repository,
             IMapper mapper,
             ILogger<ResultsService> logger,
             IUserContextService userContext,
-            IEncryptionService encryptionService)
+            IEncryptionService encryptionService,
+            IRaceNotificationService raceNotificationService)
             : base(repository)
         {
             _mapper = mapper;
             _logger = logger;
             _userContext = userContext;
             _encryptionService = encryptionService;
+            _raceNotificationService = raceNotificationService;
         }
 
         public async Task<SplitTimeCalculationResponse> CalculateSplitTimesAsync(CalculateSplitTimesRequest request)
@@ -1304,6 +1308,9 @@ namespace Runnatics.Services
 
                     await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                 });
+
+                _ = Task.Run(() => _raceNotificationService.NotifyRaceCompletionAsync(
+                    decryptedParticipantId, decryptedRaceId));
 
                 var updatedResult = await resultsRepo.GetQuery(r =>
                     r.ParticipantId == decryptedParticipantId &&

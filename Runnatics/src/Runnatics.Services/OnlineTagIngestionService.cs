@@ -50,6 +50,7 @@ public class OnlineTagIngestionService
     private readonly IUnitOfWork<RaceSyncDbContext> _repository;
     private readonly IUserContextService _userContext;
     private readonly IHubContext<RaceHub> _raceHub;
+    private readonly IRaceNotificationService _raceNotificationService;
     private readonly ILogger<OnlineTagIngestionService> _logger;
 
     /// <summary>
@@ -62,11 +63,13 @@ public class OnlineTagIngestionService
         IUnitOfWork<RaceSyncDbContext> repository,
         IUserContextService userContext,
         IHubContext<RaceHub> raceHub,
+        IRaceNotificationService raceNotificationService,
         ILogger<OnlineTagIngestionService> logger)
     {
         _repository = repository;
         _userContext = userContext;
         _raceHub = raceHub;
+        _raceNotificationService = raceNotificationService;
         _logger = logger;
     }
 
@@ -430,6 +433,8 @@ public class OnlineTagIngestionService
 
             var crossingEvents = new List<CheckpointCrossingEvent>();
 
+            var participantsToNotify = new List<(int ParticipantId, int RaceId)>();
+
             foreach (var reading in readings)
             {
                 if (!epcToParticipant.TryGetValue(reading.Epc, out var participant))
@@ -447,6 +452,8 @@ public class OnlineTagIngestionService
                     RaceId = participant.RaceId,
                     CheckpointId = checkpoint.Id
                 });
+
+                participantsToNotify.Add((participant.ParticipantId, participant.RaceId));
             }
 
             if (crossingEvents.Any())
@@ -461,6 +468,15 @@ public class OnlineTagIngestionService
                 _logger.LogDebug(
                     "Pushed {Count} live crossings from {DeviceName}",
                     crossingEvents.Count, device.Name);
+
+                // Fire-and-forget checkpoint notifications (dedup handled inside service)
+                foreach (var (participantId, raceId) in participantsToNotify.Distinct())
+                {
+                    var pId = participantId;
+                    var rId = raceId;
+                    var cId = checkpoint.Id;
+                    _ = Task.Run(() => _raceNotificationService.NotifyCheckpointCrossingAsync(pId, cId, rId));
+                }
             }
         }
         catch (Exception ex)

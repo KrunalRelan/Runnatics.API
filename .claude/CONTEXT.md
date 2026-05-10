@@ -325,3 +325,37 @@ FORMAT:
   - `GetPublicGroupedLeaderboardAsync` accepts encrypted IDs (same as admin endpoints)
   - `GetPublicParticipantDetailAsync` accepts encrypted participantId
   - `ResultsExportService` no longer depends on `IResultsService` — removed that dependency, replaced with `RaceSyncDbContext` + `IEncryptionService`
+
+### 2026-05-10 — backend-agent — Race Notification System (Option B)
+
+- **What was built**: Race SMS/Email notification layer using MSG91 (Flow API) + Mailer91 — separate from auth SMTP path
+- **Files created**:
+  - `Runnatics.Models.Client/Notifications/NotificationResult.cs` — result DTO with Ok/Fail factory methods
+  - `Runnatics.Services.Interface/INotificationSmsService.cs` — checkpoint + completion SMS interface
+  - `Runnatics.Services.Interface/INotificationEmailService.cs` — completion + support ticket email interface
+  - `Runnatics.Services.Interface/IRaceNotificationService.cs` — orchestrator interface
+  - `Runnatics.Services/Config/Msg91Config.cs` — bound to `Notification:Msg91` config section
+  - `Runnatics.Services/Config/Mailer91Config.cs` — bound to `Notification:Mailer91` config section
+  - `Runnatics.Services/Msg91NotificationSmsService.cs` — MSG91 Flow API; CompletionTemplateId = 69e08448cd4818fe270e6b32
+  - `Runnatics.Services/Mailer91NotificationEmailService.cs` — Mailer91 HTTP API; RaceCompletion + SupportTicket HTML templates
+  - `Runnatics.Services/RaceNotificationService.cs` — orchestrator; loads participant/result/query from DB; logs to NotificationLogs
+  - `Runnatics.Models.Data/Entities/NotificationLog.cs` — append-only log entity (no AuditProperties)
+  - `Runnatics.Data.EF/Config/NotificationLogConfiguration.cs` — Fluent API config
+  - `db/scripts/NotificationLog_CreateTable_20260510.sql` — CREATE TABLE + index script
+- **Files modified**:
+  - `Runnatics.Api/appsettings.json` — added `Notification:Msg91` and `Notification:Mailer91` sections (keys SET_IN_AZURE_ENV_VARS)
+  - `Runnatics.Data.EF/RaceSyncDbContext.cs` — added `NotificationLogs` DbSet + `NotificationLogConfiguration` apply
+  - `Runnatics.Api/Program.cs` — registered `IOptions<Msg91Config>`, `IOptions<Mailer91Config>`, `INotificationSmsService`, `INotificationEmailService`, `IRaceNotificationService` with typed HttpClients
+  - `Runnatics.Services/SupportQueryService.cs` — injected `IRaceNotificationService`; replaced `SendSubmissionConfirmationAsync` (SMTP) with `NotifySupportTicketCreatedAsync` (Mailer91) in both `SubmitQueryAsync` and `CreatePublicQueryAsync`
+  - `Runnatics.Services/ResultsService.cs` — injected `IRaceNotificationService`; fire-and-forget `NotifyRaceCompletionAsync` after `CalculateResultRankingsAsync` in `RecordManualTimeAsync`
+  - `Runnatics.Services/OnlineTagIngestionService.cs` — injected `IRaceNotificationService`; fire-and-forget `NotifyCheckpointCrossingAsync` per unique participant after SignalR push in `PushLiveCrossingEvents`
+- **Decisions made**:
+  - `ISmsService` / `IEmailService` (auth SMTP path) completely untouched
+  - Checkpoint notification dedup: `RaceNotificationService` queries `NotificationLogs` for a successful SMS to same participant+race within 30s before sending (matches the RFID dedup window)
+  - All notification calls are fire-and-forget (`Task.Run`) to keep RFID webhook and manual time endpoints fast
+  - `Participant.Phone` (not Mobile) is the phone field
+  - `IGenericRepository<T>.GetQuery(filter)` is the correct method — not `GetQueryable()`
+  - `SupportQueryService` still keeps `_emailService` (used for admin reply emails in `SendCommentEmailAsync`)
+- **Pending**:
+  - Run `db/scripts/NotificationLog_CreateTable_20260510.sql` against Azure SQL
+  - Set `Notification__Msg91__AuthKey`, `Notification__Mailer91__ApiKey`, `Notification__Msg91__CheckpointTemplateId` in Azure App Service environment variables

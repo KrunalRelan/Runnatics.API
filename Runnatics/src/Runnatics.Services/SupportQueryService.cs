@@ -14,11 +14,13 @@ namespace Runnatics.Services
         IEmailService emailService,
         IEmailTemplateService emailTemplateService,
         ISmsService smsService,
+        IRaceNotificationService raceNotificationService,
         ILogger<SupportQueryService> logger) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), ISupportQueryService
     {
         private readonly IEmailService _emailService = emailService;
         private readonly IEmailTemplateService _emailTemplateService = emailTemplateService;
         private readonly ISmsService _smsService = smsService;
+        private readonly IRaceNotificationService _raceNotificationService = raceNotificationService;
         private readonly ILogger<SupportQueryService> _logger = logger;
 
         // ── Public (no auth) ──────────────────────────────────────────────────
@@ -44,7 +46,7 @@ namespace Runnatics.Services
 
                 _logger.LogInformation("Support query submitted by {Email}, Id: {Id}", query.SubmitterEmail, query.Id);
 
-                await SendSubmissionConfirmationAsync(query.SubmitterEmail, query.Subject, query.Id);
+                await _raceNotificationService.NotifySupportTicketCreatedAsync(query.Id);
 
                 return query.Id;
             }
@@ -96,7 +98,7 @@ namespace Runnatics.Services
                     "Public contact form submitted by {Email} (name: {Name}), Id: {Id}",
                     query.SubmitterEmail, name, query.Id);
 
-                await SendSubmissionConfirmationAsync(query.SubmitterEmail, query.Subject, query.Id);
+                await _raceNotificationService.NotifySupportTicketCreatedAsync(query.Id);
 
                 return query.Id;
             }

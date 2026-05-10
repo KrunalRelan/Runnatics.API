@@ -47,6 +47,9 @@ namespace Runnatics.Data.EF
         public DbSet<RawRFIDReading> RawRFIDReadings { get; set; }
         public DbSet<ReadingCheckpointAssignment> ReadingCheckpointAssignments { get; set; }
 
+        // Notification Logs (race SMS/Email — separate from in-app Notifications)
+        public DbSet<NotificationLog> NotificationLogs { get; set; }
+
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
         #endregion
@@ -89,6 +92,9 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new UploadBatchConfiguration());
             modelBuilder.ApplyConfiguration(new RawRFIDReadingConfiguration());
             modelBuilder.ApplyConfiguration(new ReadingCheckpointAssignmentConfiguration());
+
+            // Notification Log
+            modelBuilder.ApplyConfiguration(new NotificationLogConfiguration());
             
             //modelBuilder.DefaultFilters();
 

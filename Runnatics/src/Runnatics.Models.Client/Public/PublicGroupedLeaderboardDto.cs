@@ -8,8 +8,15 @@ namespace Runnatics.Models.Client.Public
         public decimal? RaceDistance { get; set; }
         public string? ResultRules { get; set; }
         public string RankBy { get; set; } = "ChipTime";
+        public string? EventBannerBase64 { get; set; }
+        public PublicPodiumDto Podium { get; set; } = new();
         public List<PublicGenderGroupDto> GenderCategories { get; set; } = [];
+        public List<PublicLeaderboardEntryDto> OverallResults { get; set; } = [];
         public int TotalFinishers { get; set; }
         public int TotalParticipants { get; set; }
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+        public int TotalOverall { get; set; }
+        public int TotalPages { get; set; }
     }
 }

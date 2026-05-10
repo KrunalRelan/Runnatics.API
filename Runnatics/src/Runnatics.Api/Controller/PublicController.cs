@@ -180,6 +180,123 @@ namespace Runnatics.Api.Controller
 
         #endregion
 
+        [HttpGet("results/filters")]
+        [EnableRateLimiting("PublicRead")]
+        [ResponseCache(Duration = 300)]
+        [ProducesResponseType(typeof(ResponseBase<PublicResultFiltersDto>), StatusCodes.Status200OK)]
+        public async Task<IActionResult> GetResultFilters(CancellationToken cancellationToken = default)
+        {
+            var dto = await _resultsService.GetResultFiltersAsync(cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<PublicResultFiltersDto>(_resultsService.ErrorMessage));
+
+            return Ok(new ResponseBase<PublicResultFiltersDto> { Message = dto });
+        }
+
+        [HttpGet("results/{eventId}/races")]
+        [EnableRateLimiting("PublicRead")]
+        [ResponseCache(Duration = 120)]
+        [ProducesResponseType(typeof(ResponseBase<PublicRaceFilterDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> GetRaceFilters(string eventId, CancellationToken cancellationToken = default)
+        {
+            var dto = await _resultsService.GetRaceFiltersAsync(eventId, cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<PublicRaceFilterDto>(_resultsService.ErrorMessage));
+
+            if (dto == null)
+                return NotFound(CreateErrorResponse<PublicRaceFilterDto>("Event not found."));
+
+            return Ok(new ResponseBase<PublicRaceFilterDto> { Message = dto });
+        }
+
+        [HttpGet("results/{eventId}/{raceId}/brackets")]
+        [EnableRateLimiting("PublicRead")]
+        [ResponseCache(Duration = 60)]
+        [ProducesResponseType(typeof(ResponseBase<PublicBracketFilterDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> GetBracketFilters(
+            string eventId, string raceId, CancellationToken cancellationToken = default)
+        {
+            var dto = await _resultsService.GetBracketFiltersAsync(eventId, raceId, cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<PublicBracketFilterDto>(_resultsService.ErrorMessage));
+
+            if (dto == null)
+                return NotFound(CreateErrorResponse<PublicBracketFilterDto>("Event or race not found."));
+
+            return Ok(new ResponseBase<PublicBracketFilterDto> { Message = dto });
+        }
+
+        [HttpPost("participant/search")]
+        [EnableRateLimiting("PublicRead")]
+        [ProducesResponseType(typeof(ResponseBase<List<PublicParticipantSearchResultDto>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> SearchParticipants(
+            [FromBody] SearchParticipantsRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var results = await _resultsService.SearchParticipantsForComparisonAsync(request, cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<List<PublicParticipantSearchResultDto>>(_resultsService.ErrorMessage));
+
+            return Ok(new ResponseBase<List<PublicParticipantSearchResultDto>> { Message = results });
+        }
+
+        [HttpPost("participant/compare")]
+        [EnableRateLimiting("PublicRead")]
+        [ProducesResponseType(typeof(ResponseBase<PublicParticipantComparisonDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> CompareParticipants(
+            [FromBody] CompareParticipantsRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(CreateErrorResponse<PublicParticipantComparisonDto>(
+                    string.Join("; ", ModelState.Values.SelectMany(v => v.Errors).Select(e => e.ErrorMessage))));
+
+            var dto = await _resultsService.CompareParticipantsAsync(request, cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<PublicParticipantComparisonDto>(_resultsService.ErrorMessage));
+
+            if (dto == null)
+                return NotFound(CreateErrorResponse<PublicParticipantComparisonDto>("One or both participants not found."));
+
+            return Ok(new ResponseBase<PublicParticipantComparisonDto> { Message = dto });
+        }
+
+        [HttpGet("participant/{participantId}/certificate")]
+        [EnableRateLimiting("PublicRead")]
+        [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetParticipantCertificate(
+            string participantId,
+            CancellationToken cancellationToken = default)
+        {
+            var bytes = await _resultsService.GetPublicParticipantCertificateAsync(participantId, cancellationToken);
+
+            if (_resultsService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<object>(_resultsService.ErrorMessage));
+
+            if (bytes == null || bytes.Length == 0)
+                return NotFound(CreateErrorResponse<object>("Certificate not available for this participant."));
+
+            return File(bytes, "image/png", $"certificate-{participantId}.png");
+        }
+
         #region Contact
 
         [HttpPost("contact")]

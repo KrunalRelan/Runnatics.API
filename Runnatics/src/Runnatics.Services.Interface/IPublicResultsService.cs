@@ -5,38 +5,47 @@ namespace Runnatics.Services.Interface
 {
     public interface IPublicResultsService : ISimpleServiceBase
     {
-        /// <summary>
-        /// Returns the full results response for a public event page, including publish-gate checks,
-        /// leaderboard settings, and DNF filtering. Returns null when the event is not found.
-        /// </summary>
         Task<PublicResultsResponseDto?> GetPublicEventResultsAsync(
             string encryptedEventId,
             GetPublicEventResultsRequest request,
             CancellationToken ct = default);
 
-        /// <summary>
-        /// Returns the result DTO for a single participant identified by bib number within a public event.
-        /// Returns null when the event or bib is not found.
-        /// </summary>
         Task<PublicResultDto?> GetPublicResultByBibAsync(
             string encryptedEventId,
             string bib,
             CancellationToken ct = default);
 
-        /// <summary>
-        /// Returns finishers grouped by gender then age category for the public leaderboard page.
-        /// </summary>
         Task<PublicGroupedLeaderboardDto?> GetPublicGroupedLeaderboardAsync(
             string eventId,
             string raceId,
             GetPublicLeaderboardRequest request,
             CancellationToken ct = default);
 
-        /// <summary>
-        /// Returns full result details for a single participant by encrypted participant ID.
-        /// </summary>
         Task<PublicParticipantDetailDto?> GetPublicParticipantDetailAsync(
             string participantId,
+            CancellationToken ct = default);
+
+        Task<PublicResultFiltersDto> GetResultFiltersAsync(CancellationToken ct = default);
+
+        Task<PublicRaceFilterDto?> GetRaceFiltersAsync(
+            string encryptedEventId,
+            CancellationToken ct = default);
+
+        Task<PublicBracketFilterDto?> GetBracketFiltersAsync(
+            string encryptedEventId,
+            string encryptedRaceId,
+            CancellationToken ct = default);
+
+        Task<List<PublicParticipantSearchResultDto>> SearchParticipantsForComparisonAsync(
+            SearchParticipantsRequest request,
+            CancellationToken ct = default);
+
+        Task<PublicParticipantComparisonDto?> CompareParticipantsAsync(
+            CompareParticipantsRequest request,
+            CancellationToken ct = default);
+
+        Task<byte[]?> GetPublicParticipantCertificateAsync(
+            string encryptedParticipantId,
             CancellationToken ct = default);
     }
 }

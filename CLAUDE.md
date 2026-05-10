@@ -324,3 +324,304 @@ Place reusable task patterns here.
 - [ ] All async methods passing `CancellationToken`?
 - [ ] Relationships in `IEntityTypeConfiguration`? No DataAnnotations?
 - [ ] Lambda syntax everywhere? No LINQ query syntax?
+
+---
+
+## Public API DTOs — `Runnatics.Models.Client.Public`
+
+These are the **public-facing API contract** — serialised as camelCase JSON, consumed directly by the frontend UI. Do NOT change property names without coordinating with the frontend.
+
+### Design Rules (enforced in code)
+- `HasPublishedResults` on `PublicEventSummaryDto` is driven **solely** by `EventSettings.Published` — no date or race-settings checks.
+- `EncryptedRaceId` on `PublicRaceCategoryDto` is used by the UI to build the leaderboard route: `/c/{encryptedEventId}/{encryptedRaceId}/l`.
+- `HasResults` on `PublicRaceCategoryDto` is `true` when at least one `Results` row exists for that race (any status).
+- Public event queries must use `(EventSettings.Published || EventSettings.ConfirmedEvent)` — NEVER filter out published events with `!Published`.
+- All IDs exposed publicly go through `IEncryptionService.Encrypt/Decrypt`.
+
+---
+
+### `PublicEventSummaryDto`
+Base summary shown on event listing tiles.
+```csharp
+public class PublicEventSummaryDto
+{
+    public string EncryptedId { get; set; } = string.Empty;  // Encrypted event ID for URL use
+    public string Name { get; set; } = string.Empty;
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public DateTime EventDate { get; set; }
+    public string? HeroImageUrl { get; set; }
+    public string? BannerBase64 { get; set; }
+    public string? Description { get; set; }                  // Truncated to 200 chars at mapping layer
+    public List<string> RaceCategories { get; set; } = [];
+    public int? ParticipantCount { get; set; }
+    public bool RegistrationOpen { get; set; }
+    public string? RegistrationUrl { get; set; }
+    public string? Venue { get; set; }                        // Maps from Event.VenueName
+    public bool HasPublishedResults { get; set; }             // Driven solely by EventSettings.Published
+}
+```
+
+---
+
+### `PublicEventDetailDto : PublicEventSummaryDto`
+Extended detail shown on the event detail page. Inherits all fields from `PublicEventSummaryDto`.
+```csharp
+public class PublicEventDetailDto : PublicEventSummaryDto
+{
+    public string? FullDescription { get; set; }
+    public string? Schedule { get; set; }
+    public string? RouteMapUrl { get; set; }
+    public List<PublicRaceCategoryDto> Races { get; set; } = [];
+    public DateTime? RegistrationDeadline { get; set; }
+    public string? ContactEmail { get; set; }
+    public bool ShowResultSummary { get; set; }   // From EventSettings.ShowResultSummaryForRaces
+    public bool ShowBanner { get; set; }          // Inverse of EventSettings.RemoveBanner && BannerImage not empty
+}
+```
+
+---
+
+### `PublicRaceCategoryDto`
+One entry per published race on the event detail page.
+```csharp
+public class PublicRaceCategoryDto
+{
+    public string EncryptedRaceId { get; set; } = string.Empty; // Used for /c/{eventId}/{raceId}/l leaderboard URL
+    public string Name { get; set; } = string.Empty;            // Maps from Race.Title
+    public string? Distance { get; set; }                        // Race.Distance formatted "0.##"
+    public decimal? Price { get; set; }                          // null — no Price column yet
+    public int? ParticipantLimit { get; set; }                   // Maps from Race.MaxParticipants
+    public int? RegisteredCount { get; set; }                    // Computed: active participant count for this race
+    public bool HasResults { get; set; }                         // True if any Results rows exist for this race
+}
+```
+
+---
+
+### `PublicResultsResponseDto`
+Response for the public results page (paginated).
+```csharp
+public class PublicResultsResponseDto
+{
+    public List<PublicResultDto> Results { get; set; } = [];
+    public List<string> Races { get; set; } = [];      // Distinct race names for filter dropdown
+    public int TotalCount { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public int TotalPages { get; set; }                // Computed: ceil(TotalCount / PageSize)
+    public bool HasNext { get; set; }                  // Computed: Page < TotalPages
+    public bool HasPrevious { get; set; }              // Computed: Page > 1
+    public PublicLeaderboardSettingsDto LeaderboardSettings { get; set; } = new();
+    public bool IsPublished { get; set; } = true;      // False → results not yet published
+    public string? StatusMessage { get; set; }         // Human-readable when IsPublished=false
+}
+```
+
+---
+
+### `PublicResultDto`
+A single result row in the results table.
+```csharp
+public class PublicResultDto
+{
+    public string BibNumber { get; set; } = string.Empty;      // Results.Participant.BibNumber
+    public string ParticipantName { get; set; } = string.Empty;// Results.Participant FirstName + LastName
+    public string RaceName { get; set; } = string.Empty;       // Results.Race.Title
+    public string? AgeGroup { get; set; }                       // Results.Participant.AgeCategory
+    public string? Gender { get; set; }
+    public TimeSpan? GunTime { get; set; }                      // Results.GunTime ms → TimeSpan
+    public TimeSpan? NetTime { get; set; }                      // Results.NetTime ms → TimeSpan
+    public int? OverallRank { get; set; }
+    public int? CategoryRank { get; set; }
+    public int? GenderRank { get; set; }
+    public List<PublicSplitDto>? Splits { get; set; }
+}
+```
+
+---
+
+### `PublicLeaderboardSettingsDto`
+Effective leaderboard display config (race-level override → event-level fallback).
+```csharp
+public class PublicLeaderboardSettingsDto
+{
+    public bool ShowOverallResults { get; set; } = true;
+    public bool ShowCategoryResults { get; set; } = true;
+    public bool ShowGenderResults { get; set; } = false;
+    public bool ShowAgeGroupResults { get; set; } = false;
+    public bool SortByOverallChipTime { get; set; } = true;
+    public bool SortByOverallGunTime { get; set; } = false;
+    public bool SortByCategoryChipTime { get; set; } = true;
+    public bool SortByCategoryGunTime { get; set; } = false;
+    public bool EnableLiveLeaderboard { get; set; } = false;
+    public bool ShowSplitTimes { get; set; } = false;
+    public bool ShowPace { get; set; } = false;
+    public bool ShowTeamResults { get; set; } = false;
+    public bool ShowMedalIcon { get; set; } = true;
+    public int AutoRefreshIntervalSec { get; set; } = 30;
+    public int MaxDisplayedRecords { get; set; } = 0;              // 0 = no cap
+    public int NumberOfResultsToShowOverall { get; set; } = 0;     // 0 = no cap
+    public int NumberOfResultsToShowCategory { get; set; } = 0;    // 0 = no cap
+}
+```
+
+---
+
+### `PublicGroupedLeaderboardDto`
+Grouped leaderboard response (gender → category → participants).
+```csharp
+public class PublicGroupedLeaderboardDto
+{
+    public string EventName { get; set; } = string.Empty;
+    public string RaceName { get; set; } = string.Empty;
+    public DateTime? RaceDate { get; set; }
+    public decimal? RaceDistance { get; set; }
+    public string? ResultRules { get; set; }
+    public string RankBy { get; set; } = "ChipTime";
+    public List<PublicGenderGroupDto> GenderCategories { get; set; } = [];
+    public int TotalFinishers { get; set; }
+    public int TotalParticipants { get; set; }
+}
+```
+
+### `PublicGenderGroupDto`
+```csharp
+public class PublicGenderGroupDto
+{
+    public string Gender { get; set; } = string.Empty;
+    public List<PublicCategoryGroupDto> Categories { get; set; } = [];
+}
+```
+
+### `PublicCategoryGroupDto`
+```csharp
+public class PublicCategoryGroupDto
+{
+    public string CategoryName { get; set; } = string.Empty;
+    public string RankBy { get; set; } = "Chip time";
+    public List<PublicLeaderboardEntryDto> Participants { get; set; } = [];
+}
+```
+
+### `PublicLeaderboardEntryDto`
+```csharp
+public class PublicLeaderboardEntryDto
+{
+    public int Rank { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Bib { get; set; } = string.Empty;
+    public string? ChipTime { get; set; }
+    public string? GunTime { get; set; }
+    public string? ParticipantDetailUrl { get; set; }
+}
+```
+
+---
+
+### `PublicParticipantDetailDto`
+Individual participant result detail page.
+```csharp
+public class PublicParticipantDetailDto
+{
+    public string EventName { get; set; } = string.Empty;
+    public string? RaceDate { get; set; }
+    public PublicParticipantInfoDto Participant { get; set; } = new();
+    public PublicTimeDetailDto? ChipTime { get; set; }
+    public PublicTimeDetailDto? GunTime { get; set; }
+    public List<PublicSplitDetailDto> Splits { get; set; } = [];
+}
+```
+
+### `PublicParticipantInfoDto`
+```csharp
+public class PublicParticipantInfoDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Bib { get; set; }
+    public string? Gender { get; set; }
+    public string? Category { get; set; }
+    public string? Distance { get; set; }
+}
+```
+
+### `PublicTimeDetailDto`
+```csharp
+public class PublicTimeDetailDto
+{
+    public string Time { get; set; } = string.Empty;
+    public string? AveragePace { get; set; }
+    public int? OverallRank { get; set; }
+    public int TotalOverall { get; set; }
+    public int? GenderRank { get; set; }
+    public int TotalGender { get; set; }
+    public int? CategoryRank { get; set; }
+    public int TotalCategory { get; set; }
+}
+```
+
+### `PublicSplitDto`
+```csharp
+public class PublicSplitDto
+{
+    public string CheckpointName { get; set; } = string.Empty; // SplitTimes.ToCheckpoint.Name
+    public TimeSpan? Time { get; set; }                        // SplitTimes.SplitTimeMs → TimeSpan
+    public int? Rank { get; set; }                             // SplitTimes.Rank
+}
+```
+
+### `PublicSplitDetailDto`
+```csharp
+public class PublicSplitDetailDto
+{
+    public string Checkpoint { get; set; } = string.Empty;
+    public string? SplitTime { get; set; }
+    public string? RaceTime { get; set; }
+    public int? RaceRank { get; set; }
+    public decimal? SplitDist { get; set; }
+    public string? Pace { get; set; }
+    public decimal? Speed { get; set; }
+}
+```
+
+---
+
+### `PublicPagedResultDto<T>`
+Generic paged wrapper used by public list endpoints.
+```csharp
+public class PublicPagedResultDto<T>
+{
+    public List<T> Items { get; set; } = [];
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public int TotalCount { get; set; }
+    public int TotalPages { get; set; }    // Computed: ceil(TotalCount / PageSize)
+    public bool HasNext { get; set; }      // Computed: Page < TotalPages
+    public bool HasPrevious { get; set; }  // Computed: Page > 1
+}
+```
+
+---
+
+### `PublicStatsDto`
+Home page stats counters.
+```csharp
+public class PublicStatsDto
+{
+    public int UpcomingEvents { get; set; }
+    public int PastEvents { get; set; }
+    public int TotalEvents { get; set; }
+}
+```
+
+### `PublicGalleryImageDto`
+```csharp
+public class PublicGalleryImageDto
+{
+    public string Url { get; set; } = string.Empty;
+    public string? ThumbnailUrl { get; set; }
+    public string? Caption { get; set; }
+    public string? EventName { get; set; }
+    public DateTime? EventDate { get; set; }
+}
+```

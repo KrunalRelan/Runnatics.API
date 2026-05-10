@@ -228,13 +228,10 @@ builder.Services.AddScoped<ISupportQueryService, SupportQueryService>();
 builder.Services.AddHttpClient<ISmsService, Msg91SmsService>();
 builder.Services.AddScoped<IEmailTemplateService, EmailTemplateService>();
 
-// Race notification services (MSG91 + Mailer91 — separate from auth email/SMS)
+// Race notification services (MSG91 for SMS — email via existing Hostinger SMTP)
 builder.Services.Configure<Runnatics.Services.Config.Msg91Config>(
     builder.Configuration.GetSection("Notification:Msg91"));
-builder.Services.Configure<Runnatics.Services.Config.Mailer91Config>(
-    builder.Configuration.GetSection("Notification:Mailer91"));
 builder.Services.AddHttpClient<INotificationSmsService, Msg91NotificationSmsService>();
-builder.Services.AddHttpClient<INotificationEmailService, Mailer91NotificationEmailService>();
 builder.Services.AddScoped<IRaceNotificationService, RaceNotificationService>();
 
 // FluentValidation

@@ -1053,8 +1053,7 @@ namespace Runnatics.Services
                 .Where(r => r.RaceSettings == null || r.RaceSettings.Published)
                 .ToList() ?? [];
 
-            var hasPublishedResults = e.EventDate.Date < DateTime.UtcNow.Date &&
-                publishedRaces.Any(r => r.RaceSettings == null || r.RaceSettings.ShowResultTable);
+            var hasPublishedResults = e.EventSettings?.Published ?? false;
 
             return new PublicEventSummaryDto
             {

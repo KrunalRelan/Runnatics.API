@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
+using Runnatics.Models.Client.Notifications;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -10,7 +11,8 @@ namespace Runnatics.Services
     public class RaceNotificationService(
         IUnitOfWork<RaceSyncDbContext> unitOfWork,
         INotificationSmsService smsService,
-        INotificationEmailService emailService,
+        IEmailService emailService,
+        IEmailTemplateService emailTemplateService,
         ILogger<RaceNotificationService> logger) : IRaceNotificationService
     {
         public async Task NotifyCheckpointCrossingAsync(
@@ -23,7 +25,7 @@ namespace Runnatics.Services
             var phone = participant.Phone;
             if (string.IsNullOrWhiteSpace(phone)) return;
 
-            // Guard: skip if a notification was already sent within the dedup window (30s)
+            // Guard: skip if already sent within the RFID dedup window (30s)
             var recentCutoff = DateTime.UtcNow.AddSeconds(-30);
             var alreadySent = await unitOfWork.GetRepository<NotificationLog>()
                 .GetQuery()
@@ -67,31 +69,34 @@ namespace Runnatics.Services
 
             if (raceResult == null) return;
 
+            var participantName = $"{participant.FirstName} {participant.LastName}".Trim();
             var raceName = raceResult.Race?.Title ?? string.Empty;
             var finishTime = FormatMs(raceResult.FinishTime);
-            var rank = raceResult.OverallRank?.ToString() ?? string.Empty;
+            var rank = raceResult.OverallRank ?? 0;
 
-            var variables = new Dictionary<string, string>
-            {
-                ["name1"] = $"{participant.FirstName} {participant.LastName}".Trim(),
-                ["time"] = finishTime,
-                ["event"] = raceName,
-                ["ParticipantName"] = $"{participant.FirstName} {participant.LastName}".Trim(),
-                ["RaceName"] = raceName,
-                ["FinishTime"] = finishTime,
-                ["OverallRank"] = rank
-            };
-
+            // SMS via MSG91
             if (!string.IsNullOrWhiteSpace(participant.Phone))
             {
-                var smsResult = await smsService.SendCompletionSmsAsync(participantId, raceId, participant.Phone, variables, ct);
+                var smsVars = new Dictionary<string, string>
+                {
+                    ["name1"] = participantName,
+                    ["time"] = finishTime,
+                    ["event"] = raceName
+                };
+                var smsResult = await smsService.SendCompletionSmsAsync(participantId, raceId, participant.Phone, smsVars, ct);
                 await LogAsync("SMS", "RaceCompletion", participantId, raceId, participant.Phone, smsResult, ct);
             }
 
+            // Email via Hostinger SMTP
             if (!string.IsNullOrWhiteSpace(participant.Email))
             {
-                var name = $"{participant.FirstName} {participant.LastName}".Trim();
-                var emailResult = await emailService.SendCompletionEmailAsync(participantId, raceId, participant.Email, name, variables, ct);
+                var htmlBody = emailTemplateService.BuildRaceResultNotification(
+                    participantName, raceName, finishTime, rank, "Finished");
+                var sent = await emailService.SendAsync(
+                    participant.Email,
+                    $"Your results for {raceName} are ready!",
+                    htmlBody);
+                var emailResult = sent ? NotificationResult.Ok() : NotificationResult.Fail("SMTP send failed");
                 await LogAsync("Email", "RaceCompletion", participantId, raceId, participant.Email, emailResult, ct);
             }
         }
@@ -108,14 +113,13 @@ namespace Runnatics.Services
             var email = query.SubmitterEmail;
             if (string.IsNullOrWhiteSpace(email)) return;
 
-            var variables = new Dictionary<string, string>
-            {
-                ["Name"] = email,
-                ["TicketId"] = query.Id.ToString(),
-                ["Query"] = query.Subject
-            };
+            var htmlBody = emailTemplateService.BuildSupportQueryConfirmation(
+                submitterName: email,
+                subject: query.Subject,
+                ticketId: query.Id.ToString());
 
-            var result = await emailService.SendSupportTicketEmailAsync(email, email, variables, ct);
+            var sent = await emailService.SendAsync(email, "We received your support query", htmlBody);
+            var result = sent ? NotificationResult.Ok() : NotificationResult.Fail("SMTP send failed");
             await LogAsync("Email", "SupportTicket", null, null, email, result, ct);
         }
 
@@ -139,7 +143,7 @@ namespace Runnatics.Services
             string channel, string eventType,
             int? participantId, int? raceId,
             string recipient,
-            Models.Client.Notifications.NotificationResult result,
+            NotificationResult result,
             CancellationToken ct)
         {
             try

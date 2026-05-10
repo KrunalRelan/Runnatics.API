@@ -971,8 +971,7 @@ namespace Runnatics.Services
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
-                    e.EventSettings.ConfirmedEvent &&
-                    !e.EventSettings.Published)
+                    (e.EventSettings.Published || e.EventSettings.ConfirmedEvent))
                     .Include(e => e.EventSettings)
                     .Include(e => e.LeaderboardSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
@@ -1000,7 +999,16 @@ namespace Runnatics.Services
 
                 var raceCounts = countRows.ToDictionary(c => c.RaceId, c => c.Count);
 
-                return MapToEventDetailDto(eventEntity, raceCounts);
+                var resultRepo = _repository.GetRepository<Results>();
+                var raceResultCounts = await resultRepo.GetQuery(r =>
+                    raceIds.Contains(r.RaceId) &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .GroupBy(r => r.RaceId)
+                    .Select(g => new { RaceId = g.Key, Count = g.Count() })
+                    .ToListAsync();
+
+                return MapToEventDetailDto(eventEntity, raceCounts, raceResultCounts.ToDictionary(r => r.RaceId, r => r.Count));
             }
             catch (Exception ex)
             {
@@ -1078,7 +1086,7 @@ namespace Runnatics.Services
             };
         }
 
-        private PublicEventDetailDto MapToEventDetailDto(Event e, Dictionary<int, int>? raceCounts)
+        private PublicEventDetailDto MapToEventDetailDto(Event e, Dictionary<int, int>? raceCounts, Dictionary<int, int>? raceResultCounts = null)
         {
             var settings = e.EventSettings;
             var publishedRaces = e.Races?
@@ -1109,11 +1117,13 @@ namespace Runnatics.Services
                 RouteMapUrl = null,
                 Races = publishedRaces.Select(r => new PublicRaceCategoryDto
                 {
+                    EncryptedRaceId = _encryptionService.Encrypt(r.Id.ToString()),
                     Name = r.Title,
                     Distance = r.Distance?.ToString("0.##"),
                     Price = null,
                     ParticipantLimit = r.MaxParticipants,
-                    RegisteredCount = raceCounts != null && raceCounts.TryGetValue(r.Id, out var c) ? c : 0
+                    RegisteredCount = raceCounts != null && raceCounts.TryGetValue(r.Id, out var c) ? c : 0,
+                    HasResults = raceResultCounts != null && raceResultCounts.ContainsKey(r.Id)
                 }).ToList(),
                 RegistrationDeadline = e.RegistrationDeadline,
                 ContactEmail = null,

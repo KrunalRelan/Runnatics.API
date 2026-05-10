@@ -2,6 +2,8 @@ namespace Runnatics.Models.Client.Public
 {
     public class PublicRaceCategoryDto
     {
+        public string EncryptedRaceId { get; set; } = string.Empty;
+
         public string Name { get; set; } = string.Empty;
 
         // Maps from Race.Distance
@@ -15,5 +17,7 @@ namespace Runnatics.Models.Client.Public
 
         // Computed: count of active, non-deleted Participants for this race
         public int? RegisteredCount { get; set; }
+
+        public bool HasResults { get; set; }
     }
 }

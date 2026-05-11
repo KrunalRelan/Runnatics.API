@@ -181,9 +181,9 @@ namespace Runnatics.Models.Client.Responses.Participants
 
         /// <summary>
         /// All raw RFID detections from the reader hardware, including duplicates and unprocessed pings.
-        /// Each entry represents one antenna detection before deduplication.
+        /// IsNormalized=true marks the winning read; IsDuplicate=true marks discarded duplicates.
         /// </summary>
-        public List<RawRfidTagReading>? RawRfidTagReadings { get; set; }
+        public List<RfidRawReadingDto>? RawRfidTagReadings { get; set; }
 
         /// <summary>
         /// Processing notes from RFID readings

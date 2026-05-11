@@ -370,3 +370,19 @@ FORMAT:
   - The fix is display-layer only (no DB changes needed); `SplitTimeMs` (cumulative) and `SegmentTime` columns in `SplitTimes` table remain as-is
   - `CumulativeTime` computation (`SplitTimeMs[i] - startGunTimeMs`) was already correct — no change
   - Pace/speed for segments are now also computed from the correctly-derived `segmentTimeMs`
+
+### 2026-05-11 — backend-agent — Bug 6: Show ALL raw RFID readings for participant detail
+
+- **What was built**: `RawRfidTagReadings` on participant detail now returns ALL raw detections (not just 4 normalized) with enriched fields for IsNormalized, IsDuplicate, GunTime, NetTime, CheckpointDistance, and device name.
+- **Files created**:
+  - `Runnatics.Models.Client/Responses/Participants/RfidRawReadingDto.cs` — new DTO with Id, LocalTime, Date, Checkpoint, CheckpointDistance, Device, DeviceId, GunTime, NetTime, ChipId, ProcessResult, IsManual, IsDuplicate, IsNormalized
+- **Files modified**:
+  - `Runnatics.Services/ResultsService.cs` — rewrote `LoadRawRfidReadingsAsync`: added `participantId` param, added `UploadBatch.ReaderDevice` include for friendly device name, ordered by `ReadTimeUtc`, built `normalizedByRawId` dictionary to resolve IsNormalized/GunTime/NetTime; now returns `List<RfidRawReadingDto>`
+  - `Runnatics.Models.Client/Responses/Participants/ParticipantDetailsResponse.cs` — changed `RawRfidTagReadings` from `List<RawRfidTagReading>` to `List<RfidRawReadingDto>`
+- **Decisions made**:
+  - `RawRfidTagReading.cs` retained (not deleted) — legacy DTO kept to avoid breaking any other consumers
+  - `RfidReadings` (normalized, List<RfidReadingDetail>) left untouched — UI can keep using it for the compact 4-row view; `RawRfidTagReadings` is the new full-detail source
+  - `Device` field = `UploadBatch.ReaderDevice.Name` when available, fallback to `r.DeviceId` (MAC string)
+  - `IsDuplicate` = `ProcessResult == "Duplicate" || DuplicateOfReadingId.HasValue` (belt-and-suspenders)
+  - Readings without checkpoint assignment (94 unassigned) included; `Checkpoint`/`CheckpointDistance` are null for those rows
+  - Ordering changed from `TimestampMs` to `ReadTimeUtc` for consistent chronological display

@@ -871,7 +871,7 @@ namespace Runnatics.Services
 
                 // 8. Load ALL raw tag detections (every antenna ping, including duplicates)
                 response.RawRfidTagReadings = !string.IsNullOrEmpty(epc)
-                    ? await LoadRawRfidReadingsAsync(epc, decryptedEventId, participant.Event?.TimeZone)
+                    ? await LoadRawRfidReadingsAsync(epc, decryptedParticipantId, decryptedEventId, participant.Event?.TimeZone)
                     : [];
 
                 response.ProcessingNotes = response.RfidReadings
@@ -1038,23 +1038,36 @@ namespace Runnatics.Services
             return result;
         }
 
-        private async Task<List<RawRfidTagReading>> LoadRawRfidReadingsAsync(
-            string chipEpc, int eventId, string? eventTimeZone)
+        private async Task<List<RfidRawReadingDto>> LoadRawRfidReadingsAsync(
+            string chipEpc, int participantId, int eventId, string? eventTimeZone)
         {
             var rawRepo = _repository.GetRepository<RawRFIDReading>();
 
-            // Scope to batches belonging to this event, matching the participant's chip EPC
             var readings = await rawRepo.GetQuery(r =>
                 r.Epc == chipEpc &&
                 r.UploadBatch.EventId == eventId &&
                 r.AuditProperties.IsActive &&
                 !r.AuditProperties.IsDeleted)
                 .Include(r => r.UploadBatch)
+                    .ThenInclude(b => b.ReaderDevice)
                 .Include(r => r.ReadingCheckpointAssignments)
                     .ThenInclude(a => a.Checkpoint)
-                .OrderBy(r => r.TimestampMs)
+                .OrderBy(r => r.ReadTimeUtc)
                 .AsNoTracking()
                 .ToListAsync();
+
+            // Build RawReadId → normalized record lookup to identify winning reads and get gun/net times
+            var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+            var normalizedByRawId = (await normalizedRepo.GetQuery(n =>
+                n.ParticipantId == participantId &&
+                n.EventId == eventId &&
+                n.AuditProperties.IsActive &&
+                !n.AuditProperties.IsDeleted)
+                .Where(n => n.RawReadId != null)
+                .AsNoTracking()
+                .ToListAsync())
+                .GroupBy(n => n.RawReadId!.Value)
+                .ToDictionary(g => g.Key, g => g.First());
 
             TimeZoneInfo timeZone;
             try
@@ -1066,27 +1079,34 @@ namespace Runnatics.Services
                 timeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
             }
 
-            var result = new List<RawRfidTagReading>(readings.Count);
+            var result = new List<RfidRawReadingDto>(readings.Count);
             foreach (var r in readings)
             {
-                var checkpointName = r.ReadingCheckpointAssignments
+                var assignment = r.ReadingCheckpointAssignments
                     .Where(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted)
-                    .Select(a => a.Checkpoint?.Name)
                     .FirstOrDefault();
 
-                result.Add(new RawRfidTagReading
+                var localTime = TimeZoneInfo.ConvertTimeFromUtc(r.ReadTimeUtc, timeZone);
+                var isNormalized = normalizedByRawId.TryGetValue(r.Id, out var normalized);
+
+                result.Add(new RfidRawReadingDto
                 {
-                    ReadingId = r.Id,
-                    ChipId = r.Epc,
-                    ReadTimeLocal = r.ReadTimeLocal,
-                    ReadTimeUtc = r.ReadTimeUtc,
-                    CheckpointName = checkpointName,
+                    Id = r.Id.ToString(),
+                    LocalTime = localTime.ToString("HH:mm:ss"),
+                    Date = localTime.ToString("yyyy-MM-dd"),
+                    Checkpoint = assignment?.Checkpoint?.Name,
+                    CheckpointDistance = assignment?.Checkpoint?.DistanceFromStart,
+                    Device = r.UploadBatch?.ReaderDevice?.Name ?? r.DeviceId,
                     DeviceId = r.DeviceId,
+                    GunTime = isNormalized && normalized!.GunTime.HasValue
+                        ? TimeFormatter.FormatTimeSpan(normalized.GunTime.Value) : null,
+                    NetTime = isNormalized && normalized!.NetTime.HasValue
+                        ? TimeFormatter.FormatTimeSpan(normalized.NetTime.Value) : null,
+                    ChipId = r.Epc,
                     ProcessResult = r.ProcessResult,
-                    IsManualEntry = r.IsManualEntry,
-                    RssiDbm = r.RssiDbm,
-                    Antenna = r.Antenna,
-                    Notes = r.Notes
+                    IsManual = r.IsManualEntry,
+                    IsDuplicate = r.ProcessResult == "Duplicate" || r.DuplicateOfReadingId.HasValue,
+                    IsNormalized = isNormalized
                 });
             }
 

@@ -545,8 +545,10 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.DistanceKm, opt => opt.MapFrom(src => src.Checkpoint.DistanceFromStart))
                 .ForMember(dest => dest.SplitTimeMs, opt => opt.MapFrom(src => src.SplitTimeMs ?? 0))
                 .ForMember(dest => dest.SegmentTimeMs, opt => opt.MapFrom(src => src.SegmentTime))
+                .ForMember(dest => dest.CumulativeTimeMs, opt => opt.Ignore()) // Calculated in service
                 .ForMember(dest => dest.SplitTime, opt => opt.Ignore()) // Formatted in service
                 .ForMember(dest => dest.SegmentTime, opt => opt.Ignore()) // Formatted in service
+                .ForMember(dest => dest.CumulativeTime, opt => opt.Ignore()) // Calculated in service
                 .ForMember(dest => dest.Pace, opt => opt.MapFrom(src => src.Pace))
                 .ForMember(dest => dest.PaceFormatted, opt => opt.Ignore()) // Formatted in service
                 .ForMember(dest => dest.Rank, opt => opt.MapFrom(src => src.Rank))

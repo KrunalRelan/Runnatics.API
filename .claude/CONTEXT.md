@@ -386,3 +386,28 @@ FORMAT:
   - `IsDuplicate` = `ProcessResult == "Duplicate" || DuplicateOfReadingId.HasValue` (belt-and-suspenders)
   - Readings without checkpoint assignment (94 unassigned) included; `Checkpoint`/`CheckpointDistance` are null for those rows
   - Ordering changed from `TimestampMs` to `ReadTimeUtc` for consistent chronological display
+
+### 2026-05-11 — backend-agent — Bug 8 (Part 2): Fix SplitTime/CumulativeTime in Results.SplitTimeInfo
+
+- **Root cause**: `GetParticipantSplitsAsync` in `ResultsService` set `SplitTime = FormatTime(SplitTimeMs)` — the cumulative gun-start time — instead of the segment interval. `Results.SplitTimeInfo` also had no `CumulativeTime` field.
+- **Two separate `SplitTimeInfo` types exist in the codebase**:
+  - `Runnatics.Models.Client.Responses.Participants.SplitTimeInfo` — used by participant detail (`PerformanceMetricsBuilder`, already fixed in earlier session)
+  - `Runnatics.Models.Client.Responses.Results.SplitTimeInfo` — used by leaderboard/results (fixed in this session)
+- **Files modified**:
+  - `Runnatics.Models.Client/Responses/Results/SplitTimeInfo.cs` — added `CumulativeTimeMs` (long) and `CumulativeTime` (string); added inline comments clarifying each field's meaning
+  - `Runnatics.Services/Mappings/AutoMapperMappingProfile.cs` — added `Ignore()` for `CumulativeTimeMs` and `CumulativeTime`
+  - `Runnatics.Services/ResultsService.cs` — rewrote `GetParticipantSplitsAsync` loop: `SplitTime` now uses `SegmentTime` (falls back to `SplitTimeMs` only when null); added `CumulativeTime` = start row uses its own `SplitTimeMs`, all others use `SplitTimeMs - startSplitTimeMs`
+- **Decisions made**:
+  - `SegmentTime` string field retained unchanged (same value as `SplitTime`) for backward compatibility
+  - `SplitTimeMs` raw field retained so the UI can compute its own cumulative if needed
+
+### 2026-05-11 — backend-agent — Fix Checkpoint Name "Unassigned" in RFID Raw Readings
+
+- **Root cause**: `ReadingCheckpointAssignment` correctly links raw readings to checkpoints, but the assigned checkpoints are **child checkpoints** (IDs 287, 291, 293) with empty `Name`. The parent checkpoint (e.g., ID 267 "Finish") has the same `DistanceFromStart` but different `Device`. `LoadRawRfidReadingsAsync` displayed `"Unassigned"` because `cp.Name` was empty.
+- **Fix**: Query all named checkpoints for the race keyed by `DistanceFromStart`, then resolve empty names at mapping time — if `cp.Name` is empty, look up the parent name from that dictionary. Format as `"Name (X km)"`.
+- **Files modified**:
+  - `Runnatics.Services/ResultsService.cs` — added `raceId` parameter to `LoadRawRfidReadingsAsync` (signature: `(chipEpc, participantId, raceId, eventId, eventTimeZone)`); added `namedByDistance` dictionary lookup; replaced `"Unassigned"` fallback with parent-name resolution; updated call site in `GetParticipantDetailsAsync` to pass `decryptedRaceId`
+- **Decisions made**:
+  - Parent name lookup uses `DistanceFromStart` as the key — avoids any device/ID coupling
+  - Display format `"Name (X km)"` applied only when a name is resolved; null when truly unassigned
+  - Query uses `AsNoTracking()` and filters `IsActive && !IsDeleted` on checkpoint rows

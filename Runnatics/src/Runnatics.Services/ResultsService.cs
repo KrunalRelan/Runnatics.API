@@ -871,7 +871,7 @@ namespace Runnatics.Services
 
                 // 8. Load ALL raw tag detections (every antenna ping, including duplicates)
                 response.RawRfidTagReadings = !string.IsNullOrEmpty(epc)
-                    ? await LoadRawRfidReadingsAsync(epc, decryptedParticipantId, decryptedEventId, participant.Event?.TimeZone)
+                    ? await LoadRawRfidReadingsAsync(epc, decryptedParticipantId, decryptedRaceId, decryptedEventId, participant.Event?.TimeZone)
                     : [];
 
                 response.ProcessingNotes = response.RfidReadings
@@ -1039,7 +1039,7 @@ namespace Runnatics.Services
         }
 
         private async Task<List<RfidRawReadingDto>> LoadRawRfidReadingsAsync(
-            string chipEpc, int participantId, int eventId, string? eventTimeZone)
+            string chipEpc, int participantId, int raceId, int eventId, string? eventTimeZone)
         {
             var rawRepo = _repository.GetRepository<RawRFIDReading>();
 
@@ -1069,6 +1069,20 @@ namespace Runnatics.Services
                 .GroupBy(n => n.RawReadId!.Value)
                 .ToDictionary(g => g.Key, g => g.First());
 
+            // Build DistanceFromStart → name lookup for parent (named) checkpoints.
+            // Child checkpoints share the same distance as their parent but have empty names.
+            var checkpointRepo = _repository.GetRepository<Checkpoint>();
+            var namedByDistance = (await checkpointRepo.GetQuery(c =>
+                c.RaceId == raceId &&
+                c.EventId == eventId &&
+                c.Name != null && c.Name != "" &&
+                c.AuditProperties.IsActive &&
+                !c.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .ToListAsync())
+                .GroupBy(c => c.DistanceFromStart)
+                .ToDictionary(g => g.Key, g => g.First().Name!);
+
             TimeZoneInfo timeZone;
             try
             {
@@ -1089,19 +1103,31 @@ namespace Runnatics.Services
                 var localTime = TimeZoneInfo.ConvertTimeFromUtc(r.ReadTimeUtc, timeZone);
                 var isNormalized = normalizedByRawId.TryGetValue(r.Id, out var normalized);
 
+                string? checkpointDisplay = null;
+                if (assignment?.Checkpoint != null)
+                {
+                    var cp = assignment.Checkpoint;
+                    var dist = cp.DistanceFromStart;
+                    var name = string.IsNullOrEmpty(cp.Name)
+                        ? namedByDistance.GetValueOrDefault(dist)
+                        : cp.Name;
+                    if (name != null)
+                        checkpointDisplay = $"{name} ({dist:0.##} km)";
+                }
+
                 result.Add(new RfidRawReadingDto
                 {
                     Id = r.Id.ToString(),
                     LocalTime = localTime.ToString("HH:mm:ss"),
                     Date = localTime.ToString("yyyy-MM-dd"),
-                    Checkpoint = assignment?.Checkpoint?.Name,
+                    Checkpoint = checkpointDisplay,
                     CheckpointDistance = assignment?.Checkpoint?.DistanceFromStart,
                     Device = r.UploadBatch?.ReaderDevice?.Name ?? r.DeviceId,
                     DeviceId = r.DeviceId,
-                    GunTime = isNormalized && normalized!.GunTime.HasValue
-                        ? TimeFormatter.FormatTimeSpan(normalized.GunTime.Value) : null,
-                    NetTime = isNormalized && normalized!.NetTime.HasValue
-                        ? TimeFormatter.FormatTimeSpan(normalized.NetTime.Value) : null,
+                    GunTime = isNormalized && normalized?.GunTime is { } gv
+                        ? TimeFormatter.FormatTimeSpan(gv) : null,
+                    NetTime = isNormalized && normalized?.NetTime is { } nv
+                        ? TimeFormatter.FormatTimeSpan(nv) : null,
                     ChipId = r.Epc,
                     ProcessResult = r.ProcessResult,
                     IsManual = r.IsManualEntry,
@@ -1173,11 +1199,32 @@ namespace Runnatics.Services
 
             var splitInfos = _mapper.Map<List<ResultsSplitTimeInfo>>(splits);
 
+            var startSplitTimeMs = splits.Count > 0 ? (splits[0].SplitTimeMs ?? 0L) : 0L;
+
             for (int i = 0; i < splits.Count; i++)
             {
-                splitInfos[i].SplitTime = FormatTime(splits[i].SplitTimeMs ?? 0);
-                splitInfos[i].SegmentTime = splits[i].SegmentTime.HasValue ? FormatTime(splits[i].SegmentTime.Value) : null;
-                splitInfos[i].PaceFormatted = splits[i].Pace.HasValue ? FormatPace(splits[i].Pace.Value) : null;
+                var raw = splits[i];
+
+                // SplitTime = interval between consecutive checkpoints (SegmentTime), not cumulative
+                splitInfos[i].SplitTime = raw.SegmentTime.HasValue
+                    ? FormatTime(raw.SegmentTime.Value)
+                    : FormatTime(raw.SplitTimeMs ?? 0);
+
+                // SegmentTime = same value (kept for backward compatibility)
+                splitInfos[i].SegmentTime = raw.SegmentTime.HasValue
+                    ? FormatTime(raw.SegmentTime.Value)
+                    : null;
+
+                // CumulativeTime = elapsed from start-line crossing
+                // Start row: show its own SplitTimeMs (the gun-to-start delay)
+                // All others: SplitTimeMs - startSplitTimeMs
+                var cumulativeMs = i == 0
+                    ? (raw.SplitTimeMs ?? 0L)
+                    : (raw.SplitTimeMs ?? 0L) - startSplitTimeMs;
+                splitInfos[i].CumulativeTimeMs = cumulativeMs;
+                splitInfos[i].CumulativeTime = FormatTime(cumulativeMs);
+
+                splitInfos[i].PaceFormatted = raw.Pace.HasValue ? FormatPace(raw.Pace.Value) : null;
             }
 
             return splitInfos;

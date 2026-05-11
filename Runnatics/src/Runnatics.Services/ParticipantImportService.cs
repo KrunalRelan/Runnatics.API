@@ -2150,11 +2150,76 @@ namespace Runnatics.Services
 
                         await _repository.ExecuteInTransactionAsync(async () =>
                         {
+                            // Soft-delete old participant and insert new one in target race
                             await participantRepo.UpdateAsync(participant);
                             await participantRepo.AddAsync(newParticipant);
+
+                            // Flush so newParticipant.Id is populated by EF before we reference it below
+                            await _repository.SaveChangesAsync();
+
+                            var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                            var splitTimesRepo = _repository.GetRepository<SplitTimes>();
+                            var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+
+                            // 1. Reassign Results rows to the new participant and target race
+                            var oldResults = await resultsRepo.GetQuery(r =>
+                                r.ParticipantId == decryptedParticipantId &&
+                                r.RaceId == decryptedRaceId &&
+                                r.AuditProperties.IsActive &&
+                                !r.AuditProperties.IsDeleted)
+                                .ToListAsync();
+
+                            foreach (var res in oldResults)
+                            {
+                                res.ParticipantId = newParticipant.Id;
+                                res.RaceId = targetRaceId;
+                                res.AuditProperties.UpdatedBy = userId;
+                                res.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            }
+                            if (oldResults.Count > 0)
+                                await resultsRepo.UpdateRangeAsync(oldResults);
+
+                            // 2. Reassign SplitTimes rows to the new participant
+                            var oldSplits = await splitTimesRepo.GetQuery(st =>
+                                st.ParticipantId == decryptedParticipantId &&
+                                st.AuditProperties.IsActive &&
+                                !st.AuditProperties.IsDeleted)
+                                .ToListAsync();
+
+                            foreach (var split in oldSplits)
+                            {
+                                split.ParticipantId = newParticipant.Id;
+                                split.AuditProperties.UpdatedBy = userId;
+                                split.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            }
+                            if (oldSplits.Count > 0)
+                                await splitTimesRepo.UpdateRangeAsync(oldSplits);
+
+                            // 3. Reassign ReadNormalized rows to the new participant
+                            var oldReadings = await normalizedRepo.GetQuery(r =>
+                                r.ParticipantId == decryptedParticipantId &&
+                                r.EventId == participant.EventId &&
+                                r.AuditProperties.IsActive &&
+                                !r.AuditProperties.IsDeleted)
+                                .ToListAsync();
+
+                            foreach (var reading in oldReadings)
+                            {
+                                reading.ParticipantId = newParticipant.Id;
+                                reading.AuditProperties.UpdatedBy = userId;
+                                reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            }
+                            if (oldReadings.Count > 0)
+                                await normalizedRepo.UpdateRangeAsync(oldReadings);
+
+                            // 4. Recalculate ranks for old race (participant removed)
+                            await RecalculateRaceRanksAsync(participant.EventId, decryptedRaceId, userId);
+
+                            // 5. Recalculate ranks for new race (participant added)
+                            await RecalculateRaceRanksAsync(participant.EventId, targetRaceId, userId);
                         });
 
-                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}", participantId, decryptedRaceId, targetRaceId);
+                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; results, splits, and readings migrated", participantId, decryptedRaceId, targetRaceId);
                         return MapToSearchResponse(newParticipant);
                     }
                 }
@@ -2293,6 +2358,54 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error in UpdateParticipantExtendedAsync for participant {ParticipantId}", participantId);
                 return null;
             }
+        }
+
+        private async Task RecalculateRaceRanksAsync(int eventId, int raceId, int userId)
+        {
+            var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+
+            var results = await resultsRepo.GetQuery(r =>
+                r.EventId == eventId &&
+                r.RaceId == raceId &&
+                r.Status == "Finished" &&
+                r.FinishTime.HasValue &&
+                r.AuditProperties.IsActive &&
+                !r.AuditProperties.IsDeleted)
+                .Include(r => r.Participant)
+                .OrderBy(r => r.FinishTime)
+                .ToListAsync();
+
+            var rank = 1;
+            foreach (var result in results)
+            {
+                result.OverallRank = rank++;
+                result.AuditProperties.UpdatedBy = userId;
+                result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+            }
+
+            foreach (var gender in new[] { "Male", "Female", "Others" })
+            {
+                var genderResults = results.Where(r => r.Participant.Gender == gender).ToList();
+                rank = 1;
+                foreach (var result in genderResults)
+                    result.GenderRank = rank++;
+            }
+
+            var categories = results
+                .Select(r => r.Participant.AgeCategory)
+                .Distinct()
+                .Where(c => !string.IsNullOrEmpty(c));
+
+            foreach (var category in categories)
+            {
+                var categoryResults = results.Where(r => r.Participant.AgeCategory == category).ToList();
+                rank = 1;
+                foreach (var result in categoryResults)
+                    result.CategoryRank = rank++;
+            }
+
+            if (results.Count > 0)
+                await resultsRepo.UpdateRangeAsync(results);
         }
 
         private ParticipantSearchReponse MapToSearchResponse(Models.Data.Entities.Participant p)

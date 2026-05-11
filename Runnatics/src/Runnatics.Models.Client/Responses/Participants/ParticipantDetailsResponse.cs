@@ -180,6 +180,12 @@ namespace Runnatics.Models.Client.Responses.Participants
         public List<RfidReadingDetail>? RfidReadings { get; set; }
 
         /// <summary>
+        /// All raw RFID detections from the reader hardware, including duplicates and unprocessed pings.
+        /// Each entry represents one antenna detection before deduplication.
+        /// </summary>
+        public List<RawRfidTagReading>? RawRfidTagReadings { get; set; }
+
+        /// <summary>
         /// Processing notes from RFID readings
         /// </summary>
         public List<string>? ProcessingNotes { get; set; }

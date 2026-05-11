@@ -869,6 +869,11 @@ namespace Runnatics.Services
                     }
                 }
 
+                // 8. Load ALL raw tag detections (every antenna ping, including duplicates)
+                response.RawRfidTagReadings = !string.IsNullOrEmpty(epc)
+                    ? await LoadRawRfidReadingsAsync(epc, decryptedEventId, participant.Event?.TimeZone)
+                    : [];
+
                 response.ProcessingNotes = response.RfidReadings
                     .Where(r => !string.IsNullOrEmpty(r.Notes))
                     .Select(r => r.Notes!)
@@ -1028,6 +1033,61 @@ namespace Runnatics.Services
                 {
                     result[i].NetTimeFormatted = TimeFormatter.FormatTimeSpan(readings[i].NetTime.Value);
                 }
+            }
+
+            return result;
+        }
+
+        private async Task<List<RawRfidTagReading>> LoadRawRfidReadingsAsync(
+            string chipEpc, int eventId, string? eventTimeZone)
+        {
+            var rawRepo = _repository.GetRepository<RawRFIDReading>();
+
+            // Scope to batches belonging to this event, matching the participant's chip EPC
+            var readings = await rawRepo.GetQuery(r =>
+                r.Epc == chipEpc &&
+                r.UploadBatch.EventId == eventId &&
+                r.AuditProperties.IsActive &&
+                !r.AuditProperties.IsDeleted)
+                .Include(r => r.UploadBatch)
+                .Include(r => r.ReadingCheckpointAssignments)
+                    .ThenInclude(a => a.Checkpoint)
+                .OrderBy(r => r.TimestampMs)
+                .AsNoTracking()
+                .ToListAsync();
+
+            TimeZoneInfo timeZone;
+            try
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZone ?? "India Standard Time");
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            }
+
+            var result = new List<RawRfidTagReading>(readings.Count);
+            foreach (var r in readings)
+            {
+                var checkpointName = r.ReadingCheckpointAssignments
+                    .Where(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted)
+                    .Select(a => a.Checkpoint?.Name)
+                    .FirstOrDefault();
+
+                result.Add(new RawRfidTagReading
+                {
+                    ReadingId = r.Id,
+                    ChipId = r.Epc,
+                    ReadTimeLocal = r.ReadTimeLocal,
+                    ReadTimeUtc = r.ReadTimeUtc,
+                    CheckpointName = checkpointName,
+                    DeviceId = r.DeviceId,
+                    ProcessResult = r.ProcessResult,
+                    IsManualEntry = r.IsManualEntry,
+                    RssiDbm = r.RssiDbm,
+                    Antenna = r.Antenna,
+                    Notes = r.Notes
+                });
             }
 
             return result;

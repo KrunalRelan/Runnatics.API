@@ -413,6 +413,16 @@ namespace Runnatics.Services
         {
             var eventRepo = _repository.GetRepository<Event>();
             var expression = BuildSearchExpression(request, tenantId, timeFilter);
+
+            // EventDate sort: upcoming events first (nearest date ascending),
+            // past events after (most recent first). This requires a two-bucket
+            // ordering that cannot be expressed via the generic single-column sort.
+            var isEventDateSort = string.Equals(request.SortFieldName, "EventDate", StringComparison.OrdinalIgnoreCase);
+            if (isEventDateSort)
+            {
+                return await ExecuteEventDateSortedSearchAsync(eventRepo, expression, request);
+            }
+
             var mappedSortField = GetMappedSortField(request.SortFieldName);
 
             return await eventRepo.SearchAsync(
@@ -425,6 +435,36 @@ namespace Runnatics.Services
                 mappedSortField,
                 false,
                 false);
+        }
+
+        /// <summary>
+        /// Applies upcoming-first, past-last ordering on EventDate:
+        ///   1. Upcoming (EventDate >= today) ordered by nearest date ascending
+        ///   2. Past (EventDate < today) ordered by most recent date first
+        /// </summary>
+        private static async Task<Models.Data.Common.PagingList<Event>> ExecuteEventDateSortedSearchAsync(
+            IGenericRepository<Event> eventRepo,
+            Expression<Func<Event, bool>> filter,
+            EventSearchRequest request)
+        {
+            var today = DateTime.UtcNow.Date;
+
+            var query = eventRepo.GetQuery(filter)
+                .OrderByDescending(e => e.EventDate >= today ? 1 : 0)
+                .ThenBy(e => e.EventDate >= today ? e.EventDate : DateTime.MaxValue)
+                .ThenByDescending(e => e.EventDate < today ? e.EventDate : DateTime.MinValue);
+
+            var totalCount = await query.CountAsync();
+
+            var results = await query
+                .Skip((request.PageNumber - 1) * request.PageSize)
+                .Take(request.PageSize)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var pagingList = new Models.Data.Common.PagingList<Event> { TotalCount = totalCount };
+            pagingList.AddRange(results);
+            return pagingList;
         }
 
         /// <summary>

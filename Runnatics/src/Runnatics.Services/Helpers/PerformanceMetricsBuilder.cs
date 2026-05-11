@@ -29,6 +29,7 @@ namespace Runnatics.Services.Helpers
             var startGunTimeMs = splitTimes[0].SplitTimeMs ?? 0L;
             bool isFirstCheckpoint = true;
             decimal? previousPace = null;
+            long? previousSplitTimeMs = null;
 
             foreach (var st in splitTimes)
             {
@@ -40,7 +41,8 @@ namespace Runnatics.Services.Helpers
                     : (st.SplitTimeMs ?? 0L) - startGunTimeMs;
                 isFirstCheckpoint = false;
 
-                var (splitTimeInfo, progressionInfo, segmentPace, segmentSpeed) = ProcessSplitTime(st, metrics, cumulativeMs);
+                var (splitTimeInfo, progressionInfo, segmentPace, segmentSpeed) = ProcessSplitTime(st, metrics, cumulativeMs, previousSplitTimeMs);
+                previousSplitTimeMs = st.SplitTimeMs;
 
                 // Populate checkpoint ranks from pre-calculated values
                 splitTimeInfo.OverallRank = st.Rank;
@@ -99,18 +101,30 @@ namespace Runnatics.Services.Helpers
         private (SplitTimeInfo splitInfo, PaceProgressionInfo progressionInfo, decimal? pace, decimal? speed) ProcessSplitTime(
             SplitTimes st,
             PerformanceMetrics metrics,
-            long cumulativeTimeMs)
+            long cumulativeTimeMs,
+            long? previousSplitTimeMs)
         {
             var checkpoint = st.ToCheckpoint;
             var distanceKm = checkpoint?.DistanceFromStart ?? st.Distance ?? 0;
             var segmentDistanceKm = distanceKm - metrics.TotalDistance;
             metrics.TotalDistance = distanceKm;
 
-            // SplitTime = time between this checkpoint and the previous one.
-            // SegmentTime holds that interval when stored by CalculateSplitTimesAsync.
-            // For the first checkpoint (no previous), SegmentTime is null — fall back to SplitTimeMs
-            // (the gun-to-start-line offset) so the Start row shows its own elapsed value.
-            var segmentTimeMs = st.SegmentTime ?? st.SplitTimeMs ?? 0L;
+            // SplitTime = time for this segment only (between consecutive checkpoints).
+            // Prefer stored SegmentTime; when absent, derive from consecutive SplitTimeMs values.
+            // For the very first row (no previous), SplitTimeMs is the gun-to-start-line offset.
+            long segmentTimeMs;
+            if (st.SegmentTime.HasValue)
+            {
+                segmentTimeMs = st.SegmentTime.Value;
+            }
+            else if (previousSplitTimeMs.HasValue)
+            {
+                segmentTimeMs = (st.SplitTimeMs ?? 0L) - previousSplitTimeMs.Value;
+            }
+            else
+            {
+                segmentTimeMs = st.SplitTimeMs ?? 0L;
+            }
 
             var (calculatedPace, speed) = CalculatePaceAndSpeed(segmentDistanceKm, segmentTimeMs);
             var effectivePace = st.AveragePace ?? calculatedPace;

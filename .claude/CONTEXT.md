@@ -359,3 +359,14 @@ FORMAT:
 - **Pending**:
   - Run `db/scripts/NotificationLog_CreateTable_20260510.sql` against Azure SQL
   - Set `Notification__Msg91__AuthKey`, `Notification__Mailer91__ApiKey`, `Notification__Msg91__CheckpointTemplateId` in Azure App Service environment variables
+
+### 2026-05-11 — backend-agent — Bug 8: Fix Split Times (SplitTime & CumulativeTime incorrect)
+
+- **Root cause**: `PerformanceMetricsBuilder.ProcessSplitTime` fell back to `st.SplitTimeMs` (cumulative from gun start) when `st.SegmentTime == null`. For non-first checkpoints this produced the cumulative gun time instead of the segment interval, so 4.5km showed "00:14:28" (gun→4.5km) instead of "00:14:07" (start→4.5km). The UI then computed its own cumulative as a running sum of these wrong SplitTime values, giving "00:14:50".
+- **Fix**: Added `previousSplitTimeMs` tracking in `BuildSplitTimesAndPerformance`; in `ProcessSplitTime`, when `SegmentTime == null`, derive segment as `SplitTimeMs[i] - SplitTimeMs[i-1]` (or `SplitTimeMs[0]` for the first row).
+- **Files modified**:
+  - `Runnatics.Services/Helpers/PerformanceMetricsBuilder.cs` — added `previousSplitTimeMs` parameter to `ProcessSplitTime`; replaced single-line `st.SegmentTime ?? st.SplitTimeMs` fallback with three-branch derivation
+- **Decisions made**:
+  - The fix is display-layer only (no DB changes needed); `SplitTimeMs` (cumulative) and `SegmentTime` columns in `SplitTimes` table remain as-is
+  - `CumulativeTime` computation (`SplitTimeMs[i] - startGunTimeMs`) was already correct — no change
+  - Pace/speed for segments are now also computed from the correctly-derived `segmentTimeMs`

@@ -5,8 +5,8 @@ namespace Runnatics.Models.Client.Requests.Events
     {
         public EventSearchRequest()
         {
-            SortFieldName = "Id";
-            SortDirection = SortDirection.Descending;
+            SortFieldName = "EventDate";
+            SortDirection = SortDirection.Ascending;
         }
 
         /// <summary>

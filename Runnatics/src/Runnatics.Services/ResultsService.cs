@@ -1,6 +1,7 @@
 using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System.ComponentModel.DataAnnotations;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
@@ -1380,6 +1381,33 @@ namespace Runnatics.Services
                     return null;
                 }
 
+                // Load Race to get the UTC gun start time
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (race == null || !race.StartTime.HasValue)
+                {
+                    ErrorMessage = "Race not found or Race.StartTime is not configured. Cannot compute chip time.";
+                    return null;
+                }
+
+                // finishTimeMs = IST ms from midnight (what the frontend sends)
+                // Convert to UTC finish datetime, then subtract race gun start to get chip time
+                var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                var raceStartUtc = race.StartTime.Value;
+                var raceStartIst = TimeZoneInfo.ConvertTimeFromUtc(raceStartUtc, istZone);
+                var finishIst = raceStartIst.Date.AddMilliseconds(finishTimeMs);
+                var finishUtc = TimeZoneInfo.ConvertTimeToUtc(
+                    DateTime.SpecifyKind(finishIst, DateTimeKind.Unspecified), istZone);
+                var chipTimeMs = (long)(finishUtc - raceStartUtc).TotalMilliseconds;
+
+                if (chipTimeMs <= 0 || chipTimeMs > 86_400_000)
+                    throw new ValidationException(
+                        $"Calculated chip time {chipTimeMs}ms is invalid. " +
+                        "Check that finish time is after race start.");
+
                 var resultsRepo = _repository.GetRepository<Results>();
 
                 await _repository.ExecuteInTransactionAsync(async () =>
@@ -1392,10 +1420,10 @@ namespace Runnatics.Services
 
                     if (existing != null)
                     {
-                        existing.FinishTime = finishTimeMs;
-                        existing.GunTime = finishTimeMs;
-                        existing.NetTime = finishTimeMs;
-                        existing.ManualFinishTimeMs = finishTimeMs;
+                        existing.FinishTime = chipTimeMs;
+                        existing.GunTime = chipTimeMs;
+                        existing.NetTime = chipTimeMs;
+                        existing.ManualFinishTimeMs = chipTimeMs;
                         existing.Status = "Finished";
                         existing.AuditProperties.IsActive = true;
                         existing.AuditProperties.IsDeleted = false;
@@ -1410,10 +1438,10 @@ namespace Runnatics.Services
                             EventId = decryptedEventId,
                             ParticipantId = decryptedParticipantId,
                             RaceId = decryptedRaceId,
-                            FinishTime = finishTimeMs,
-                            GunTime = finishTimeMs,
-                            NetTime = finishTimeMs,
-                            ManualFinishTimeMs = finishTimeMs,
+                            FinishTime = chipTimeMs,
+                            GunTime = chipTimeMs,
+                            NetTime = chipTimeMs,
+                            ManualFinishTimeMs = chipTimeMs,
                             Status = "Finished",
                             AuditProperties = new Models.Data.Common.AuditProperties
                             {
@@ -1462,8 +1490,8 @@ namespace Runnatics.Services
                     ParticipantId = participantId,
                     Bib = participant.BibNumber ?? string.Empty,
                     FullName = participant.FullName,
-                    FinishTimeMs = finishTimeMs,
-                    FinishTime = FormatTime(finishTimeMs),
+                    FinishTimeMs = chipTimeMs,
+                    FinishTime = FormatTime(chipTimeMs),
                     OverallRank = updatedResult?.OverallRank,
                     GenderRank = updatedResult?.GenderRank,
                     CategoryRank = updatedResult?.CategoryRank,

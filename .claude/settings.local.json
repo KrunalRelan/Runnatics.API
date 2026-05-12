@@ -10,7 +10,9 @@
       "Bash(dotnet restore:*)",
       "Bash(dotnet build:*)",
       "Bash(xargs grep *)",
-      "Bash(taskkill /F /IM \"Runnatics.Api.exe\")"
+      "Bash(taskkill /F /IM \"Runnatics.Api.exe\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\Runnatics.API\" -Directory)",
+      "Bash(Select-Object Name)"
     ]
   }
 }

@@ -871,14 +871,28 @@ namespace Runnatics.Services
                             !ca.AuditProperties.IsDeleted)
                             .ToListAsync();
 
-                        foreach (var chip in oldChips)
-                        {
-                            chip.ParticipantId = newParticipant.Id;
-                            chip.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            chip.AuditProperties.UpdatedBy = _userContext.UserId;
-                        }
                         if (oldChips.Count > 0)
-                            await chipRepo.UpdateRangeAsync(oldChips);
+                        {
+                            // ParticipantId is part of the composite PK — cannot mutate in-place.
+                            // Delete old rows and re-insert under the new participant.
+                            await chipRepo.BulkDeleteAsync(oldChips);
+                            var newChips = oldChips.Select(ca => new ChipAssignment
+                            {
+                                EventId = ca.EventId,
+                                ParticipantId = newParticipant.Id,
+                                ChipId = ca.ChipId,
+                                AssignedAt = ca.AssignedAt,
+                                AssignedByUserId = ca.AssignedByUserId,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = _userContext.UserId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            }).ToList();
+                            await chipRepo.BulkInsertAsync(newChips);
+                        }
                     });
                     return;
                 }

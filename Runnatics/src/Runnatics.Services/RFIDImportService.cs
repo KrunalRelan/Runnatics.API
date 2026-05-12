@@ -4064,26 +4064,38 @@ namespace Runnatics.Services
                     var sorted = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
 
                     // For each shared group, collapse readings within DEDUP_WINDOW_SECONDS
-                    // into one representative reading (keep the one with best timing = earliest for the pass)
+                    // into one representative reading per pass.
+                    // Start passes (device OutboundDistance == 0, first pass per EPC): keep LAST.
+                    // All other passes: keep EARLIEST.
                     var collapsedReadings = new List<LoopRaceCheckpointAssigner.ReadingInput>();
                     var lastPassTimeByGroup = new Dictionary<string, DateTime>();
+                    var lastAddedIndexByGroup = new Dictionary<string, int>();     // index of representative in collapsedReadings
+                    var completedPassCountByGroup = new Dictionary<string, int>(); // completed passes per group key
 
                     foreach (var reading in sorted)
                     {
                         if (deviceToGroup.TryGetValue(reading.DeviceId, out var groupKey))
                         {
-                            // Shared device: check if this is within dedup window of last pass in this group
                             if (lastPassTimeByGroup.TryGetValue(groupKey, out var lastTime))
                             {
                                 var gap = (reading.ReadTimeUtc - lastTime).TotalSeconds;
                                 if (gap <= DEDUP_WINDOW_SECONDS)
                                 {
-                                    // Same pass — skip this reading (keep earlier one)
+                                    // Same pass — keep LAST for Start (first pass), EARLIEST for all others
+                                    var isStartBound = sharedDevices.TryGetValue(reading.DeviceId, out var m)
+                                        && m.OutboundDistance == 0;
+                                    var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
+                                    if (isStartBound && isFirstPass)
+                                        collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
                                     continue;
                                 }
+                                // Gap exceeded — finalize current pass before starting new one
+                                completedPassCountByGroup[groupKey] =
+                                    completedPassCountByGroup.GetValueOrDefault(groupKey, 0) + 1;
                             }
                             // New pass
                             lastPassTimeByGroup[groupKey] = reading.ReadTimeUtc;
+                            lastAddedIndexByGroup[groupKey] = collapsedReadings.Count;
                             collapsedReadings.Add(reading);
                         }
                         else

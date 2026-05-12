@@ -859,6 +859,26 @@ namespace Runnatics.Services
                     {
                         await participantRepo.AddAsync(newParticipant);
                         await participantRepo.UpdateAsync(existingParticipant);
+
+                        // Flush so newParticipant.Id is populated before we reference it
+                        await _repository.SaveChangesAsync();
+
+                        // Transfer chip assignments from old to new participant
+                        var chipRepo = _repository.GetRepository<ChipAssignment>();
+                        var oldChips = await chipRepo.GetQuery(ca =>
+                            ca.ParticipantId == decryptParticipantId &&
+                            ca.AuditProperties.IsActive &&
+                            !ca.AuditProperties.IsDeleted)
+                            .ToListAsync();
+
+                        foreach (var chip in oldChips)
+                        {
+                            chip.ParticipantId = newParticipant.Id;
+                            chip.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            chip.AuditProperties.UpdatedBy = _userContext.UserId;
+                        }
+                        if (oldChips.Count > 0)
+                            await chipRepo.UpdateRangeAsync(oldChips);
                     });
                     return;
                 }

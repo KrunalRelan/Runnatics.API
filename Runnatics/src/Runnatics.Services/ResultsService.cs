@@ -1300,6 +1300,7 @@ namespace Runnatics.Services
                 r.AuditProperties.IsActive &&
                 !r.AuditProperties.IsDeleted)
                 .Include(r => r.Participant)
+                .AsNoTracking()
                 .OrderBy(r => r.FinishTime)
                 .ToListAsync();
 
@@ -1332,8 +1333,7 @@ namespace Runnatics.Services
                 }
             }
 
-            await resultsRepo.UpdateRangeAsync(results);
-            await _repository.SaveChangesAsync();
+            await resultsRepo.BulkUpdateAsync(results);
         }
 
         private static string FormatTime(long milliseconds)

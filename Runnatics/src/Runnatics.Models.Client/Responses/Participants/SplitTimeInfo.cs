@@ -64,5 +64,10 @@ namespace Runnatics.Models.Client.Responses.Participants
         /// Category-based rank at this checkpoint
         /// </summary>
         public int? CategoryRank { get; set; }
+
+        /// <summary>
+        /// Whether this checkpoint reading was manually entered
+        /// </summary>
+        public bool IsManual { get; set; }
     }
 }

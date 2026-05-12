@@ -578,7 +578,9 @@ namespace Runnatics.Services.Mappings
                 .ForMember(d => d.PaceProgression, opt => opt.Ignore())
                 .ForMember(d => d.Epc, opt => opt.Ignore())
                 .ForMember(d => d.RfidReadings, opt => opt.Ignore())
-                .ForMember(d => d.ProcessingNotes, opt => opt.Ignore());
+                .ForMember(d => d.RawRfidTagReadings, opt => opt.Ignore())
+                .ForMember(d => d.ProcessingNotes, opt => opt.Ignore())
+                .ForMember(d => d.IsManualResult, opt => opt.MapFrom(src => src.IsManualTiming));
 
             CreateMap<SplitTimes, Runnatics.Models.Client.Responses.Participants.SplitTimeInfo>()
                 .ForMember(d => d.CheckpointId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.ToCheckpointId))
@@ -592,7 +594,8 @@ namespace Runnatics.Services.Mappings
                 .ForMember(d => d.CumulativeTime, opt => opt.Ignore())
                 .ForMember(d => d.Pace, opt => opt.Ignore())
                 .ForMember(d => d.PaceValue, opt => opt.Ignore())
-                .ForMember(d => d.Speed, opt => opt.Ignore());
+                .ForMember(d => d.Speed, opt => opt.Ignore())
+                .ForMember(d => d.IsManual, opt => opt.MapFrom(src => src.ReadNormalized != null && src.ReadNormalized.IsManualEntry));
 
             CreateMap<SplitTimes, PaceProgressionInfo>()
                 .ForMember(d => d.DistanceKm, opt => opt.MapFrom(src => src.ToCheckpoint != null ? (decimal?)src.ToCheckpoint.DistanceFromStart : src.Distance))

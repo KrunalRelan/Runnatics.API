@@ -135,6 +135,11 @@ namespace Runnatics.Models.Client.Responses.Participants
         /// </summary>
         public DateTime? FinishTime { get; set; }
 
+        /// <summary>
+        /// True when the participant's finish time was manually entered
+        /// </summary>
+        public bool IsManualResult { get; set; }
+
         #endregion
 
         #region Performance and Analytics

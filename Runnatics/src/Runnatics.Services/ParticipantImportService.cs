@@ -1735,6 +1735,7 @@ namespace Runnatics.Services
                     st.ParticipantId == decryptedParticipantId &&
                     !st.AuditProperties.IsDeleted)
                     .Include(st => st.ToCheckpoint)
+                    .Include(st => st.ReadNormalized)
                     .OrderBy(st => st.ToCheckpoint.DistanceFromStart)
                     .AsNoTracking()
                     .ToListAsync();

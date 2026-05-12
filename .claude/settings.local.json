@@ -12,7 +12,8 @@
       "Bash(xargs grep *)",
       "Bash(taskkill /F /IM \"Runnatics.Api.exe\")",
       "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\Runnatics.API\" -Directory)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "Bash(dir C:\\\\Projects *)"
     ]
   }
 }

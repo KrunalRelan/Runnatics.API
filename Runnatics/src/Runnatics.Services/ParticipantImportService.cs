@@ -2212,14 +2212,31 @@ namespace Runnatics.Services
                             if (oldReadings.Count > 0)
                                 await normalizedRepo.UpdateRangeAsync(oldReadings);
 
-                            // 4. Recalculate ranks for old race (participant removed)
+                            // 4. Reassign ChipAssignment rows to the new participant
+                            var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+                            var oldChipAssignments = await chipAssignmentRepo.GetQuery(ca =>
+                                ca.ParticipantId == decryptedParticipantId &&
+                                ca.AuditProperties.IsActive &&
+                                !ca.AuditProperties.IsDeleted)
+                                .ToListAsync();
+
+                            foreach (var ca in oldChipAssignments)
+                            {
+                                ca.ParticipantId = newParticipant.Id;
+                                ca.AuditProperties.UpdatedBy = userId;
+                                ca.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            }
+                            if (oldChipAssignments.Count > 0)
+                                await chipAssignmentRepo.UpdateRangeAsync(oldChipAssignments);
+
+                            // 5. Recalculate ranks for old race (participant removed)
                             await RecalculateRaceRanksAsync(participant.EventId, decryptedRaceId, userId);
 
-                            // 5. Recalculate ranks for new race (participant added)
+                            // 6. Recalculate ranks for new race (participant added)
                             await RecalculateRaceRanksAsync(participant.EventId, targetRaceId, userId);
                         });
 
-                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; results, splits, and readings migrated", participantId, decryptedRaceId, targetRaceId);
+                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; results, splits, readings, and chip assignments migrated", participantId, decryptedRaceId, targetRaceId);
                         return MapToSearchResponse(newParticipant);
                     }
                 }

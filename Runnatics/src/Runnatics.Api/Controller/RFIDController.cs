@@ -386,7 +386,7 @@ namespace Runnatics.Api.Controller
         /// Use when a participant's chip failed to read at the finish line and their time is known.
         /// Rankings for every finisher in the race are recomputed after the entry is saved.
         /// </summary>
-        [HttpPost("{eventId}/{raceId}/participant/{participantId}/manual-time")]
+        [HttpPut("{eventId}/{raceId}/participant/{participantId}/manual-time")]
         [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<ManualTimeResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]

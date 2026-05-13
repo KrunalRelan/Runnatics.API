@@ -47,6 +47,6 @@ namespace Runnatics.Services.Interface
             string raceId,
             string participantId,
             long finishTimeMs,
-            int checkpointId);
+            string checkpointId);
     }
 }

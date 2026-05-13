@@ -1358,12 +1358,13 @@ namespace Runnatics.Services
             string raceId,
             string participantId,
             long finishTimeMs,
-            int checkpointId)
+            string checkpointId)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
             var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
             var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+            var decryptedCheckpointId = Convert.ToInt32(_encryptionService.Decrypt(checkpointId));
 
             try
             {
@@ -1404,10 +1405,10 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                var editedIndex = raceCheckpoints.FindIndex(c => c.Id == checkpointId);
+                var editedIndex = raceCheckpoints.FindIndex(c => c.Id == decryptedCheckpointId);
                 if (editedIndex < 0)
                 {
-                    ErrorMessage = $"Checkpoint {checkpointId} not found for this race.";
+                    ErrorMessage = $"Checkpoint {decryptedCheckpointId} not found for this race.";
                     return null;
                 }
 
@@ -1435,7 +1436,7 @@ namespace Runnatics.Services
                 // Also gives us FromCheckpointId so we can derive the segment baseline.
                 var existingSplitForSegment = await splitRepo.GetQuery(s =>
                     s.ParticipantId == decryptedParticipantId &&
-                    s.CheckpointId == checkpointId &&
+                    s.CheckpointId == decryptedCheckpointId &&
                     !s.AuditProperties.IsDeleted)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
@@ -1444,8 +1445,8 @@ namespace Runnatics.Services
                 {
                     _logger.LogError(
                         "No SplitTimes row found for ParticipantId={ParticipantId}, CheckpointId={CheckpointId}",
-                        decryptedParticipantId, checkpointId);
-                    ErrorMessage = $"No SplitTimes row found for checkpoint {checkpointId}. " +
+                        decryptedParticipantId, decryptedCheckpointId);
+                    ErrorMessage = $"No SplitTimes row found for checkpoint {decryptedCheckpointId}. " +
                         "Manual time can only be applied to checkpoints that already have RFID readings.";
                     return null;
                 }
@@ -1453,7 +1454,7 @@ namespace Runnatics.Services
                 // Use the stored FromCheckpointId to find the previous cumulative time
                 var fromCheckpointId = existingSplitForSegment.FromCheckpointId;
                 long? previousCumulativeMs = null;
-                if (fromCheckpointId != checkpointId)
+                if (fromCheckpointId != decryptedCheckpointId)
                 {
                     var prevSplit = await splitRepo.GetQuery(s =>
                         s.ParticipantId == decryptedParticipantId &&
@@ -1542,7 +1543,7 @@ namespace Runnatics.Services
                     // STEP C — Update existing SplitTimes row (never insert — row confirmed above)
                     var existingSplit = await splitRepo.GetQuery(s =>
                         s.ParticipantId == decryptedParticipantId &&
-                        s.CheckpointId == checkpointId &&
+                        s.CheckpointId == decryptedCheckpointId &&
                         !s.AuditProperties.IsDeleted)
                         .FirstOrDefaultAsync();
 
@@ -1562,7 +1563,7 @@ namespace Runnatics.Services
                     // The next segment starts at the checkpoint we just edited, so its delta changes
                     var nextSplit = await splitRepo.GetQuery(s =>
                         s.ParticipantId == decryptedParticipantId &&
-                        s.FromCheckpointId == checkpointId &&
+                        s.FromCheckpointId == decryptedCheckpointId &&
                         !s.AuditProperties.IsDeleted)
                         .FirstOrDefaultAsync();
 
@@ -1612,14 +1613,14 @@ namespace Runnatics.Services
 
                 _logger.LogInformation(
                     "Manual time recorded for participant {ParticipantId} at checkpoint {CheckpointId} ({CheckpointName}): {ChipTimeMs}ms",
-                    decryptedParticipantId, checkpointId, editedCheckpoint.Name, chipTimeMs);
+                    decryptedParticipantId, decryptedCheckpointId, editedCheckpoint.Name, chipTimeMs);
 
                 return new ManualTimeResponse
                 {
                     ParticipantId = participantId,
                     Bib = participant.BibNumber ?? string.Empty,
                     FullName = participant.FullName,
-                    CheckpointId = checkpointId,
+                    CheckpointId = decryptedCheckpointId,
                     CheckpointName = editedCheckpoint.Name,
                     ChipTimeMs = chipTimeMs,
                     CumulativeTimeMs = chipTimeMs,

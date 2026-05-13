@@ -583,7 +583,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(d => d.IsManualResult, opt => opt.MapFrom(src => src.Result != null && src.Result.IsManual));
 
             CreateMap<SplitTimes, Runnatics.Models.Client.Responses.Participants.SplitTimeInfo>()
-                .ForMember(d => d.CheckpointId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.ToCheckpointId))
+                .ForMember(d => d.CheckpointId, opt => opt.ConvertUsing<NullableIdEncryptor, int?>(src => src.CheckpointId))
                 .ForMember(d => d.CheckpointName, opt => opt.MapFrom(src => src.ToCheckpoint != null ? src.ToCheckpoint.Name : null))
                 .ForMember(d => d.DistanceKm, opt => opt.MapFrom(src => src.ToCheckpoint != null ? (decimal?)src.ToCheckpoint.DistanceFromStart : src.Distance))
                 .ForMember(d => d.Distance, opt => opt.MapFrom(src => src.ToCheckpoint != null ? $"{src.ToCheckpoint.DistanceFromStart} km" : null))

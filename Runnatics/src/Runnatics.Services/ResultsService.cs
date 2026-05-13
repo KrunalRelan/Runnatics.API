@@ -1459,6 +1459,85 @@ namespace Runnatics.Services
                     participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
                     await participantRepo.UpdateAsync(participant);
 
+                    // Sync the finish SplitTimes row so the Checkpoint Analysis grid reflects the manual time
+                    var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                    var raceCheckpoints = await checkpointRepo.GetQuery(c =>
+                        c.RaceId == decryptedRaceId &&
+                        c.AuditProperties.IsActive &&
+                        !c.AuditProperties.IsDeleted)
+                        .OrderBy(c => c.DistanceFromStart)
+                        .ToListAsync();
+
+                    if (raceCheckpoints.Count > 0)
+                    {
+                        var finishCheckpoint = raceCheckpoints.Last();
+                        var splitRepo = _repository.GetRepository<SplitTimes>();
+
+                        // Segment time = finish cumulative minus the previous checkpoint's cumulative
+                        long segmentTimeMs = chipTimeMs;
+                        var penultimateCheckpoint = raceCheckpoints.Count > 1
+                            ? raceCheckpoints[raceCheckpoints.Count - 2]
+                            : null;
+
+                        if (penultimateCheckpoint != null)
+                        {
+                            var prevSplit = await splitRepo.GetQuery(s =>
+                                s.ParticipantId == decryptedParticipantId &&
+                                s.ToCheckpointId == penultimateCheckpoint.Id &&
+                                !s.AuditProperties.IsDeleted)
+                                .AsNoTracking()
+                                .FirstOrDefaultAsync();
+
+                            if (prevSplit?.SplitTimeMs.HasValue == true)
+                                segmentTimeMs = chipTimeMs - prevSplit.SplitTimeMs.Value;
+                        }
+
+                        // Clamp chipTimeMs for the legacy TIME(7) column
+                        var splitTimeSpan = TimeSpan.FromMilliseconds(chipTimeMs);
+                        if (splitTimeSpan.TotalHours >= 24)
+                            splitTimeSpan = new TimeSpan(23, 59, 59);
+
+                        var existingFinishSplit = await splitRepo.GetQuery(s =>
+                            s.ParticipantId == decryptedParticipantId &&
+                            s.ToCheckpointId == finishCheckpoint.Id &&
+                            !s.AuditProperties.IsDeleted)
+                            .FirstOrDefaultAsync();
+
+                        if (existingFinishSplit != null)
+                        {
+                            existingFinishSplit.SplitTimeMs = chipTimeMs;
+                            existingFinishSplit.SegmentTime = segmentTimeMs;
+                            existingFinishSplit.SplitTime = splitTimeSpan;
+                            existingFinishSplit.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            existingFinishSplit.AuditProperties.UpdatedBy = userId;
+                            await splitRepo.UpdateAsync(existingFinishSplit);
+                        }
+                        else
+                        {
+                            var fromCheckpointId = penultimateCheckpoint?.Id ?? finishCheckpoint.Id;
+                            var newSplit = new SplitTimes
+                            {
+                                ParticipantId = decryptedParticipantId,
+                                EventId = decryptedEventId,
+                                FromCheckpointId = fromCheckpointId,
+                                ToCheckpointId = finishCheckpoint.Id,
+                                CheckpointId = finishCheckpoint.Id,
+                                SplitTimeMs = chipTimeMs,
+                                SegmentTime = segmentTimeMs,
+                                SplitTime = splitTimeSpan,
+                                Distance = finishCheckpoint.DistanceFromStart,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            };
+                            await splitRepo.AddAsync(newSplit);
+                        }
+                    }
+
                     await _repository.SaveChangesAsync();
 
                     await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);

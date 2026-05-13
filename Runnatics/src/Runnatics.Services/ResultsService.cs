@@ -1357,7 +1357,8 @@ namespace Runnatics.Services
             string eventId,
             string raceId,
             string participantId,
-            long finishTimeMs)
+            long finishTimeMs,
+            int checkpointId)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
@@ -1381,7 +1382,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                // Load Race to get the UTC gun start time
+                // Load Race for UTC gun start time
                 var raceRepo = _repository.GetRepository<Race>();
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
                     .AsNoTracking()
@@ -1393,8 +1394,27 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                // finishTimeMs = IST ms from midnight (what the frontend sends)
-                // Convert to UTC finish datetime, then subtract race gun start to get chip time
+                // Load all race checkpoints ordered by distance (start → finish)
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var raceCheckpoints = await checkpointRepo.GetQuery(c =>
+                    c.RaceId == decryptedRaceId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                    .OrderBy(c => c.DistanceFromStart)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var editedIndex = raceCheckpoints.FindIndex(c => c.Id == checkpointId);
+                if (editedIndex < 0)
+                {
+                    ErrorMessage = $"Checkpoint {checkpointId} not found for this race.";
+                    return null;
+                }
+
+                var editedCheckpoint = raceCheckpoints[editedIndex];
+                var isFinish = editedIndex == raceCheckpoints.Count - 1;
+
+                // finishTimeMs = IST ms from midnight — convert to elapsed chip time (UTC)
                 var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
                 var raceStartUtc = race.StartTime.Value;
                 var raceStartIst = TimeZoneInfo.ConvertTimeFromUtc(raceStartUtc, istZone);
@@ -1409,123 +1429,98 @@ namespace Runnatics.Services
                         "Check that finish time is after race start.");
 
                 var resultsRepo = _repository.GetRepository<Results>();
+                var splitRepo = _repository.GetRepository<SplitTimes>();
+
+                // Confirm the SplitTimes row exists — required before we can update it.
+                // Also gives us FromCheckpointId so we can derive the segment baseline.
+                var existingSplitForSegment = await splitRepo.GetQuery(s =>
+                    s.ParticipantId == decryptedParticipantId &&
+                    s.CheckpointId == checkpointId &&
+                    !s.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (existingSplitForSegment == null)
+                {
+                    _logger.LogError(
+                        "No SplitTimes row found for ParticipantId={ParticipantId}, CheckpointId={CheckpointId}",
+                        decryptedParticipantId, checkpointId);
+                    ErrorMessage = $"No SplitTimes row found for checkpoint {checkpointId}. " +
+                        "Manual time can only be applied to checkpoints that already have RFID readings.";
+                    return null;
+                }
+
+                // Use the stored FromCheckpointId to find the previous cumulative time
+                var fromCheckpointId = existingSplitForSegment.FromCheckpointId;
+                long? previousCumulativeMs = null;
+                if (fromCheckpointId != checkpointId)
+                {
+                    var prevSplit = await splitRepo.GetQuery(s =>
+                        s.ParticipantId == decryptedParticipantId &&
+                        s.CheckpointId == fromCheckpointId &&
+                        !s.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+                    previousCumulativeMs = prevSplit?.SplitTimeMs;
+                }
+
+                var segmentTimeMs = previousCumulativeMs.HasValue
+                    ? chipTimeMs - previousCumulativeMs.Value
+                    : chipTimeMs;
+
+                // Pace and speed for response (computed from segment distance + segment time)
+                var prevDistance = raceCheckpoints.FirstOrDefault(c => c.Id == fromCheckpointId)?.DistanceFromStart ?? 0m;
+                var segmentDistanceKm = editedCheckpoint.DistanceFromStart - prevDistance;
+                decimal? paceMinPerKm = segmentDistanceKm > 0 && segmentTimeMs > 0
+                    ? Math.Round(segmentTimeMs / 60000m / segmentDistanceKm, 4)
+                    : null;
+                decimal? speedKmh = segmentDistanceKm > 0 && segmentTimeMs > 0
+                    ? Math.Round(segmentDistanceKm / (segmentTimeMs / 3600000m), 2)
+                    : null;
+
+                // Clamp for legacy TIME(7) column
+                var splitTimeSpan = TimeSpan.FromMilliseconds(chipTimeMs);
+                if (splitTimeSpan.TotalHours >= 24)
+                    splitTimeSpan = new TimeSpan(23, 59, 59);
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    var existing = await resultsRepo.GetQuery(r =>
-                        r.ParticipantId == decryptedParticipantId &&
-                        r.EventId == decryptedEventId &&
-                        r.RaceId == decryptedRaceId)
-                        .FirstOrDefaultAsync();
-
-                    if (existing != null)
+                    // STEP A — Update Results only when editing the finish checkpoint
+                    if (isFinish)
                     {
-                        existing.FinishTime = chipTimeMs;
-                        existing.GunTime = chipTimeMs;
-                        existing.NetTime = chipTimeMs;
-                        existing.ManualFinishTimeMs = chipTimeMs;
-                        existing.Status = "Finished";
-                        existing.AuditProperties.IsActive = true;
-                        existing.AuditProperties.IsDeleted = false;
-                        existing.AuditProperties.UpdatedBy = userId;
-                        existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        await resultsRepo.UpdateAsync(existing);
-                    }
-                    else
-                    {
-                        var newResult = new Results
-                        {
-                            EventId = decryptedEventId,
-                            ParticipantId = decryptedParticipantId,
-                            RaceId = decryptedRaceId,
-                            FinishTime = chipTimeMs,
-                            GunTime = chipTimeMs,
-                            NetTime = chipTimeMs,
-                            ManualFinishTimeMs = chipTimeMs,
-                            Status = "Finished",
-                            AuditProperties = new Models.Data.Common.AuditProperties
-                            {
-                                CreatedBy = userId,
-                                CreatedDate = DateTime.UtcNow,
-                                IsActive = true,
-                                IsDeleted = false
-                            }
-                        };
-                        await resultsRepo.AddAsync(newResult);
-                    }
-
-                    participant.IsManualTiming = true;
-                    participant.AuditProperties.UpdatedBy = userId;
-                    participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                    await participantRepo.UpdateAsync(participant);
-
-                    // Sync the finish SplitTimes row so the Checkpoint Analysis grid reflects the manual time
-                    var checkpointRepo = _repository.GetRepository<Checkpoint>();
-                    var raceCheckpoints = await checkpointRepo.GetQuery(c =>
-                        c.RaceId == decryptedRaceId &&
-                        c.AuditProperties.IsActive &&
-                        !c.AuditProperties.IsDeleted)
-                        .OrderBy(c => c.DistanceFromStart)
-                        .ToListAsync();
-
-                    if (raceCheckpoints.Count > 0)
-                    {
-                        var finishCheckpoint = raceCheckpoints.Last();
-                        var splitRepo = _repository.GetRepository<SplitTimes>();
-
-                        // Segment time = finish cumulative minus the previous checkpoint's cumulative
-                        long segmentTimeMs = chipTimeMs;
-                        var penultimateCheckpoint = raceCheckpoints.Count > 1
-                            ? raceCheckpoints[raceCheckpoints.Count - 2]
-                            : null;
-
-                        if (penultimateCheckpoint != null)
-                        {
-                            var prevSplit = await splitRepo.GetQuery(s =>
-                                s.ParticipantId == decryptedParticipantId &&
-                                s.ToCheckpointId == penultimateCheckpoint.Id &&
-                                !s.AuditProperties.IsDeleted)
-                                .AsNoTracking()
-                                .FirstOrDefaultAsync();
-
-                            if (prevSplit?.SplitTimeMs.HasValue == true)
-                                segmentTimeMs = chipTimeMs - prevSplit.SplitTimeMs.Value;
-                        }
-
-                        // Clamp chipTimeMs for the legacy TIME(7) column
-                        var splitTimeSpan = TimeSpan.FromMilliseconds(chipTimeMs);
-                        if (splitTimeSpan.TotalHours >= 24)
-                            splitTimeSpan = new TimeSpan(23, 59, 59);
-
-                        var existingFinishSplit = await splitRepo.GetQuery(s =>
-                            s.ParticipantId == decryptedParticipantId &&
-                            s.ToCheckpointId == finishCheckpoint.Id &&
-                            !s.AuditProperties.IsDeleted)
+                        var existing = await resultsRepo.GetQuery(r =>
+                            r.ParticipantId == decryptedParticipantId &&
+                            r.EventId == decryptedEventId &&
+                            r.RaceId == decryptedRaceId)
                             .FirstOrDefaultAsync();
 
-                        if (existingFinishSplit != null)
+                        if (existing != null)
                         {
-                            existingFinishSplit.SplitTimeMs = chipTimeMs;
-                            existingFinishSplit.SegmentTime = segmentTimeMs;
-                            existingFinishSplit.SplitTime = splitTimeSpan;
-                            existingFinishSplit.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            existingFinishSplit.AuditProperties.UpdatedBy = userId;
-                            await splitRepo.UpdateAsync(existingFinishSplit);
+                            existing.FinishTime = chipTimeMs;
+                            existing.GunTime = chipTimeMs;
+                            existing.NetTime = chipTimeMs;
+                            existing.ManualFinishTimeMs = chipTimeMs;
+                            existing.Status = "Finished";
+                            existing.IsManual = true;
+                            existing.AuditProperties.IsActive = true;
+                            existing.AuditProperties.IsDeleted = false;
+                            existing.AuditProperties.UpdatedBy = userId;
+                            existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            await resultsRepo.UpdateAsync(existing);
                         }
                         else
                         {
-                            var fromCheckpointId = penultimateCheckpoint?.Id ?? finishCheckpoint.Id;
-                            var newSplit = new SplitTimes
+                            var newResult = new Results
                             {
-                                ParticipantId = decryptedParticipantId,
                                 EventId = decryptedEventId,
-                                FromCheckpointId = fromCheckpointId,
-                                ToCheckpointId = finishCheckpoint.Id,
-                                CheckpointId = finishCheckpoint.Id,
-                                SplitTimeMs = chipTimeMs,
-                                SegmentTime = segmentTimeMs,
-                                SplitTime = splitTimeSpan,
-                                Distance = finishCheckpoint.DistanceFromStart,
+                                ParticipantId = decryptedParticipantId,
+                                RaceId = decryptedRaceId,
+                                FinishTime = chipTimeMs,
+                                GunTime = chipTimeMs,
+                                NetTime = chipTimeMs,
+                                ManualFinishTimeMs = chipTimeMs,
+                                Status = "Finished",
+                                IsManual = true,
                                 AuditProperties = new Models.Data.Common.AuditProperties
                                 {
                                     CreatedBy = userId,
@@ -1534,48 +1529,111 @@ namespace Runnatics.Services
                                     IsDeleted = false
                                 }
                             };
-                            await splitRepo.AddAsync(newSplit);
+                            await resultsRepo.AddAsync(newResult);
                         }
+                    }
+
+                    // STEP B — Mark participant as having manual timing
+                    participant.IsManualTiming = true;
+                    participant.AuditProperties.UpdatedBy = userId;
+                    participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    await participantRepo.UpdateAsync(participant);
+
+                    // STEP C — Update existing SplitTimes row (never insert — row confirmed above)
+                    var existingSplit = await splitRepo.GetQuery(s =>
+                        s.ParticipantId == decryptedParticipantId &&
+                        s.CheckpointId == checkpointId &&
+                        !s.AuditProperties.IsDeleted)
+                        .FirstOrDefaultAsync();
+
+                    if (existingSplit != null)
+                    {
+                        existingSplit.SplitTimeMs = chipTimeMs;
+                        existingSplit.SegmentTime = segmentTimeMs;
+                        existingSplit.SplitTime = splitTimeSpan;
+                        existingSplit.ReadNormalizedId = null; // null = manually entered, no RFID reading
+                        existingSplit.IsManual = true;
+                        existingSplit.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        existingSplit.AuditProperties.UpdatedBy = userId;
+                        await splitRepo.UpdateAsync(existingSplit);
+                    }
+
+                    // STEP D — Recalculate the next checkpoint's SegmentTime
+                    // The next segment starts at the checkpoint we just edited, so its delta changes
+                    var nextSplit = await splitRepo.GetQuery(s =>
+                        s.ParticipantId == decryptedParticipantId &&
+                        s.FromCheckpointId == checkpointId &&
+                        !s.AuditProperties.IsDeleted)
+                        .FirstOrDefaultAsync();
+
+                    if (nextSplit?.SplitTimeMs.HasValue == true)
+                    {
+                        nextSplit.SegmentTime = nextSplit.SplitTimeMs.Value - chipTimeMs;
+                        nextSplit.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        nextSplit.AuditProperties.UpdatedBy = userId;
+                        await splitRepo.UpdateAsync(nextSplit);
                     }
 
                     await _repository.SaveChangesAsync();
 
-                    await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+                    if (isFinish)
+                        await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                 });
 
-                _ = Task.Run(() => _raceNotificationService.NotifyRaceCompletionAsync(
-                    decryptedParticipantId, decryptedRaceId));
+                int? overallRank = null, genderRank = null, categoryRank = null, totalFinishers = null;
+                string? status = null;
 
-                var updatedResult = await resultsRepo.GetQuery(r =>
-                    r.ParticipantId == decryptedParticipantId &&
-                    r.EventId == decryptedEventId &&
-                    r.RaceId == decryptedRaceId &&
-                    r.AuditProperties.IsActive &&
-                    !r.AuditProperties.IsDeleted)
-                    .FirstOrDefaultAsync();
+                if (isFinish)
+                {
+                    _ = Task.Run(() => _raceNotificationService.NotifyRaceCompletionAsync(
+                        decryptedParticipantId, decryptedRaceId));
 
-                var totalFinishers = await resultsRepo.CountAsync(r =>
-                    r.RaceId == decryptedRaceId &&
-                    r.Status == "Finished" &&
-                    r.AuditProperties.IsActive &&
-                    !r.AuditProperties.IsDeleted);
+                    var updatedResult = await resultsRepo.GetQuery(r =>
+                        r.ParticipantId == decryptedParticipantId &&
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+
+                    var count = await resultsRepo.CountAsync(r =>
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == "Finished" &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted);
+
+                    overallRank = updatedResult?.OverallRank;
+                    genderRank = updatedResult?.GenderRank;
+                    categoryRank = updatedResult?.CategoryRank;
+                    totalFinishers = count;
+                    status = "Finished";
+                }
 
                 _logger.LogInformation(
-                    "Manual time recorded for participant {ParticipantId}: {FinishTimeMs}ms — overall rank {Rank}/{Total}",
-                    decryptedParticipantId, finishTimeMs, updatedResult?.OverallRank, totalFinishers);
+                    "Manual time recorded for participant {ParticipantId} at checkpoint {CheckpointId} ({CheckpointName}): {ChipTimeMs}ms",
+                    decryptedParticipantId, checkpointId, editedCheckpoint.Name, chipTimeMs);
 
                 return new ManualTimeResponse
                 {
                     ParticipantId = participantId,
                     Bib = participant.BibNumber ?? string.Empty,
                     FullName = participant.FullName,
-                    FinishTimeMs = chipTimeMs,
-                    FinishTime = FormatTime(chipTimeMs),
-                    OverallRank = updatedResult?.OverallRank,
-                    GenderRank = updatedResult?.GenderRank,
-                    CategoryRank = updatedResult?.CategoryRank,
+                    CheckpointId = checkpointId,
+                    CheckpointName = editedCheckpoint.Name,
+                    ChipTimeMs = chipTimeMs,
+                    CumulativeTimeMs = chipTimeMs,
+                    SplitTimeMs = segmentTimeMs,
+                    Pace = paceMinPerKm,
+                    Speed = speedKmh,
+                    IsManual = true,
+                    FinishTimeMs = isFinish ? chipTimeMs : null,
+                    FinishTime = isFinish ? FormatTime(chipTimeMs) : null,
+                    OverallRank = overallRank,
+                    GenderRank = genderRank,
+                    CategoryRank = categoryRank,
                     TotalFinishers = totalFinishers,
-                    Status = "Finished"
+                    Status = status
                 };
             }
             catch (Exception ex)

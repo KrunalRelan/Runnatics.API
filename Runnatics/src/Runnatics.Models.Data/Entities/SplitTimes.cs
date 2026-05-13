@@ -46,6 +46,8 @@ namespace Runnatics.Models.Data.Entities
         public int? GenderRank { get; set; }
         public int? CategoryRank { get; set; }
 
+        public bool IsManual { get; set; }
+
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;

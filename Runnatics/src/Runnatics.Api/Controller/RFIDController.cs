@@ -417,7 +417,7 @@ namespace Runnatics.Api.Controller
             }
 
             var response = new ResponseBase<ManualTimeResponse>();
-            var result = await _resultsService.RecordManualTimeAsync(eventId, raceId, participantId, request.FinishTimeMs);
+            var result = await _resultsService.RecordManualTimeAsync(eventId, raceId, participantId, request.FinishTimeMs, request.CheckpointId);
 
             if (_resultsService.HasError || result == null)
             {
@@ -428,6 +428,10 @@ namespace Runnatics.Api.Controller
 
                 if (_resultsService.ErrorMessage?.Contains("not found") == true)
                     return NotFound(response);
+
+                if (_resultsService.ErrorMessage?.Contains("invalid") == true ||
+                    _resultsService.ErrorMessage?.Contains("after race start") == true)
+                    return BadRequest(response);
 
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }

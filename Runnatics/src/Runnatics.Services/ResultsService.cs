@@ -311,7 +311,7 @@ namespace Runnatics.Services
 
                 response.TotalParticipants = allParticipants.Count;
 
-                // Get all split times for the race grouped by participant
+                // Get all split times for the race grouped by participant (used for FinishTime only)
                 var splitTimeRepo = _repository.GetRepository<SplitTimes>();
                 var allRaceSplits = await splitTimeRepo.GetQuery(st =>
                     st.EventId == decryptedEventId &&
@@ -324,20 +324,33 @@ namespace Runnatics.Services
                     .GroupBy(st => st.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.ToList());
 
-                // Determine finisher set using mandatory checkpoints
-                var finishers = allParticipants
+                // Load ReadNormalized detections at mandatory checkpoints for all race participants.
+                // This is the source of truth for Finished vs DNF — EPC reads AND manual entries both land here.
+                var participantIds = allParticipants.Select(p => p.Id).ToList();
+                var mandatoryIdList = mandatoryCheckpointIds.ToList();
+                var readNormalizedRepo = _repository.GetRepository<ReadNormalized>();
+                var allDetections = await readNormalizedRepo.GetQuery(rn =>
+                    participantIds.Contains(rn.ParticipantId) &&
+                    mandatoryIdList.Contains(rn.CheckpointId) &&
+                    !rn.AuditProperties.IsDeleted)
+                    .Select(rn => new { rn.ParticipantId, rn.CheckpointId })
+                    .ToListAsync();
+
+                var detectionsByParticipant = allDetections
+                    .GroupBy(d => d.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.Select(d => d.CheckpointId).ToHashSet());
+
+                // Finisher = all mandatory checkpoints detected in ReadNormalized
+                var finisherIds = allParticipants
                     .Where(p =>
                     {
-                        var pSplits = splitsByParticipant.GetValueOrDefault(p.Id, []);
-                        var pCps = pSplits.Select(st => st.ToCheckpointId).ToHashSet();
-                        foreach (var s in pSplits.Where(s => s.CheckpointId.HasValue))
-                            pCps.Add(s.CheckpointId!.Value);
-                        return mandatoryCheckpointIds.All(id => pCps.Contains(id));
+                        var covered = detectionsByParticipant.GetValueOrDefault(p.Id, []);
+                        return mandatoryCheckpointIds.All(id => covered.Contains(id));
                     })
                     .Select(p => p.Id)
                     .ToHashSet();
 
-                response.Finishers = finishers.Count;
+                response.Finishers = finisherIds.Count;
                 response.DNF = response.TotalParticipants - response.Finishers;
 
                 // Delete existing results if force recalculation
@@ -370,30 +383,18 @@ namespace Runnatics.Services
                     foreach (var participant in allParticipants)
                     {
                         var pSplits = splitsByParticipant.GetValueOrDefault(participant.Id, []);
-                        var pCps = pSplits.Select(st => st.ToCheckpointId).ToHashSet();
-                        foreach (var s in pSplits.Where(s => s.CheckpointId.HasValue))
-                            pCps.Add(s.CheckpointId!.Value);
+                        var covered = detectionsByParticipant.GetValueOrDefault(participant.Id, []);
+                        bool isFinisher = mandatoryCheckpointIds.All(id => covered.Contains(id));
 
-                        var coveredMandatory = mandatoryCheckpointIds.Count(id => pCps.Contains(id));
-
-                        string status;
+                        string status = isFinisher ? ResultStatus.Finished : ResultStatus.DNF;
                         long? finishTime = null;
 
-                        if (coveredMandatory == mandatoryCheckpointIds.Count)
+                        if (isFinisher)
                         {
-                            status = ResultStatus.Finished;
                             finishTime = pSplits
                                 .Where(st => st.ToCheckpointId == finishCheckpoint.Id || st.CheckpointId == finishCheckpoint.Id)
                                 .OrderBy(st => st.SplitTimeMs)
                                 .FirstOrDefault()?.SplitTimeMs;
-                        }
-                        else if (coveredMandatory > 0)
-                        {
-                            status = ResultStatus.DNF;
-                        }
-                        else
-                        {
-                            status = ResultStatus.DNS;
                         }
 
                         results.Add(new Results
@@ -1477,6 +1478,47 @@ namespace Runnatics.Services
 
                 var resultsRepo = _repository.GetRepository<Results>();
                 var splitRepo = _repository.GetRepository<SplitTimes>();
+                var rnRepo = _repository.GetRepository<ReadNormalized>();
+
+                // Determine which checkpoints are mandatory (for status computation)
+                var mandatoryIds = await _repository.GetRepository<Checkpoint>()
+                    .GetQuery(cp => cp.RaceId == decryptedRaceId
+                                 && cp.EventId == decryptedEventId
+                                 && cp.IsMandatory
+                                 && cp.AuditProperties.IsActive
+                                 && !cp.AuditProperties.IsDeleted)
+                    .Select(cp => cp.Id)
+                    .ToListAsync();
+
+                if (mandatoryIds.Count == 0)
+                {
+                    // Fallback: treat the highest-distance checkpoint as mandatory
+                    var fallbackId = raceCheckpoints
+                        .OrderByDescending(c => c.DistanceFromStart)
+                        .Select(c => c.Id)
+                        .FirstOrDefault();
+                    if (fallbackId != 0)
+                        mandatoryIds = [fallbackId];
+                }
+
+                // Existing ReadNormalized detections at mandatory checkpoints for this participant
+                var existingDetectedIds = mandatoryIds.Count > 0
+                    ? await rnRepo.GetQuery(rn =>
+                        rn.ParticipantId == decryptedParticipantId &&
+                        mandatoryIds.Contains(rn.CheckpointId) &&
+                        !rn.AuditProperties.IsDeleted)
+                        .Select(rn => rn.CheckpointId)
+                        .Distinct()
+                        .ToListAsync()
+                    : new List<int>();
+
+                // Add the checkpoint being recorded now to the covered set (in-memory, before DB write)
+                var coveredCheckpointIds = existingDetectedIds.ToHashSet();
+                coveredCheckpointIds.Add(decryptedCheckpointId);
+
+                var computedStatus = mandatoryIds.Count > 0 && mandatoryIds.All(id => coveredCheckpointIds.Contains(id))
+                    ? ResultStatus.Finished
+                    : ResultStatus.DNF;
 
                 // Try to find existing SplitTimes row (not required — will upsert below)
                 var existingSplitForSegment = await splitRepo.GetQuery(s =>
@@ -1522,52 +1564,91 @@ namespace Runnatics.Services
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    // STEP A — Update Results only when editing the finish checkpoint
-                    if (isFinish)
-                    {
-                        var existing = await resultsRepo.GetQuery(r =>
-                            r.ParticipantId == decryptedParticipantId &&
-                            r.EventId == decryptedEventId &&
-                            r.RaceId == decryptedRaceId)
-                            .FirstOrDefaultAsync();
+                    // STEP A0 — Upsert ReadNormalized so this manual detection is the source of truth for status
+                    var existingRn = await rnRepo.GetQuery(rn =>
+                        rn.ParticipantId == decryptedParticipantId &&
+                        rn.CheckpointId == decryptedCheckpointId &&
+                        rn.IsManualEntry &&
+                        !rn.AuditProperties.IsDeleted)
+                        .FirstOrDefaultAsync();
 
-                        if (existing != null)
+                    if (existingRn != null)
+                    {
+                        existingRn.GunTime = chipTimeMs;
+                        existingRn.NetTime = chipTimeMs;
+                        existingRn.ChipTime = DateTime.UtcNow;
+                        existingRn.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        existingRn.AuditProperties.UpdatedBy = userId;
+                        await rnRepo.UpdateAsync(existingRn);
+                    }
+                    else
+                    {
+                        await rnRepo.AddAsync(new ReadNormalized
                         {
-                            existing.FinishTime = chipTimeMs;
-                            existing.GunTime = chipTimeMs;
-                            existing.NetTime = chipTimeMs;
-                            existing.ManualFinishTimeMs = chipTimeMs;
-                            existing.Status = "Finished";
-                            existing.IsManual = true;
-                            existing.AuditProperties.IsActive = true;
-                            existing.AuditProperties.IsDeleted = false;
-                            existing.AuditProperties.UpdatedBy = userId;
-                            existing.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            await resultsRepo.UpdateAsync(existing);
-                        }
-                        else
-                        {
-                            var newResult = new Results
+                            EventId = decryptedEventId,
+                            ParticipantId = decryptedParticipantId,
+                            CheckpointId = decryptedCheckpointId,
+                            ChipTime = DateTime.UtcNow,
+                            GunTime = chipTimeMs,
+                            NetTime = chipTimeMs,
+                            IsManualEntry = true,
+                            ManualEntryReason = "Manual time entry",
+                            CreatedByUserId = userId,
+                            AuditProperties = new Models.Data.Common.AuditProperties
                             {
-                                EventId = decryptedEventId,
-                                ParticipantId = decryptedParticipantId,
-                                RaceId = decryptedRaceId,
-                                FinishTime = chipTimeMs,
-                                GunTime = chipTimeMs,
-                                NetTime = chipTimeMs,
-                                ManualFinishTimeMs = chipTimeMs,
-                                Status = "Finished",
-                                IsManual = true,
-                                AuditProperties = new Models.Data.Common.AuditProperties
-                                {
-                                    CreatedBy = userId,
-                                    CreatedDate = DateTime.UtcNow,
-                                    IsActive = true,
-                                    IsDeleted = false
-                                }
-                            };
-                            await resultsRepo.AddAsync(newResult);
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        });
+                    }
+
+                    // STEP A — Update Results: always correct the status; only update times when editing finish
+                    var existingResult = await resultsRepo.GetQuery(r =>
+                        r.ParticipantId == decryptedParticipantId &&
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId)
+                        .FirstOrDefaultAsync();
+
+                    if (existingResult != null)
+                    {
+                        if (isFinish)
+                        {
+                            existingResult.FinishTime = chipTimeMs;
+                            existingResult.GunTime = chipTimeMs;
+                            existingResult.NetTime = chipTimeMs;
+                            existingResult.ManualFinishTimeMs = chipTimeMs;
                         }
+                        existingResult.Status = computedStatus;
+                        existingResult.IsManual = true;
+                        existingResult.AuditProperties.IsActive = true;
+                        existingResult.AuditProperties.IsDeleted = false;
+                        existingResult.AuditProperties.UpdatedBy = userId;
+                        existingResult.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await resultsRepo.UpdateAsync(existingResult);
+                    }
+                    else if (isFinish)
+                    {
+                        await resultsRepo.AddAsync(new Results
+                        {
+                            EventId = decryptedEventId,
+                            ParticipantId = decryptedParticipantId,
+                            RaceId = decryptedRaceId,
+                            FinishTime = chipTimeMs,
+                            GunTime = chipTimeMs,
+                            NetTime = chipTimeMs,
+                            ManualFinishTimeMs = chipTimeMs,
+                            Status = computedStatus,
+                            IsManual = true,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        });
                     }
 
                     // STEP B — Mark participant as having manual timing
@@ -1636,14 +1717,13 @@ namespace Runnatics.Services
 
                     await _repository.SaveChangesAsync();
 
-                    if (isFinish)
+                    if (computedStatus == ResultStatus.Finished)
                         await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                 });
 
                 int? overallRank = null, genderRank = null, categoryRank = null, totalFinishers = null;
-                string? status = null;
 
-                if (isFinish)
+                if (computedStatus == ResultStatus.Finished)
                 {
                     _ = Task.Run(() => _raceNotificationService.NotifyRaceCompletionAsync(
                         decryptedParticipantId, decryptedRaceId));
@@ -1659,7 +1739,7 @@ namespace Runnatics.Services
 
                     var count = await resultsRepo.CountAsync(r =>
                         r.RaceId == decryptedRaceId &&
-                        r.Status == "Finished" &&
+                        r.Status == ResultStatus.Finished &&
                         r.AuditProperties.IsActive &&
                         !r.AuditProperties.IsDeleted);
 
@@ -1667,7 +1747,6 @@ namespace Runnatics.Services
                     genderRank = updatedResult?.GenderRank;
                     categoryRank = updatedResult?.CategoryRank;
                     totalFinishers = count;
-                    status = "Finished";
                 }
 
                 _logger.LogInformation(
@@ -1693,7 +1772,7 @@ namespace Runnatics.Services
                     GenderRank = genderRank,
                     CategoryRank = categoryRank,
                     TotalFinishers = totalFinishers,
-                    Status = status
+                    Status = computedStatus
                 };
             }
             catch (Exception ex)
@@ -1805,6 +1884,7 @@ namespace Runnatics.Services
 
             if (result != null)
             {
+                result.Status = await ComputeParticipantStatusAsync(eventId, raceId, participantId);
                 result.AuditProperties.UpdatedBy = userId;
                 result.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 await resultsRepo.UpdateAsync(result);
@@ -1812,6 +1892,48 @@ namespace Runnatics.Services
             }
 
             await CalculateResultRankingsAsync(eventId, raceId, userId);
+        }
+
+        private async Task<string> ComputeParticipantStatusAsync(int eventId, int raceId, int participantId)
+        {
+            var mandatoryIds = await _repository.GetRepository<Checkpoint>()
+                .GetQuery(cp => cp.RaceId == raceId
+                             && cp.EventId == eventId
+                             && cp.IsMandatory
+                             && cp.AuditProperties.IsActive
+                             && !cp.AuditProperties.IsDeleted)
+                .Select(cp => cp.Id)
+                .ToListAsync();
+
+            if (mandatoryIds.Count == 0)
+            {
+                // Fallback: highest-distance checkpoint acts as the mandatory finish gate
+                var fallbackId = await _repository.GetRepository<Checkpoint>()
+                    .GetQuery(cp => cp.RaceId == raceId
+                                 && cp.EventId == eventId
+                                 && cp.AuditProperties.IsActive
+                                 && !cp.AuditProperties.IsDeleted)
+                    .OrderByDescending(cp => cp.DistanceFromStart)
+                    .Select(cp => cp.Id)
+                    .FirstOrDefaultAsync();
+                if (fallbackId != 0)
+                    mandatoryIds = [fallbackId];
+            }
+
+            if (mandatoryIds.Count == 0)
+                return ResultStatus.DNF;
+
+            var detectedIds = await _repository.GetRepository<ReadNormalized>()
+                .GetQuery(rn => rn.ParticipantId == participantId
+                             && mandatoryIds.Contains(rn.CheckpointId)
+                             && !rn.AuditProperties.IsDeleted)
+                .Select(rn => rn.CheckpointId)
+                .Distinct()
+                .ToListAsync();
+
+            return mandatoryIds.All(id => detectedIds.Contains(id))
+                ? ResultStatus.Finished
+                : ResultStatus.DNF;
         }
     }
 }

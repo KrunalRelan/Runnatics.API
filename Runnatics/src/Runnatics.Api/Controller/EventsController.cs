@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Events;
 using Runnatics.Models.Client.Responses.Events;
@@ -14,9 +15,10 @@ namespace Runnatics.Api.Controller
     [ApiController]
     [Route("api/[controller]")]
     [Produces("application/json")]
-    public class EventsController(IEventsService eventService) : ControllerBase
+    public class EventsController(IEventsService eventService, IOutputCacheStore outputCacheStore) : ControllerBase
     {
         private readonly IEventsService _eventService = eventService;
+        private readonly IOutputCacheStore _outputCacheStore = outputCacheStore;
 
         /// <summary>
         /// Search for past events (events that have already occurred)
@@ -385,6 +387,7 @@ namespace Runnatics.Api.Controller
                 });
             }
 
+            var wasPublishing = request.EventSettings?.Published == true;
             var result = await _eventService.Update(id, request);
 
             if (_eventService.HasError)
@@ -433,6 +436,9 @@ namespace Runnatics.Api.Controller
                 };
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
+
+            if (wasPublishing)
+                await _outputCacheStore.EvictByTagAsync("public-results", HttpContext.RequestAborted);
 
             return Ok(HttpStatusCode.OK);
         }

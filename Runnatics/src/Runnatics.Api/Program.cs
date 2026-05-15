@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -12,6 +13,7 @@ using Runnatics.Services;
 using Runnatics.Services.Interface;
 using Runnatics.Services.Mappings;
 using Runnatics.Services.Validators;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -308,6 +310,29 @@ builder.Services.AddRateLimiter(options =>
 // Response caching (required by [ResponseCache(VaryByQueryKeys = ...)])
 builder.Services.AddResponseCaching();
 
+// Output cache — 30s public results cache, evictable by "public-results" tag on publish
+builder.Services.AddOutputCache(options =>
+{
+    options.AddPolicy("PublicResults", b => b
+        .Tag("public-results")
+        .Expire(TimeSpan.FromSeconds(30))
+        .SetVaryByQuery(Array.Empty<string>()));
+});
+
+// Response compression — Brotli first (better ratio), Gzip fallback
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(
+        new[] { "application/json", "text/json" });
+});
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+    options.Level = CompressionLevel.Fastest);
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+    options.Level = CompressionLevel.Fastest);
+
 // Health checks & misc
 builder.Services.AddHealthChecks();
 builder.Services.AddMemoryCache();
@@ -333,6 +358,7 @@ else
     app.UseHsts();
 }
 
+app.UseResponseCompression();
 app.UseHttpsRedirection();
 app.UseRouting();
 app.UseCors("AllowFrontend");
@@ -368,6 +394,7 @@ app.Use(async (context, next) =>
 });
 
 app.UseResponseCaching();
+app.UseOutputCache();
 app.UseRateLimiter();
 
 app.UseAuthentication();

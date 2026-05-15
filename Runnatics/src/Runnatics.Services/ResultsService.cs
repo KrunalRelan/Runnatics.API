@@ -7,6 +7,7 @@ using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Results;
 using Runnatics.Models.Client.Responses.RFID;
+using Runnatics.Models.Data.Constants;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Helpers;
@@ -141,6 +142,7 @@ namespace Runnatics.Services
                     foreach (var participantData in participantReadings)
                     {
                         long? previousSplitTime = null;
+                        int? previousCheckpointId = null;
                         var participantHasSplits = false;
 
                         foreach (var reading in participantData.Readings)
@@ -148,7 +150,8 @@ namespace Runnatics.Services
                             var checkpoint = checkpoints.FirstOrDefault(c => c.Id == reading.CheckpointId);
                             if (checkpoint == null) continue;
 
-                            var splitTimeMs = reading.GunTime ?? 0;
+                            if (!reading.GunTime.HasValue || reading.GunTime.Value <= 0) continue;
+                            var splitTimeMs = reading.GunTime.Value;
                             long? segmentTimeMs = null;
 
                             if (previousSplitTime.HasValue)
@@ -168,9 +171,12 @@ namespace Runnatics.Services
                             {
                                 EventId = decryptedEventId,
                                 ParticipantId = participantData.ParticipantId,
+                                ToCheckpointId = reading.CheckpointId,
                                 CheckpointId = reading.CheckpointId,
+                                FromCheckpointId = previousCheckpointId ?? reading.CheckpointId,
                                 ReadNormalizedId = reading.Id,
                                 SplitTimeMs = splitTimeMs,
+                                SplitTime = TimeSpan.FromMilliseconds(splitTimeMs),
                                 SegmentTime = segmentTimeMs,
                                 Pace = pace,
                                 AuditProperties = new Models.Data.Common.AuditProperties
@@ -185,6 +191,7 @@ namespace Runnatics.Services
                             splitTimes.Add(splitTime);
                             participantHasSplits = true;
                             previousSplitTime = splitTimeMs;
+                            previousCheckpointId = reading.CheckpointId;
 
                             // Update checkpoint summary
                             if (!checkpointSummaries.ContainsKey(reading.CheckpointId))
@@ -267,22 +274,31 @@ namespace Runnatics.Services
             {
                 _logger.LogInformation("Starting results calculation for Race {RaceId}", decryptedRaceId);
 
-                // Get finish checkpoint (highest distance)
+                // Load all checkpoints for the race
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
-                var finishCheckpoint = await checkpointRepo.GetQuery(c =>
+                var allCheckpoints = await checkpointRepo.GetQuery(c =>
                     c.RaceId == decryptedRaceId &&
                     c.EventId == decryptedEventId &&
                     c.AuditProperties.IsActive &&
                     !c.AuditProperties.IsDeleted)
                     .OrderByDescending(c => c.DistanceFromStart)
-                    .FirstOrDefaultAsync();
+                    .ToListAsync();
 
-                if (finishCheckpoint == null)
+                if (allCheckpoints.Count == 0)
                 {
                     ErrorMessage = "No checkpoints found for this race";
                     response.Status = "Failed";
                     return response;
                 }
+
+                // Mandatory checkpoints define "Finished"; fall back to highest-distance if none flagged
+                var mandatoryCheckpoints = allCheckpoints.Where(c => c.IsMandatory).ToList();
+                var finishCheckpoint = mandatoryCheckpoints.Count > 0
+                    ? mandatoryCheckpoints.OrderByDescending(c => c.DistanceFromStart).First()
+                    : allCheckpoints.First(); // already sorted descending
+                var mandatoryCheckpointIds = mandatoryCheckpoints.Count > 0
+                    ? mandatoryCheckpoints.Select(c => c.Id).ToHashSet()
+                    : new HashSet<int> { finishCheckpoint.Id };
 
                 // Get all participants in the race
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
@@ -295,18 +311,32 @@ namespace Runnatics.Services
 
                 response.TotalParticipants = allParticipants.Count;
 
-                // Get split times at finish checkpoint
+                // Get all split times for the race grouped by participant
                 var splitTimeRepo = _repository.GetRepository<SplitTimes>();
-                var finishSplits = await splitTimeRepo.GetQuery(st =>
+                var allRaceSplits = await splitTimeRepo.GetQuery(st =>
                     st.EventId == decryptedEventId &&
-                    st.CheckpointId == finishCheckpoint.Id &&
                     st.Participant.RaceId == decryptedRaceId &&
                     st.AuditProperties.IsActive &&
                     !st.AuditProperties.IsDeleted)
-                    .Include(st => st.Participant)
                     .ToListAsync();
 
-                var finishers = finishSplits.Select(fs => fs.ParticipantId).ToHashSet();
+                var splitsByParticipant = allRaceSplits
+                    .GroupBy(st => st.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                // Determine finisher set using mandatory checkpoints
+                var finishers = allParticipants
+                    .Where(p =>
+                    {
+                        var pSplits = splitsByParticipant.GetValueOrDefault(p.Id, []);
+                        var pCps = pSplits.Select(st => st.ToCheckpointId).ToHashSet();
+                        foreach (var s in pSplits.Where(s => s.CheckpointId.HasValue))
+                            pCps.Add(s.CheckpointId!.Value);
+                        return mandatoryCheckpointIds.All(id => pCps.Contains(id));
+                    })
+                    .Select(p => p.Id)
+                    .ToHashSet();
+
                 response.Finishers = finishers.Count;
                 response.DNF = response.TotalParticipants - response.Finishers;
 
@@ -337,41 +367,44 @@ namespace Runnatics.Services
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    // Create results for finishers
-                    foreach (var split in finishSplits.OrderBy(fs => fs.SplitTimeMs))
+                    foreach (var participant in allParticipants)
                     {
-                        var result = new Results
+                        var pSplits = splitsByParticipant.GetValueOrDefault(participant.Id, []);
+                        var pCps = pSplits.Select(st => st.ToCheckpointId).ToHashSet();
+                        foreach (var s in pSplits.Where(s => s.CheckpointId.HasValue))
+                            pCps.Add(s.CheckpointId!.Value);
+
+                        var coveredMandatory = mandatoryCheckpointIds.Count(id => pCps.Contains(id));
+
+                        string status;
+                        long? finishTime = null;
+
+                        if (coveredMandatory == mandatoryCheckpointIds.Count)
                         {
-                            EventId = decryptedEventId,
-                            ParticipantId = split.ParticipantId,
-                            RaceId = decryptedRaceId,
-                            FinishTime = split.SplitTimeMs,
-                            GunTime = split.SplitTimeMs,
-                            NetTime = split.SplitTimeMs,
-                            Status = "Finished",
-                            IsOfficial = request.MarkAsOfficial,
-                            AuditProperties = new Models.Data.Common.AuditProperties
-                            {
-                                CreatedBy = userId,
-                                CreatedDate = DateTime.UtcNow,
-                                IsActive = true,
-                                IsDeleted = false
-                            }
-                        };
+                            status = ResultStatus.Finished;
+                            finishTime = pSplits
+                                .Where(st => st.ToCheckpointId == finishCheckpoint.Id || st.CheckpointId == finishCheckpoint.Id)
+                                .OrderBy(st => st.SplitTimeMs)
+                                .FirstOrDefault()?.SplitTimeMs;
+                        }
+                        else if (coveredMandatory > 0)
+                        {
+                            status = ResultStatus.DNF;
+                        }
+                        else
+                        {
+                            status = ResultStatus.DNS;
+                        }
 
-                        results.Add(result);
-                    }
-
-                    // Create DNF results
-                    var dnfParticipants = allParticipants.Where(p => !finishers.Contains(p.Id));
-                    foreach (var participant in dnfParticipants)
-                    {
-                        var result = new Results
+                        results.Add(new Results
                         {
                             EventId = decryptedEventId,
                             ParticipantId = participant.Id,
                             RaceId = decryptedRaceId,
-                            Status = "DNF",
+                            FinishTime = finishTime,
+                            GunTime = finishTime,
+                            NetTime = finishTime,
+                            Status = status,
                             IsOfficial = request.MarkAsOfficial,
                             AuditProperties = new Models.Data.Common.AuditProperties
                             {
@@ -380,12 +413,9 @@ namespace Runnatics.Services
                                 IsActive = true,
                                 IsDeleted = false
                             }
-                        };
-
-                        results.Add(result);
+                        });
                     }
 
-                    // Bulk insert results
                     if (results.Any())
                     {
                         await resultsRepo.AddRangeAsync(results);
@@ -1264,7 +1294,7 @@ namespace Runnatics.Services
                     split.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 }
 
-                foreach (var gender in new[] { "Male", "Female", "Others" })
+                foreach (var gender in new[] { "M", "F" })
                 {
                     var genderSplits = splits.Where(s => s.Participant.Gender == gender).ToList();
                     rank = 1;
@@ -1297,7 +1327,7 @@ namespace Runnatics.Services
             var results = await resultsRepo.GetQuery(r =>
                 r.EventId == eventId &&
                 r.RaceId == raceId &&
-                r.Status == "Finished" &&
+                r.Status == ResultStatus.Finished &&
                 r.FinishTime.HasValue &&
                 r.AuditProperties.IsActive &&
                 !r.AuditProperties.IsDeleted)
@@ -1314,7 +1344,7 @@ namespace Runnatics.Services
                 result.AuditProperties.UpdatedDate = DateTime.UtcNow;
             }
 
-            foreach (var gender in new[] { "Male", "Female", "Others" })
+            foreach (var gender in new[] { "M", "F" })
             {
                 var genderResults = results.Where(r => r.Participant.Gender == gender).ToList();
                 rank = 1;

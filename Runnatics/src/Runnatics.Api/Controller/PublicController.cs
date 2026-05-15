@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.AspNetCore.RateLimiting;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Public;
@@ -58,6 +59,7 @@ namespace Runnatics.Api.Controller
 
         [HttpGet("events/{eventId}")]
         [EnableRateLimiting("PublicRead")]
+        [OutputCache(PolicyName = "PublicResults")]
         [ResponseCache(Duration = 60)]
         [ProducesResponseType(typeof(ResponseBase<PublicEventDetailDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -113,6 +115,7 @@ namespace Runnatics.Api.Controller
 
         [HttpGet("events/{eventId}/results/{bib}")]
         [EnableRateLimiting("PublicRead")]
+        [OutputCache(PolicyName = "PublicResults")]
         [ResponseCache(Duration = 30)]
         [ProducesResponseType(typeof(ResponseBase<PublicResultDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -182,6 +185,7 @@ namespace Runnatics.Api.Controller
 
         [HttpGet("results/filters")]
         [EnableRateLimiting("PublicRead")]
+        [OutputCache(PolicyName = "PublicResults")]
         [ResponseCache(Duration = 300)]
         [ProducesResponseType(typeof(ResponseBase<PublicResultFiltersDto>), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetResultFilters(CancellationToken cancellationToken = default)
@@ -197,6 +201,7 @@ namespace Runnatics.Api.Controller
 
         [HttpGet("results/{eventId}/races")]
         [EnableRateLimiting("PublicRead")]
+        [OutputCache(PolicyName = "PublicResults")]
         [ResponseCache(Duration = 120)]
         [ProducesResponseType(typeof(ResponseBase<PublicRaceFilterDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -216,6 +221,7 @@ namespace Runnatics.Api.Controller
 
         [HttpGet("results/{eventId}/{raceId}/brackets")]
         [EnableRateLimiting("PublicRead")]
+        [OutputCache(PolicyName = "PublicResults")]
         [ResponseCache(Duration = 60)]
         [ProducesResponseType(typeof(ResponseBase<PublicBracketFilterDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]

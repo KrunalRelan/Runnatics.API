@@ -234,6 +234,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(d => d.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(d => d.Description, opt => opt.MapFrom(src => src.Description))
                 .ForMember(d => d.MaxParticipants, opt => opt.MapFrom(src => src.MaxParticipants))
+                .ForMember(d => d.IsTimed, opt => opt.MapFrom(src => src.IsTimed))
                 .ForMember(d => d.RaceSettings, opt => opt.MapFrom(src => src.RaceSettings))
                 .ForMember(d => d.Event, opt => opt.MapFrom(src => src.Event))
                 .ForMember(d => d.TotalParticipants, opt => opt.Ignore()) // Computed in service

@@ -26,6 +26,8 @@ namespace Runnatics.Models.Data.Entities
 
         public int? MaxParticipants { get; set; }
 
+        public bool IsTimed { get; set; } = true;
+
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 
         // Navigation Properties

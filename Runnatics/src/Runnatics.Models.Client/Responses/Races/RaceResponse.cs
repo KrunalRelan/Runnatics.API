@@ -20,6 +20,8 @@ namespace Runnatics.Models.Client.Responses.Races
 
         public int? MaxParticipants { get; set; }
 
+        public bool IsTimed { get; set; }
+
         /// <summary>Count of active participants registered for this race</summary>
         public int TotalParticipants { get; set; }
 

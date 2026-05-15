@@ -33,6 +33,7 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.ParentDeviceId);
 
             builder.Property(e => e.IsMandatory)
+                .HasDefaultValue(true)
                 .IsRequired();
 
             // Indexes

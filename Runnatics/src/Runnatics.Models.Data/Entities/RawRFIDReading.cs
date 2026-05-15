@@ -45,6 +45,8 @@ namespace Runnatics.Models.Data.Entities
 
         public decimal? CheckpointConfidence { get; set; }
 
+        public bool IsMultipleEpc { get; set; } = false;
+
         public bool RequiresManualReview { get; set; } = false;
 
         public bool IsManualEntry { get; set; } = false;

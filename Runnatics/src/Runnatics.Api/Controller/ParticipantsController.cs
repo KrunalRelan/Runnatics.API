@@ -18,10 +18,12 @@ namespace Runnatics.Api.Controller
     public class ParticipantsController : ControllerBase
     {
         private readonly IParticipantImportService _service;
+        private readonly IResultsService _resultsService;
 
-        public ParticipantsController(IParticipantImportService importService)
+        public ParticipantsController(IParticipantImportService importService, IResultsService resultsService)
         {
             _service = importService;
+            _resultsService = resultsService;
         }
 
         /// <summary>
@@ -540,5 +542,92 @@ namespace Runnatics.Api.Controller
             response.Message = result;
             return Ok(response);
         }
+
+        /// <summary>
+        /// Get all raw RFID detections for a participant, grouped by checkpoint.
+        /// Pass optional checkpointId to filter to a single checkpoint.
+        /// </summary>
+        [HttpGet("{eventId}/{raceId}/{participantId}/detections")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<ParticipantDetectionsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetDetections(
+            [FromRoute] string eventId,
+            [FromRoute] string raceId,
+            [FromRoute] string participantId,
+            [FromQuery] string? checkpointId,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(participantId))
+                return BadRequest(new { error = "Event ID, Race ID, and Participant ID are required." });
+
+            var response = new ResponseBase<ParticipantDetectionsResponse>();
+            var result = await _service.GetDetectionsAsync(eventId, raceId, participantId, checkpointId, cancellationToken);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<ParticipantDetectionsResponse>.ErrorData { Message = _service.ErrorMessage };
+                if (_service.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                    return NotFound(response);
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        [HttpPut("{eventId}/{raceId}/{participantId}/race-category")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        public async Task<IActionResult> ChangeRaceCategory(
+            [FromRoute] string eventId,
+            [FromRoute] string raceId,
+            [FromRoute] string participantId,
+            [FromBody] ChangeRaceCategoryRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(new { error = "Validation failed" });
+
+            var response = new ResponseBase<string>();
+            var success = await _resultsService.ChangeParticipantCategoryAsync(eventId, raceId, participantId, request.AgeCategory, cancellationToken);
+
+            if (!success || _resultsService.HasError)
+            {
+                response.Error = new ResponseBase<string>.ErrorData { Message = _resultsService.ErrorMessage ?? "Failed to change category." };
+                if (_resultsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true)
+                    return NotFound(response);
+                return BadRequest(response);
+            }
+
+            response.Message = "Category updated";
+            return Ok(response);
+        }
+
+        [HttpPost("{eventId}/{raceId}/{participantId}/process-result")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        public async Task<IActionResult> ProcessResult(
+            [FromRoute] string eventId,
+            [FromRoute] string raceId,
+            [FromRoute] string participantId,
+            CancellationToken cancellationToken)
+        {
+            var response = new ResponseBase<string>();
+            var success = await _resultsService.ProcessParticipantResultAsync(eventId, raceId, participantId, cancellationToken);
+
+            if (!success || _resultsService.HasError)
+            {
+                response.Error = new ResponseBase<string>.ErrorData { Message = _resultsService.ErrorMessage ?? "Failed to process result." };
+                if (_resultsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true)
+                    return NotFound(response);
+                return BadRequest(response);
+            }
+
+            response.Message = "Result processed";
+            return Ok(response);
+        }
     }
 }
+

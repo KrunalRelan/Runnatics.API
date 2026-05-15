@@ -2519,5 +2519,123 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error in DeleteParticipantAsync for participant {ParticipantId}", participantId);
             }
         }
+
+        public async Task<ParticipantDetectionsResponse?> GetDetectionsAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            string? checkpointId,
+            CancellationToken ct)
+        {
+            try
+            {
+                var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+
+                var participant = await _repository.GetRepository<Models.Data.Entities.Participant>()
+                    .GetQuery(p => p.Id == decryptedParticipantId && !p.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(ct);
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found.";
+                    return null;
+                }
+
+                int? filterCheckpointId = null;
+                if (!string.IsNullOrEmpty(checkpointId))
+                    filterCheckpointId = Convert.ToInt32(_encryptionService.Decrypt(checkpointId));
+
+                // Get participant's active chip EPC(s)
+                var chipEpcs = await _repository.GetRepository<ChipAssignment>()
+                    .GetQuery(ca => ca.ParticipantId == decryptedParticipantId && !ca.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(ca => ca.Chip.EPC)
+                    .ToListAsync(ct);
+
+                // Single query: RawRFIDReading → ReadingCheckpointAssignment → Checkpoint → Device
+                var readingsQuery = _repository.GetRepository<RawRFIDReading>()
+                    .GetQuery(r => chipEpcs.Contains(r.Epc) && !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(r => new
+                    {
+                        r.Id,
+                        r.ReadTimeUtc,
+                        r.DeviceId,
+                        r.RssiDbm,
+                        r.ProcessResult,
+                        r.ManualTimeOverride,
+                        r.IsManualEntry,
+                        r.Notes,
+                        Assignment = r.ReadingCheckpointAssignments
+                            .Where(a => !a.AuditProperties.IsDeleted
+                                && (filterCheckpointId == null || a.CheckpointId == filterCheckpointId))
+                            .Select(a => new
+                            {
+                                a.CheckpointId,
+                                CheckpointName = a.Checkpoint.Name ?? string.Empty,
+                                a.Checkpoint.IsMandatory,
+                                DeviceName = a.Checkpoint.Device != null ? a.Checkpoint.Device.Name : string.Empty
+                            })
+                            .FirstOrDefault()
+                    });
+
+                // If filtering by checkpoint, only include readings that have that assignment
+                if (filterCheckpointId.HasValue)
+                    readingsQuery = readingsQuery.Where(r => r.Assignment != null);
+
+                var readings = await readingsQuery
+                    .OrderBy(r => r.ReadTimeUtc)
+                    .ToListAsync(ct);
+
+                // Group by checkpoint
+                var grouped = readings
+                    .GroupBy(r => r.Assignment == null
+                        ? 0
+                        : r.Assignment.CheckpointId)
+                    .Select(g =>
+                    {
+                        var first = g.First(x => x.Assignment != null);
+                        return new CheckpointDetectionGroupDto
+                        {
+                            CheckpointId = g.Key == 0 ? string.Empty : _encryptionService.Encrypt(g.Key.ToString()),
+                            CheckpointName = first?.Assignment?.CheckpointName ?? "Unassigned",
+                            IsMandatory = first?.Assignment?.IsMandatory ?? false,
+                            Detections = g.Select(r => new DetectionRowDto
+                            {
+                                ReadingId = _encryptionService.Encrypt(r.Id.ToString()),
+                                ReadTimeUtc = r.ReadTimeUtc,
+                                DeviceId = r.DeviceId,
+                                ReaderName = r.Assignment?.DeviceName ?? string.Empty,
+                                RssiDbm = r.RssiDbm.HasValue ? (int?)Convert.ToInt32(r.RssiDbm.Value) : null,
+                                ProcessResult = r.ProcessResult,
+                                ManualTime = r.ManualTimeOverride.HasValue
+                                    ? (TimeSpan?)r.ManualTimeOverride.Value.TimeOfDay
+                                    : null,
+                                IsManualEntry = r.IsManualEntry,
+                                Notes = r.Notes
+                            }).ToList()
+                        };
+                    })
+                    .Where(g => g.CheckpointId != string.Empty) // exclude unassigned unless filtering
+                    .ToList();
+
+                return new ParticipantDetectionsResponse
+                {
+                    ParticipantId = _encryptionService.Encrypt(participant.Id.ToString()),
+                    Bib = participant.BibNumber ?? string.Empty,
+                    FullName = $"{participant.FirstName} {participant.LastName}".Trim(),
+                    Gender = participant.Gender ?? string.Empty,
+                    ManualDistance = participant.ManualDistance,
+                    Checkpoints = grouped
+                };
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error loading detections: {ex.Message}";
+                _logger.LogError(ex, "Error in GetDetectionsAsync for participant {ParticipantId}", participantId);
+                return null;
+            }
+        }
     }
 }

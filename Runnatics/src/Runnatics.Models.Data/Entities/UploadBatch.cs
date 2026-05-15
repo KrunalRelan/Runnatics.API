@@ -56,6 +56,10 @@ namespace Runnatics.Models.Data.Entities
 
         public bool IsLiveSync { get; set; } = false;
 
+        public int TotalTagsInFile { get; set; } = 0;
+
+        public int TagsProcessed { get; set; } = 0;
+
         public DateTime? ProcessingStartedAt { get; set; }
 
         public DateTime? ProcessingCompletedAt { get; set; }

@@ -2595,7 +2595,7 @@ namespace Runnatics.Services
                         : r.Assignment.CheckpointId)
                     .Select(g =>
                     {
-                        var first = g.First(x => x.Assignment != null);
+                        var first = g.FirstOrDefault(x => x.Assignment != null);
                         return new CheckpointDetectionGroupDto
                         {
                             CheckpointId = g.Key == 0 ? string.Empty : _encryptionService.Encrypt(g.Key.ToString()),

@@ -48,5 +48,24 @@ namespace Runnatics.Services.Interface
             string participantId,
             long finishTimeMs,
             string checkpointId);
+
+        /// <summary>
+        /// Updates a participant's age category and recalculates category rankings for the race.
+        /// </summary>
+        Task<bool> ChangeParticipantCategoryAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            string newAgeCategory,
+            CancellationToken ct);
+
+        /// <summary>
+        /// Triggers result reprocessing for a single participant (recalculates their result row and race rankings).
+        /// </summary>
+        Task<bool> ProcessParticipantResultAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            CancellationToken ct);
     }
 }

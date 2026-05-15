@@ -1133,7 +1133,8 @@ namespace Runnatics.Services
                     ProcessResult = r.ProcessResult,
                     IsManual = r.IsManualEntry,
                     IsDuplicate = r.ProcessResult == "Duplicate" || r.DuplicateOfReadingId.HasValue,
-                    IsNormalized = isNormalized
+                    IsNormalized = isNormalized,
+                    IsMultipleEpc = r.IsMultipleEpc
                 });
             }
 
@@ -1383,7 +1384,7 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                // Load Race for UTC gun start time
+                // Load Race for UTC gun start time and IsTimed flag
                 var raceRepo = _repository.GetRepository<Race>();
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
                     .AsNoTracking()
@@ -1415,25 +1416,39 @@ namespace Runnatics.Services
                 var editedCheckpoint = raceCheckpoints[editedIndex];
                 var isFinish = editedIndex == raceCheckpoints.Count - 1;
 
-                // finishTimeMs = IST ms from midnight — convert to elapsed chip time (UTC)
-                var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                // finishTimeMs = elapsed chip time in ms from race gun start
+                // For backwards compatibility with IST-based clients, we accept either:
+                //   - elapsed ms from race start (when finishTimeMs < 24h = 86_400_000)
+                //   - ms-from-midnight in IST (legacy; detected when close to wall-clock time)
                 var raceStartUtc = race.StartTime.Value;
-                var raceStartIst = TimeZoneInfo.ConvertTimeFromUtc(raceStartUtc, istZone);
-                var finishIst = raceStartIst.Date.AddMilliseconds(finishTimeMs);
-                var finishUtc = TimeZoneInfo.ConvertTimeToUtc(
-                    DateTime.SpecifyKind(finishIst, DateTimeKind.Unspecified), istZone);
-                var chipTimeMs = (long)(finishUtc - raceStartUtc).TotalMilliseconds;
+                long chipTimeMs;
+
+                if (finishTimeMs > 0 && finishTimeMs < 86_400_000)
+                {
+                    // Treat as elapsed ms from race start (new convention)
+                    chipTimeMs = finishTimeMs;
+                }
+                else
+                {
+                    // Legacy: ms-from-midnight in IST
+                    var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                    var raceStartIst = TimeZoneInfo.ConvertTimeFromUtc(raceStartUtc, istZone);
+                    var finishIst = raceStartIst.Date.AddMilliseconds(finishTimeMs);
+                    var finishUtc = TimeZoneInfo.ConvertTimeToUtc(
+                        DateTime.SpecifyKind(finishIst, DateTimeKind.Unspecified), istZone);
+                    chipTimeMs = (long)(finishUtc - raceStartUtc).TotalMilliseconds;
+                }
 
                 if (chipTimeMs <= 0 || chipTimeMs > 86_400_000)
-                    throw new ValidationException(
-                        $"Calculated chip time {chipTimeMs}ms is invalid. " +
-                        "Check that finish time is after race start.");
+                {
+                    ErrorMessage = $"Calculated chip time {chipTimeMs}ms is invalid. Check that finish time is after race start.";
+                    return null;
+                }
 
                 var resultsRepo = _repository.GetRepository<Results>();
                 var splitRepo = _repository.GetRepository<SplitTimes>();
 
-                // Confirm the SplitTimes row exists — required before we can update it.
-                // Also gives us FromCheckpointId so we can derive the segment baseline.
+                // Try to find existing SplitTimes row (not required — will upsert below)
                 var existingSplitForSegment = await splitRepo.GetQuery(s =>
                     s.ParticipantId == decryptedParticipantId &&
                     s.CheckpointId == decryptedCheckpointId &&
@@ -1441,18 +1456,9 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
 
-                if (existingSplitForSegment == null)
-                {
-                    _logger.LogError(
-                        "No SplitTimes row found for ParticipantId={ParticipantId}, CheckpointId={CheckpointId}",
-                        decryptedParticipantId, decryptedCheckpointId);
-                    ErrorMessage = $"No SplitTimes row found for checkpoint {decryptedCheckpointId}. " +
-                        "Manual time can only be applied to checkpoints that already have RFID readings.";
-                    return null;
-                }
-
-                // Use the stored FromCheckpointId to find the previous cumulative time
-                var fromCheckpointId = existingSplitForSegment.FromCheckpointId;
+                // Determine FromCheckpointId: from existing row, or infer from checkpoint order
+                var fromCheckpointId = existingSplitForSegment?.FromCheckpointId
+                    ?? (editedIndex > 0 ? raceCheckpoints[editedIndex - 1].Id : decryptedCheckpointId);
                 long? previousCumulativeMs = null;
                 if (fromCheckpointId != decryptedCheckpointId)
                 {
@@ -1540,7 +1546,7 @@ namespace Runnatics.Services
                     participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
                     await participantRepo.UpdateAsync(participant);
 
-                    // STEP C — Update existing SplitTimes row (never insert — row confirmed above)
+                    // STEP C — Upsert SplitTimes row (create if first manual entry, update otherwise)
                     var existingSplit = await splitRepo.GetQuery(s =>
                         s.ParticipantId == decryptedParticipantId &&
                         s.CheckpointId == decryptedCheckpointId &&
@@ -1552,11 +1558,34 @@ namespace Runnatics.Services
                         existingSplit.SplitTimeMs = chipTimeMs;
                         existingSplit.SegmentTime = segmentTimeMs;
                         existingSplit.SplitTime = splitTimeSpan;
-                        existingSplit.ReadNormalizedId = null; // null = manually entered, no RFID reading
+                        existingSplit.ReadNormalizedId = null;
                         existingSplit.IsManual = true;
                         existingSplit.AuditProperties.UpdatedDate = DateTime.UtcNow;
                         existingSplit.AuditProperties.UpdatedBy = userId;
                         await splitRepo.UpdateAsync(existingSplit);
+                    }
+                    else
+                    {
+                        var newSplit = new SplitTimes
+                        {
+                            ParticipantId = decryptedParticipantId,
+                            EventId = decryptedEventId,
+                            FromCheckpointId = fromCheckpointId,
+                            ToCheckpointId = decryptedCheckpointId,
+                            CheckpointId = decryptedCheckpointId,
+                            SplitTimeMs = chipTimeMs,
+                            SegmentTime = segmentTimeMs,
+                            SplitTime = splitTimeSpan,
+                            IsManual = true,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        };
+                        await splitRepo.AddAsync(newSplit);
                     }
 
                     // STEP D — Recalculate the next checkpoint's SegmentTime
@@ -1643,6 +1672,116 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error recording manual time for participant {ParticipantId}", participantId);
                 return null;
             }
+        }
+
+        public async Task<bool> ChangeParticipantCategoryAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            string newAgeCategory,
+            CancellationToken ct)
+        {
+            try
+            {
+                var userId = _userContext.UserId;
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+
+                var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                var participant = await participantRepo.GetQuery(p =>
+                    p.Id == decryptedParticipantId &&
+                    p.RaceId == decryptedRaceId &&
+                    p.EventId == decryptedEventId &&
+                    p.AuditProperties.IsActive &&
+                    !p.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync(ct);
+
+                if (participant == null)
+                {
+                    ErrorMessage = "Participant not found";
+                    return false;
+                }
+
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    participant.AgeCategory = string.IsNullOrWhiteSpace(newAgeCategory) ? "Unknown" : newAgeCategory.Trim();
+                    participant.AuditProperties.UpdatedBy = userId;
+                    participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    await participantRepo.UpdateAsync(participant);
+                    await _repository.SaveChangesAsync();
+
+                    await ReprocessParticipantInternalAsync(decryptedEventId, decryptedRaceId, decryptedParticipantId, userId);
+                });
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error changing participant category: {ex.Message}";
+                _logger.LogError(ex, "Error in ChangeParticipantCategoryAsync for participant {ParticipantId}", participantId);
+                return false;
+            }
+        }
+
+        public async Task<bool> ProcessParticipantResultAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            CancellationToken ct)
+        {
+            try
+            {
+                var userId = _userContext.UserId;
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+
+                var participantExists = await _repository.GetRepository<Models.Data.Entities.Participant>()
+                    .GetQuery(p => p.Id == decryptedParticipantId
+                        && p.RaceId == decryptedRaceId
+                        && p.EventId == decryptedEventId
+                        && p.AuditProperties.IsActive
+                        && !p.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .AnyAsync(ct);
+
+                if (!participantExists)
+                {
+                    ErrorMessage = "Participant not found";
+                    return false;
+                }
+
+                await ReprocessParticipantInternalAsync(decryptedEventId, decryptedRaceId, decryptedParticipantId, userId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error processing participant result: {ex.Message}";
+                _logger.LogError(ex, "Error in ProcessParticipantResultAsync for participant {ParticipantId}", participantId);
+                return false;
+            }
+        }
+
+        private async Task ReprocessParticipantInternalAsync(int eventId, int raceId, int participantId, int userId)
+        {
+            var resultsRepo = _repository.GetRepository<Results>();
+            var result = await resultsRepo.GetQuery(r =>
+                r.ParticipantId == participantId &&
+                r.EventId == eventId &&
+                r.RaceId == raceId &&
+                !r.AuditProperties.IsDeleted)
+                .FirstOrDefaultAsync();
+
+            if (result != null)
+            {
+                result.AuditProperties.UpdatedBy = userId;
+                result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                await resultsRepo.UpdateAsync(result);
+                await _repository.SaveChangesAsync();
+            }
+
+            await CalculateResultRankingsAsync(eventId, raceId, userId);
         }
     }
 }

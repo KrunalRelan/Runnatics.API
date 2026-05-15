@@ -62,5 +62,16 @@ namespace Runnatics.Services.Interface
         /// Export all participants with full race details: ranking, chip/gun times, SMS sent time, and absolute checkpoint clock times.
         /// </summary>
         Task<ExcelExportResult?> ExportParticipantsDetailedAsync(string eventId, string raceId);
+
+        /// <summary>
+        /// Get all raw RFID detections for a participant grouped by checkpoint.
+        /// Pass an optional encryptedCheckpointId to filter to a single checkpoint.
+        /// </summary>
+        Task<ParticipantDetectionsResponse?> GetDetectionsAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            string? checkpointId,
+            CancellationToken ct);
     }
 }

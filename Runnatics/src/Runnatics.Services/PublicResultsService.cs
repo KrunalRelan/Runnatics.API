@@ -257,8 +257,16 @@ namespace Runnatics.Services
                         (r.Participant.LastName  != null && r.Participant.LastName.Contains(search)));
 
                 if (!string.IsNullOrWhiteSpace(gender))
+                {
+                    var genderNorm = gender.ToUpperInvariant() switch
+                    {
+                        "M" or "MALE" => "M",
+                        "F" or "FEMALE" => "F",
+                        _ => gender.ToUpperInvariant()
+                    };
                     filteredQuery = filteredQuery.Where(r => r.Participant.Gender != null &&
-                                                             r.Participant.Gender.ToLower() == gender.ToLower());
+                                                             r.Participant.Gender.ToUpper() == genderNorm);
+                }
 
                 if (!string.IsNullOrWhiteSpace(category))
                     filteredQuery = filteredQuery.Where(r => r.Participant.AgeCategory != null &&
@@ -274,10 +282,10 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .CountAsync(ct);
 
-                // Grouped categories
+                // Grouped categories — normalize "M"→"Male", "F"→"Female" for display
                 var genderOrder = new[] { "male", "female" };
                 var grouped = allFinishers
-                    .GroupBy(r => r.Participant.Gender ?? "Unknown")
+                    .GroupBy(r => (r.Participant.Gender switch { "M" => "Male", "F" => "Female", var g => g }) ?? "Unknown")
                     .OrderBy(g =>
                     {
                         var idx = Array.IndexOf(genderOrder, g.Key.ToLower());
@@ -981,7 +989,7 @@ namespace Runnatics.Services
                     .AsNoTracking();
 
                 if (!string.IsNullOrWhiteSpace(raceName))
-                    query = query.Where(r => r.Race.Title.Contains(raceName));
+                    query = query.Where(r => r.Race.Title == raceName);
 
                 if (!string.IsNullOrWhiteSpace(searchQuery))
                     query = query.Where(r =>
@@ -990,8 +998,17 @@ namespace Runnatics.Services
                         (r.Participant.LastName  != null && r.Participant.LastName.Contains(searchQuery)));
 
                 if (!string.IsNullOrWhiteSpace(gender))
+                {
+                    // Normalize: accept "M"/"Male"/"male" and "F"/"Female"/"female"
+                    var genderNorm = gender.ToUpperInvariant() switch
+                    {
+                        "M" or "MALE" => "M",
+                        "F" or "FEMALE" => "F",
+                        _ => gender.ToUpperInvariant()
+                    };
                     query = query.Where(r => r.Participant.Gender != null &&
-                                             r.Participant.Gender.ToLower() == gender.ToLower());
+                                             r.Participant.Gender.ToUpper() == genderNorm);
+                }
 
                 var totalCount = await query.CountAsync();
 
@@ -1025,7 +1042,7 @@ namespace Runnatics.Services
             ParticipantName = r.Participant?.FullName ?? string.Empty,
             RaceName = r.Race?.Title ?? string.Empty,
             AgeGroup = r.Participant?.AgeCategory,
-            Gender = r.Participant?.Gender,
+            Gender = r.Participant?.Gender switch { "M" => "Male", "F" => "Female", var g => g },
             GunTime = r.GunTime.HasValue ? TimeSpan.FromMilliseconds(r.GunTime.Value) : null,
             NetTime = r.NetTime.HasValue ? TimeSpan.FromMilliseconds(r.NetTime.Value) : null,
             OverallRank = r.OverallRank,

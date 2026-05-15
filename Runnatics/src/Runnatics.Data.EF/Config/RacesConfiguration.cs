@@ -48,6 +48,11 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.MaxParticipants)
                 .HasColumnName("MaxParticipants");
 
+            builder.Property(e => e.IsTimed)
+                .HasColumnName("IsTimed")
+                .HasDefaultValue(true)
+                .IsRequired();
+
             // Configure AuditProperties as owned entity
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {

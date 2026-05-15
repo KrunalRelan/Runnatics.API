@@ -50,6 +50,14 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.IsLiveSync)
                 .HasDefaultValue(false);
 
+            builder.Property(e => e.TotalTagsInFile)
+                .HasDefaultValue(0)
+                .IsRequired();
+
+            builder.Property(e => e.TagsProcessed)
+                .HasDefaultValue(0)
+                .IsRequired();
+
             // Indexes - Individual indexes for foreign keys
             builder.HasIndex(e => e.RaceId);
             builder.HasIndex(e => e.EventId);

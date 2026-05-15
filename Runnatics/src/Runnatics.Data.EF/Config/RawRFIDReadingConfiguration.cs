@@ -57,6 +57,10 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.CheckpointConfidence)
                 .HasColumnType("decimal(5,4)");
 
+            builder.Property(e => e.IsMultipleEpc)
+                .HasDefaultValue(false)
+                .IsRequired();
+
             builder.Property(e => e.RequiresManualReview)
                 .HasDefaultValue(false);
 

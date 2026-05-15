@@ -2,10 +2,23 @@ namespace Runnatics.Data.EF.Config
 {
     using Microsoft.EntityFrameworkCore;
     using Microsoft.EntityFrameworkCore.Metadata.Builders;
+    using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
     using Runnatics.Models.Data.Entities;
 
     public class ParticipantConfiguration : IEntityTypeConfiguration<Participant>
     {
+        private static readonly ValueConverter<string?, string?> GenderNormalizer =
+            new(
+                v => v == null ? null : NormalizeGender(v),
+                v => v);
+
+        private static string NormalizeGender(string raw) => raw.ToUpperInvariant() switch
+        {
+            "M" or "MALE" => "M",
+            "F" or "FEMALE" => "F",
+            _ => throw new ArgumentException($"Invalid gender value: '{raw}'. Only M/F accepted.")
+        };
+
         public void Configure(EntityTypeBuilder<Participant> builder)
         {
             builder.ToTable("Participants");
@@ -59,7 +72,8 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.Gender)
                 .HasColumnName("Gender")
-                .HasMaxLength(20);
+                .HasMaxLength(10)
+                .HasConversion(GenderNormalizer);
 
             builder.Property(e => e.AgeCategory)
                 .HasColumnName("AgeCategory")
@@ -97,6 +111,11 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("RegistrationStatus")  // FIXED: was Status
                 .HasMaxLength(40)
                 .IsRequired();
+
+            builder.Property(e => e.ManualDistance)
+                .HasColumnName("ManualDistance")
+                .HasPrecision(8, 3)
+                .IsRequired(false);
 
             // Ignore properties not in database
             builder.Ignore(e => e.MedicalConditions);  // ADDED: Not in DB

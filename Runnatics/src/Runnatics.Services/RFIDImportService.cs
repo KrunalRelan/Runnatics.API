@@ -414,22 +414,7 @@ namespace Runnatics.Services
                 // Calculate file hash to prevent duplicates
                 var fileHash = CalculateFileHash(tempFilePath);
 
-                // Check for duplicate upload
                 var batchRepo = _repository.GetRepository<UploadBatch>();
-                var existingBatch = await batchRepo.GetQuery(b =>
-                    b.FileHash == fileHash &&
-                    b.RaceId == decryptedRaceId &&
-                    b.AuditProperties.IsActive &&
-                    !b.AuditProperties.IsDeleted)
-                    .FirstOrDefaultAsync();
-
-                if (existingBatch != null)
-                {
-                    File.Delete(tempFilePath);
-                    ErrorMessage = "This file has already been uploaded";
-                    response.Status = "Failed";
-                    return response;
-                }
 
                 // Extract device serial from filename (e.g., "0016251292ae" from "2026-01-25_0016251292ae_(box15).db")
                 var deviceSerial = ExtractDeviceNameFromFilename(request.File.FileName);
@@ -553,11 +538,15 @@ namespace Runnatics.Services
                 }
                 await _repository.SaveChangesAsync();
 
+                var distinctEpcs = readings.Where(r => !r.IsMultipleEpc).Select(r => r.Epc).Distinct().Count();
+
                 // Update batch statistics
                 batch.TotalReadings = readings.Count;
-                batch.UniqueEpcs = readings.Select(r => r.Epc).Distinct().Count();
-                batch.TimeRangeStart = readings.Min(r => r.TimestampMs);
-                batch.TimeRangeEnd = readings.Max(r => r.TimestampMs);
+                batch.UniqueEpcs = distinctEpcs;
+                batch.TotalTagsInFile = distinctEpcs;
+                batch.TagsProcessed = 0;
+                batch.TimeRangeStart = readings.Count > 0 ? readings.Min(r => r.TimestampMs) : null;
+                batch.TimeRangeEnd = readings.Count > 0 ? readings.Max(r => r.TimestampMs) : null;
                 batch.Status = "uploaded";
                 batch.ProcessingStartedAt = DateTime.UtcNow;
 
@@ -566,14 +555,14 @@ namespace Runnatics.Services
 
                 response.UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString());
                 response.TotalReadings = readings.Count;
-                response.UniqueEpcs = readings.Select(r => r.Epc).Distinct().Count();
-                response.TimeRangeStart = readings.Min(r => r.TimestampMs);
-                response.TimeRangeEnd = readings.Max(r => r.TimestampMs);
+                response.UniqueEpcs = distinctEpcs;
+                response.TimeRangeStart = batch.TimeRangeStart;
+                response.TimeRangeEnd = batch.TimeRangeEnd;
                 response.FileSizeBytes = request.File.Length;
                 response.FileFormat = "DB";
                 response.Status = "uploaded";
 
-                _logger.LogInformation("RFID file upload completed. Batch: {BatchId}, Readings: {Count}", batch.Id, readings.Count);
+                _logger.LogInformation("RFID file upload completed. Batch: {BatchId}, Readings: {Count}, TotalTags: {Tags}", batch.Id, readings.Count, distinctEpcs);
 
                 return response;
             }
@@ -680,26 +669,8 @@ namespace Runnatics.Services
                     await request.File.CopyToAsync(stream);
                 }
 
-                // Calculate file hash to prevent duplicates
+                // Calculate file hash for tracking purposes
                 var fileHash = CalculateFileHash(tempFilePath);
-
-                // Check for duplicate upload at EVENT level (FileHash + EventId)
-                // This allows the same file to be uploaded once regardless of how many races it contains
-                var batchRepo = _repository.GetRepository<UploadBatch>();
-                var existingBatch = await batchRepo.GetQuery(b =>
-                    b.FileHash == fileHash &&
-                    b.EventId == decryptedEventId &&  // Event-level duplicate check
-                    b.AuditProperties.IsActive &&
-                    !b.AuditProperties.IsDeleted)
-                    .FirstOrDefaultAsync();
-
-                if (existingBatch != null)
-                {
-                    File.Delete(tempFilePath);
-                    ErrorMessage = "This file has already been uploaded for this event";
-                    response.Status = "Failed";
-                    return response;
-                }
 
                 // Extract device serial from filename (e.g., "0016251292ae" from "2026-01-25_0016251292ae_(box15).db")
                 var deviceSerial = ExtractDeviceNameFromFilename(request.File.FileName);
@@ -714,6 +685,8 @@ namespace Runnatics.Services
                     "Event-level upload: Device '{DeviceSerial}' detected. " +
                     "Checkpoint assignment will be determined during race-level processing via EPC → Participant → RaceId.",
                     deviceSerial);
+
+                var batchRepo = _repository.GetRepository<UploadBatch>();
 
                 // Create batch record with optional RaceId
                 var batch = new UploadBatch
@@ -774,8 +747,11 @@ namespace Runnatics.Services
                 await _repository.SaveChangesAsync();
 
                 // Update batch statistics
+                var distinctEpcsEventLevel = readings.Where(r => !r.IsMultipleEpc).Select(r => r.Epc).Distinct().Count();
                 batch.TotalReadings = readings.Count;
-                batch.UniqueEpcs = readings.Select(r => r.Epc).Distinct().Count();
+                batch.UniqueEpcs = distinctEpcsEventLevel;
+                batch.TotalTagsInFile = distinctEpcsEventLevel;
+                batch.TagsProcessed = 0;
                 batch.TimeRangeStart = readings.Min(r => r.TimestampMs);
                 batch.TimeRangeEnd = readings.Max(r => r.TimestampMs);
                 batch.Status = "uploaded";
@@ -786,7 +762,7 @@ namespace Runnatics.Services
 
                 response.UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString());
                 response.TotalReadings = readings.Count;
-                response.UniqueEpcs = readings.Select(r => r.Epc).Distinct().Count();
+                response.UniqueEpcs = distinctEpcsEventLevel;
                 response.TimeRangeStart = readings.Min(r => r.TimestampMs);
                 response.TimeRangeEnd = readings.Max(r => r.TimestampMs);
                 response.FileSizeBytes = request.File.Length;
@@ -1057,6 +1033,24 @@ namespace Runnatics.Services
                     }
                 }
 
+                // IsTimed gate: non-timed races use manual timing only — skip RFID EPC processing
+                var raceForTimedCheck = await _repository.GetRepository<Race>()
+                    .GetQuery(r => r.Id == decryptedRaceId)
+                    .AsNoTracking()
+                    .Select(r => new { r.IsTimed })
+                    .FirstOrDefaultAsync();
+
+                if (raceForTimedCheck != null && !raceForTimedCheck.IsTimed)
+                {
+                    _logger.LogInformation(
+                        "Race {RaceId} has IsTimed=false — skipping EPC-to-participant mapping. Manual timing only.",
+                        decryptedRaceId);
+                    response.Status = "Skipped";
+                    response.SuccessCount = 0;
+                    response.ErrorCount = 0;
+                    return response;
+                }
+
                 // Get pending readings
                 var readingRepo = _repository.GetRepository<RawRFIDReading>();
                 var readings = await readingRepo.GetQuery(r =>
@@ -1181,6 +1175,9 @@ namespace Runnatics.Services
                         // Group readings by participant
                         foreach (var reading in readings)
                         {
+                            if (reading.IsMultipleEpc)
+                                continue;
+
                             if (epcToParticipantMap.TryGetValue(reading.Epc, out var participantId))
                             {
                                 if (!readingsByParticipant.ContainsKey(participantId))
@@ -1285,6 +1282,10 @@ namespace Runnatics.Services
                     // Process all readings in one pass - no nested queries
                     foreach (var reading in readings)
                     {
+                        // Multi-EPC readings cannot be mapped to a single participant
+                        if (reading.IsMultipleEpc)
+                            continue;
+
                         // Try to link to participant
                         if (participants.TryGetValue(reading.Epc, out var participant))
                         {
@@ -1413,7 +1414,8 @@ namespace Runnatics.Services
                     }
 
                     // Update batch status
-                    importBatch.Status = errorCount > 0 ? "completed" : "completed";
+                    importBatch.Status = "completed";
+                    importBatch.TagsProcessed = successCount;
                     importBatch.ProcessingCompletedAt = DateTime.UtcNow;
                     await batchRepo.UpdateAsync(importBatch);
 
@@ -1687,11 +1689,16 @@ namespace Runnatics.Services
                     readTimeUtc = TimeZoneInfo.ConvertTimeToUtc(readTimeLocal, tz);
                 }
 
+                var rawEpc = reader.GetString(1);
+                // Multiple EPCs in a single read are comma-separated (or pipe-separated) by some readers
+                var isMultipleEpc = rawEpc.Contains(',') || rawEpc.Contains('|');
+                var epc = isMultipleEpc ? rawEpc : rawEpc;
+
                 readings.Add(new RawRFIDReading
                 {
                     BatchId = batchId,
                     DeviceId = deviceId,
-                    Epc = reader.GetString(1),
+                    Epc = epc,
                     TimestampMs = timestampMs,
                     Antenna = reader.IsDBNull(3) ? null : reader.GetInt32(3),
                     RssiDbm = reader.IsDBNull(4) ? null : (decimal?)reader.GetDouble(4),
@@ -1699,7 +1706,8 @@ namespace Runnatics.Services
                     ReadTimeLocal = readTimeLocal,
                     ReadTimeUtc = readTimeUtc,
                     TimeZoneId = timeZoneId,
-                    ProcessResult = "Pending",
+                    IsMultipleEpc = isMultipleEpc,
+                    ProcessResult = isMultipleEpc ? "MultipleEPC" : "Pending",
                     SourceType = "file_upload",
                     AuditProperties = new Models.Data.Common.AuditProperties
                     {

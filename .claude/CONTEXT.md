@@ -64,6 +64,41 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-05-15 — backend-agent — Testing Feedback Round 1 (BUG API-1 through API-13)
+
+- **Branch**: `bugfix/testing-round-1`
+- **What was built**: 11 bugs fixed across RFID processing, manual timing, public leaderboard, and dashboard.
+- **Schema changes** (`db/scripts/TestingFeedback_Round1_SchemaChanges_20260515.sql`):
+  - `Participants`: `ManualDistance DECIMAL(8,3)`, gender normalization (M/F)
+  - `Checkpoints`: `IsMandatory BIT DEFAULT 1`
+  - `Races`: `IsTimed BIT DEFAULT 1`
+  - `RawRFIDReadings`: `IsMultipleEpc BIT DEFAULT 0`
+  - `UploadBatches`: removed unique index on FileHash, added `TotalTagsInFile INT`, `TagsProcessed INT`
+  - Performance indexes on Participants and RawRFIDReadings
+- **BUG API-1**: `GET /api/participants/{eventId}/{raceId}/{participantId}/detections` — participant RFID detections grouped by checkpoint (`ParticipantDetectionsResponse`, `GetDetectionsAsync` in `ParticipantImportService`)
+- **BUG API-2 + API-11**: MultipleEPC detection (comma/pipe in EPC string → `IsMultipleEpc=true`, `ProcessResult="MultipleEPC"`); skip EPC→participant mapping for multi-EPC rows; removed duplicate FileHash checks from both upload methods; `TotalTagsInFile`/`TagsProcessed` tracking; `IsMultipleEpc` added to `RfidRawReadingDto`
+- **BUG API-3**: `RecordManualTimeAsync` now UPSERTS SplitTimes (creates row if missing, updates otherwise); accepts elapsed ms or IST-from-midnight (auto-detects); no longer errors for first-time manual entry
+- **BUG API-6**: `PUT /api/participants/{eventId}/{raceId}/{participantId}/race-category` — changes AgeCategory and recalculates rankings; `ChangeParticipantCategoryAsync` in `ResultsService`
+- **BUG API-7**: `POST /api/participants/{eventId}/{raceId}/{participantId}/process-result` — re-triggers ranking calc for one participant; `ProcessParticipantResultAsync` + shared `ReprocessParticipantInternalAsync` in `ResultsService`
+- **BUG API-8 + API-10**: Fixed gender filter ("M"/"F" normalized to "Male"/"Female" for comparison and display); fixed race filter from `Contains` to exact `==` (prevents cross-race contamination); gender grouping in leaderboard also normalized
+- **BUG API-9**: RFID `ProcessRFIDImportAsync` now checks `Race.IsTimed`; if `false` returns `Status=Skipped` without EPC→participant mapping
+- **BUG API-12**: SupportQuery — all 7 endpoints confirmed fully functional; bug is UI-side (no backend change)
+- **BUG API-13**: Added `GET /api/dashboard/event/{eventId}/stats` and `GET /api/dashboard/race/{eventId}/{raceId}/stats` returning `EventDashboardStatsDto` / `RaceDashboardStatsDto` with registrations, finishers, DNF/DNS, gender/category breakdowns
+- **Files created**:
+  - `Runnatics.Models.Client/Requests/Participant/ChangeRaceCategoryRequest.cs`
+  - `Runnatics.Models.Client/Responses/Participants/ParticipantDetectionsResponse.cs`
+  - `Runnatics.Models.Client/Responses/RFID/ReaderFileUploadResponse.cs`
+  - `Runnatics.Models.Client/Responses/Dashboard/EventDashboardStatsDto.cs`
+  - `db/scripts/TestingFeedback_Round1_SchemaChanges_20260515.sql`
+- **Key decisions**:
+  - `IdEncryptor` AutoMapper converter only handles `int`; for `long` RawRFIDReading IDs use `_encryptionService.Encrypt(id.ToString())` directly
+  - BUG API-4 is covered by API-1 shape (no DISTINCT/GroupBy — all detections shown)
+  - BUG API-5 (split time segment calculation fix) and BUG API-14 (performance hardening) are not yet implemented
+- **Pending**:
+  - BUG API-5: Split time correctness (segment = current − previous chip time; IsMandatory-based Finished/DNF status)
+  - BUG API-14: Performance hardening (Brotli/Gzip compression, output cache on public endpoints, WAF note in DEPLOYMENT.md)
+  - Run `db/scripts/TestingFeedback_Round1_SchemaChanges_20260515.sql` against Azure SQL before deploying
+
 <!--
 FORMAT:
 ### [Date] — [Agent] — [Feature/Task]

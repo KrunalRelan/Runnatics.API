@@ -16,5 +16,6 @@ namespace Runnatics.Models.Client.Responses.Participants
         public bool IsManual { get; set; }
         public bool IsDuplicate { get; set; }
         public bool IsNormalized { get; set; }
+        public bool IsMultipleEpc { get; set; }
     }
 }

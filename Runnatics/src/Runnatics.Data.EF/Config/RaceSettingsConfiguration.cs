@@ -71,6 +71,9 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.LoopLength)
                    .HasColumnName("LoopLength");
 
+            builder.Property(e => e.PassGapThresholdSeconds)
+                   .HasColumnName("PassGapThresholdSeconds");
+
             builder.Property(e => e.DataHeaders)
                    .HasColumnName("DataHeader")
                    .HasColumnType("nvarchar(max)");

@@ -13,7 +13,19 @@
       "Bash(taskkill /F /IM \"Runnatics.Api.exe\")",
       "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\Runnatics.API\" -Directory)",
       "Bash(Select-Object Name)",
-      "Bash(dir C:\\\\Projects *)"
+      "Bash(dir C:\\\\Projects *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\Runnatics.API\" -Filter \"*RaceConfiguration*\" -Recurse -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(git checkout *)",
+      "Bash(not exist *)",
+      "Bash(claude *)",
+      "Bash(grep \"\\\\.cs$\")",
+      "Bash(dotnet test *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(grep -v \"//\")",
+      "Bash(git push *)",
+      "Bash(gh pr create --title 'bugfix: Testing Round 1 — API-1 through API-14' --body ' *)"
     ]
   }
 }

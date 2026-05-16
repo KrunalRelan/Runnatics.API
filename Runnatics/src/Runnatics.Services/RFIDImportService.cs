@@ -2943,11 +2943,25 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                var deviceSerialToId = new Dictionary<string, int>();
-                foreach (var d in devices.Where(d => !string.IsNullOrEmpty(d.DeviceMacAddress)))
+                // BUG 1 FIX: Register full MAC + short suffixes + name variants so event-level
+                // batches whose DeviceId stores a short suffix or friendly name can resolve.
+                var deviceSerialToId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var d in devices)
                 {
-                    if (!deviceSerialToId.TryAdd(d.DeviceMacAddress!, d.Id))
-                        _logger.LogWarning("Duplicate DeviceId {DeviceId} found across Device records. Using first occurrence.", d.DeviceMacAddress);
+                    if (!string.IsNullOrEmpty(d.DeviceMacAddress))
+                    {
+                        var mac = d.DeviceMacAddress;
+                        deviceSerialToId.TryAdd(mac, d.Id);
+                        var macStripped = mac.Replace(":", "").Replace("-", "");
+                        if (macStripped != mac) deviceSerialToId.TryAdd(macStripped, d.Id);
+                        if (macStripped.Length >= 6) deviceSerialToId.TryAdd(macStripped[^6..], d.Id);
+                        if (macStripped.Length >= 4) deviceSerialToId.TryAdd(macStripped[^4..], d.Id);
+                    }
+                    if (!string.IsNullOrEmpty(d.Name))
+                    {
+                        deviceSerialToId.TryAdd(d.Name, d.Id);
+                        deviceSerialToId.TryAdd(d.Name.Replace(" ", ""), d.Id);
+                    }
                 }
 
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
@@ -3070,6 +3084,11 @@ namespace Runnatics.Services
                                 continue; // Already assigned
 
                             var deviceId = batchToDeviceId.TryGetValue(reading.BatchId, out var dId) ? dId : 0;
+                            // BUG 1 FIX: Fall back to the reading's own DeviceId when batch lookup misses.
+                            // Event-level batches may not carry the device serial at batch level.
+                            if (deviceId == 0 && !string.IsNullOrEmpty(reading.DeviceId) &&
+                                deviceSerialToId.TryGetValue(reading.DeviceId, out var rDId))
+                                deviceId = rDId;
 
                             if (deviceId > 0 && simpleDeviceToCheckpoint.TryGetValue(deviceId, out var checkpointId))
                             {
@@ -3712,10 +3731,6 @@ namespace Runnatics.Services
             var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
             var startTime = DateTime.UtcNow;
 
-            // Configurable dedup window: readings within this many seconds on the same
-            // shared group are treated as the same "pass" over the mat
-            const int DEDUP_WINDOW_SECONDS = 30;
-
             var response = new AssignCheckpointsResponse
             {
                 Status = "Processing"
@@ -3735,6 +3750,7 @@ namespace Runnatics.Services
                 // 1a. Race start time (required)
                 var raceRepo = _repository.GetRepository<Race>();
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                    .Include(r => r.RaceSettings)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
 
@@ -3747,6 +3763,10 @@ namespace Runnatics.Services
                 }
 
                 var raceStartTime = race.StartTime.Value;
+                var raceSettings = race.RaceSettings;
+                var dedupWindowSeconds = (raceSettings?.DedUpSeconds > 0) ? raceSettings.DedUpSeconds.Value : 30;
+                var passGapThreshold = (raceSettings?.PassGapThresholdSeconds > 0) ? raceSettings.PassGapThresholdSeconds.Value : 300;
+                var earlyStartCutOff = (raceSettings?.EarlyStartCutOff > 0) ? raceSettings.EarlyStartCutOff.Value : 10;
 
                 // 1b. Devices — build resolution map for BOTH serial (MAC) AND friendly name
                 var deviceRepo = _repository.GetRepository<Device>();
@@ -3808,6 +3828,24 @@ namespace Runnatics.Services
                     ErrorMessage = "No checkpoints found for race";
                     response.Status = "Failed";
                     response.ErrorMessage = ErrorMessage;
+                    return response;
+                }
+
+                // Routing: only proceed with the shared-device loop algorithm when at least
+                // one Device ID is shared across two or more checkpoints. Simple races (each
+                // device mapped to exactly one checkpoint) are fully handled by Phase 1.
+                var sharedDeviceExists = checkpoints
+                    .Where(cp => cp.DeviceId > 0)
+                    .GroupBy(cp => cp.DeviceId)
+                    .Any(g => g.Count() > 1);
+
+                if (!sharedDeviceExists)
+                {
+                    _logger.LogInformation(
+                        "Phase 1.5: No shared devices for Race {RaceId} — simple race, Phase 1 assignments are authoritative. Skipping.",
+                        decryptedRaceId);
+                    response.Status = "Completed";
+                    response.CheckpointsAssigned = 0;
                     return response;
                 }
 
@@ -3921,18 +3959,23 @@ namespace Runnatics.Services
                 //     batches (2 checkpoints → deferred), leaving them as Pending.
                 //     Phase 1.5 must pick them up here or they are never assigned.
                 // ================================================================
+                // BUG 1+2 FIX: Extend the lower-bound before race start (earlyStartCutOff minutes).
+                // Participants often cross the start mat a few seconds before the gun fires.
+                // Without the buffer those readings are excluded and the participant loses Start assignment.
+                var readingsAfter = raceStartTime.AddMinutes(-earlyStartCutOff);
                 var allReadings = await readingRepo.GetQuery(r =>
                     (r.ProcessResult == "Success" || r.ProcessResult == "Pending") &&
                     batchIds.Contains(r.BatchId) &&
-                    r.ReadTimeUtc >= raceStartTime &&  // FIX #4: Only readings after race starts
+                    r.ReadTimeUtc >= readingsAfter &&
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
                     .ToListAsync();
 
                 _logger.LogInformation(
                     "Step 1: Loaded {Checkpoints} checkpoints, {Devices} devices, " +
-                    "{Participants} EPC mappings, {Readings} readings (Success+Pending, after race start)",
-                    checkpoints.Count, devices.Count, epcToParticipant.Count, allReadings.Count);
+                    "{Participants} EPC mappings, {Readings} readings (Success+Pending, from {Window})",
+                    checkpoints.Count, devices.Count, epcToParticipant.Count, allReadings.Count,
+                    readingsAfter.ToString("HH:mm:ss") + $" UTC (race start -{earlyStartCutOff} min)");
 
                 if (allReadings.Count == 0)
                 {
@@ -4087,17 +4130,25 @@ namespace Runnatics.Services
                             if (lastPassTimeByGroup.TryGetValue(groupKey, out var lastTime))
                             {
                                 var gap = (reading.ReadTimeUtc - lastTime).TotalSeconds;
-                                if (gap <= DEDUP_WINDOW_SECONDS)
+
+                                if (gap <= passGapThreshold)
                                 {
-                                    // Same pass — keep LAST for Start (first pass), EARLIEST for all others
-                                    var isStartBound = sharedDevices.TryGetValue(reading.DeviceId, out var m)
-                                        && m.OutboundDistance == 0;
-                                    var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
-                                    if (isStartBound && isFirstPass)
-                                        collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
+                                    // Same pass — extend the pass window timestamp
+                                    lastPassTimeByGroup[groupKey] = reading.ReadTimeUtc;
+
+                                    // Within dedup window: replace representative for Start-facing first pass.
+                                    // Between dedup window and pass-gap threshold: same pass, keep earliest (no replace).
+                                    if (gap <= dedupWindowSeconds)
+                                    {
+                                        var isStartBound = sharedDevices.TryGetValue(reading.DeviceId, out var m)
+                                            && m.OutboundDistance == 0;
+                                        var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
+                                        if (isStartBound && isFirstPass)
+                                            collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
+                                    }
                                     continue;
                                 }
-                                // Gap exceeded — finalize current pass before starting new one
+                                // Gap exceeded PASS_GAP_THRESHOLD — new pass (outbound → return)
                                 completedPassCountByGroup[groupKey] =
                                     completedPassCountByGroup.GetValueOrDefault(groupKey, 0) + 1;
                             }
@@ -4121,10 +4172,44 @@ namespace Runnatics.Services
                 if (totalCollapsed < readingInputs.Count)
                 {
                     _logger.LogInformation(
-                        "FIX #5: Pass dedup window ({Window}s): {Before} → {After} readings " +
+                        "FIX #5: Pass dedup (dedup={Dedup}s, pass-gap={PassGap}s): {Before} → {After} readings " +
                         "(collapsed {Removed} same-pass readings within shared groups)",
-                        DEDUP_WINDOW_SECONDS, readingInputs.Count, totalCollapsed,
+                        dedupWindowSeconds, passGapThreshold, readingInputs.Count, totalCollapsed,
                         readingInputs.Count - totalCollapsed);
+                }
+
+                // ================================================================
+                // BUG 2 FIX: Pre-compute outbound/return direction from pass index.
+                // pass[0] → outbound (Start, smallest DistanceFromStart)
+                // pass[1] → return  (Finish, largest DistanceFromStart)
+                // 1 pass only → outbound (participant is DNF; Finish mandatory checkpoint missing)
+                // This replaces turnaround-reference for shared devices so that participants
+                // who crossed the Start mat slightly before gun time (filtered by raceStartTime
+                // in the past) now correctly get a Start assignment on their first recorded pass.
+                // ================================================================
+                int passIndexOverrideCount = 0;
+                foreach (var (_, epcReadings) in readingsByEpc)
+                {
+                    var byGroup = epcReadings
+                        .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
+                        .GroupBy(r => deviceToGroup[r.DeviceId]);
+
+                    foreach (var grp in byGroup)
+                    {
+                        var sortedPasses = grp.OrderBy(r => r.ReadTimeUtc).ToList();
+                        for (int pi = 0; pi < sortedPasses.Count; pi++)
+                        {
+                            sortedPasses[pi].IsOutboundOverride = pi == 0;  // 0=outbound, 1+=return
+                            passIndexOverrideCount++;
+                        }
+                    }
+                }
+
+                if (passIndexOverrideCount > 0)
+                {
+                    _logger.LogInformation(
+                        "BUG 2 FIX: Set IsOutboundOverride on {Count} shared-device readings via pass index",
+                        passIndexOverrideCount);
                 }
 
                 // ================================================================

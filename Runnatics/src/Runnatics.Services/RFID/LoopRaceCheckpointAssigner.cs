@@ -70,6 +70,10 @@ namespace Runnatics.Services.RFID
             public int DeviceId { get; set; }
             public string? DeviceSerial { get; set; }
             public DateTime ReadTimeUtc { get; set; }
+            /// <summary>
+            /// Pre-computed from pass index: true = outbound (Start), false = return (Finish), null = use turnaround/chronological fallback.
+            /// </summary>
+            public bool? IsOutboundOverride { get; set; }
         }
 
         /// <summary>
@@ -341,7 +345,7 @@ namespace Runnatics.Services.RFID
             Dictionary<int, List<Checkpoint>> singleDeviceCheckpoints)
         {
             var results = new List<AssignedReading>();
-            int turnaroundAssignments = 0, chronologicalAssignments = 0, singleDeviceAssignments = 0;
+            int turnaroundAssignments = 0, chronologicalAssignments = 0, singleDeviceAssignments = 0, passIndexAssignments = 0;
 
             // Build reverse lookup: DeviceId → SharedGroupKey
             var deviceToGroup = new Dictionary<int, string>();
@@ -394,7 +398,14 @@ namespace Runnatics.Services.RFID
                         bool isOutbound;
                         string method;
 
-                        if (hasTurnaround)
+                        if (reading.IsOutboundOverride.HasValue)
+                        {
+                            // Priority 0: Pre-computed pass index (pass[0]=outbound, pass[1]=return)
+                            isOutbound = reading.IsOutboundOverride.Value;
+                            method = "PassIndex";
+                            passIndexAssignments++;
+                        }
+                        else if (hasTurnaround)
                         {
                             // Priority 1: Turnaround reference
                             isOutbound = reading.ReadTimeUtc < participantTurnaround!.Value;
@@ -451,8 +462,8 @@ namespace Runnatics.Services.RFID
             }
 
             _logger.LogInformation(
-                "Step 4: Assigned {Total} readings — TurnaroundRef={Turnaround}, Chronological={Chrono}, SingleDevice={Single}",
-                results.Count, turnaroundAssignments, chronologicalAssignments, singleDeviceAssignments);
+                "Step 4: Assigned {Total} readings — PassIndex={PassIndex}, TurnaroundRef={Turnaround}, Chronological={Chrono}, SingleDevice={Single}",
+                results.Count, passIndexAssignments, turnaroundAssignments, chronologicalAssignments, singleDeviceAssignments);
 
             return results;
         }

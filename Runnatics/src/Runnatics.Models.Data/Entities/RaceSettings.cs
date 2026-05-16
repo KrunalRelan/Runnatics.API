@@ -31,6 +31,8 @@ namespace Runnatics.Models.Data.Entities
 
         public int? LateStartCutOff { get; set; }
 
+        public int? PassGapThresholdSeconds { get; set; }
+
         public bool? HasLoops { get; set; }
 
         public decimal? LoopLength { get; set; }

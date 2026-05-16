@@ -130,7 +130,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate))
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.EventOrganizerId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventOrganizerId))
-                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer.Name))
+                .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer != null ? src.EventOrganizer.Name : null))
                 .ForMember(dest => dest.BannerBase64, opt => opt.MapFrom(src => src.BannerImage));
 
             // EventSettings mappings

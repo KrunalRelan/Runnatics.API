@@ -232,7 +232,6 @@ namespace Runnatics.Services
                 }
 
                 var toReturn = _mapper.Map<EventResponse>(eventEntity);
-                toReturn.EventOrganizerName = eventEntity.EventOrganizer.Name;
                 return toReturn;
             }
             catch (Exception ex)

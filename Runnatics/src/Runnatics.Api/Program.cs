@@ -226,6 +226,7 @@ builder.Services.AddScoped<IResultsService, ResultsService>();
 builder.Services.AddScoped<IPublicResultsService, PublicResultsService>();
 builder.Services.AddScoped<IResultsExportService, ResultsExportService>();
 builder.Services.AddScoped<IBibMappingService, BibMappingService>();
+builder.Services.AddScoped<ILiveReadingService, LiveReadingService>();
 builder.Services.AddScoped<ISupportQueryService, SupportQueryService>();
 builder.Services.AddHttpClient<ISmsService, Msg91SmsService>();
 builder.Services.AddScoped<IEmailTemplateService, EmailTemplateService>();
@@ -362,6 +363,28 @@ app.UseResponseCompression();
 app.UseHttpsRedirection();
 app.UseRouting();
 app.UseCors("AllowFrontend");
+
+// X-Device-Key guard for /api/rfid/.../live-readings (Raspberry Pi timing mat)
+// Skip OPTIONS — preflight requests never carry custom headers
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.Value?.EndsWith("/live-readings", StringComparison.OrdinalIgnoreCase) == true &&
+        !HttpMethods.IsOptions(context.Request.Method))
+    {
+        var expectedKey = app.Configuration["DeviceApi:Key"];
+        var providedKey = context.Request.Headers["X-Device-Key"].ToString();
+
+        if (string.IsNullOrEmpty(providedKey) || providedKey != expectedKey)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(
+                """{"error":{"code":401,"message":"Missing or invalid X-Device-Key header."}}""");
+            return;
+        }
+    }
+    await next(context);
+});
 
 // X-Public-Key guard for all /api/public/* routes
 // Skip OPTIONS — browser preflight requests never carry custom headers

@@ -64,6 +64,42 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-05-29 — backend-agent — Live Timing Ingest (Raspberry Pi → API)
+
+- **Branch**: `master`
+- **What was built**: `POST /api/rfid/{eventId}/{raceId}/live-readings` — receives flat RFID readings from a Raspberry Pi timing mat, saves to DB, pushes SignalR crossing events, then triggers the full RFID processing pipeline asynchronously to produce live rankings.
+- **Files created**:
+  - `Runnatics.Models.Client/Requests/RFID/LiveReadingDto.cs` — single reading: `Epc, Time (Unix ms), Antenna, Rssi, Channel`
+  - `Runnatics.Models.Client/Requests/RFID/LiveReadingsRequest.cs` — batch body: `DeviceId (MAC) + List<LiveReadingDto>`
+  - `Runnatics.Models.Client/Responses/RFID/LiveReadingResponse.cs` — response: `Accepted, Skipped, BatchId (encrypted)`
+  - `Runnatics.Services.Interface/ILiveReadingService.cs` — interface with `IngestAsync(eventId, raceId, request, ct)`
+  - `Runnatics.Services/LiveReadingService.cs` — full implementation
+- **Files modified**:
+  - `Runnatics.Api/Controller/RFIDController.cs` — added `IngestLiveReadings` action, injected `ILiveReadingService`
+  - `Runnatics.Api/Program.cs` — registered `ILiveReadingService`; added `X-Device-Key` middleware (placed before the existing `X-Public-Key` guard)
+  - `Runnatics.Api/appsettings.json` — added `DeviceApi:Key = "SET_IN_AZURE_ENV_VARS"`
+- **Authentication**: `X-Device-Key` header validated in inline middleware (same pattern as `X-Public-Key`). Azure env var: `DeviceApi__Key`. Dynamic IP → API key is the sole auth mechanism (no Azure IP allowlist).
+- **Processing flow**:
+  1. Decrypt eventId + raceId → load Event (TenantId, timezone) → resolve Device by MAC
+  2. Get/create today's `UploadBatch` (SourceType = `"online_webhook"`, IsLiveSync = true, FileFormat = `"LIVE"`)
+  3. Map `LiveReadingDto` → `RawRFIDReading` (ProcessResult = `"Pending"`, same schema as offline pipeline)
+  4. Save to DB, update batch stats
+  5. Push immediate SignalR `CheckpointCrossings` events (EPC → Participant lookup)
+  6. Fire-and-forget: new DI scope → `IRFIDImportService.ProcessCompleteWorkflowAsync(eventId, raceId)` → dedup → normalize → split times → per-participant rankings → SignalR push
+- **Key decisions**:
+  - Reuses existing `UploadBatch` + `RawRFIDReading` tables — no schema changes needed
+  - One batch per device per race per day (keyed: `DeviceId + EventId + RaceId + Date`)
+  - `AuditProperties.CreatedBy = 0` (system) since request is device-authenticated, not user-authenticated
+  - Fire-and-forget uses `IServiceScopeFactory` to create a fresh scope so scoped services are not disposed
+  - `ProcessCompleteWorkflowAsync` is idempotent (dedup handles re-runs); concurrent runs are safe
+  - `deviceId` in request body is the Pi's MAC address — must match a registered `Device.DeviceMacAddress` (normalized: lowercase, no colons)
+- **Pi request format**:
+  ```
+  POST /api/rfid/{encryptedEventId}/{encryptedRaceId}/live-readings
+  X-Device-Key: <secret>
+  { "deviceId": "00162512dbb0", "readings": [{ "epc": "...", "time": 1777163620641, "antenna": 2, "rssi": -74.0, "channel": 2 }] }
+  ```
+
 ### 2026-05-15 — backend-agent — Testing Feedback Round 1 (BUG API-1 through API-13)
 
 - **Branch**: `bugfix/testing-round-1`

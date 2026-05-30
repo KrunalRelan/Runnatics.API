@@ -19,15 +19,18 @@ namespace Runnatics.Api.Controller
         private readonly IRFIDImportService _service;
         private readonly IRFIDDiagnosticsService _diagnosticsService;
         private readonly IResultsService _resultsService;
+        private readonly ILiveReadingService _liveReadingService;
 
         public RFIDController(
             IRFIDImportService importService,
             IRFIDDiagnosticsService diagnosticsService,
-            IResultsService resultsService)
+            IResultsService resultsService,
+            ILiveReadingService liveReadingService)
         {
             _service = importService;
             _diagnosticsService = diagnosticsService;
             _resultsService = resultsService;
+            _liveReadingService = liveReadingService;
         }
 
         /// <summary>
@@ -434,6 +437,49 @@ namespace Runnatics.Api.Controller
                     return BadRequest(response);
 
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
+        /// Receive live chip readings from the Raspberry Pi timing mat.
+        /// Authenticated via X-Device-Key header (set in Azure env as DeviceApi__Key).
+        /// Saves to RawRFIDReading + UploadBatch, pushes immediate SignalR crossing events,
+        /// then fires off the full processing pipeline asynchronously to update rankings.
+        /// Returns fast — pipeline runs in the background.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/live-readings")]
+        [ProducesResponseType(typeof(ResponseBase<LiveReadingResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> IngestLiveReadings(
+            string eventId,
+            string raceId,
+            [FromBody] LiveReadingsRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+                return BadRequest(new { error = "eventId and raceId are required." });
+
+            if (!ModelState.IsValid)
+                return BadRequest(new { error = "Validation failed" });
+
+            var response = new ResponseBase<LiveReadingResponse>();
+            var result = await _liveReadingService.IngestAsync(eventId, raceId, request, cancellationToken);
+
+            if (_liveReadingService.HasError || result == null)
+            {
+                response.Error = new ResponseBase<LiveReadingResponse>.ErrorData
+                {
+                    Message = _liveReadingService.ErrorMessage ?? "Ingest failed."
+                };
+                return _liveReadingService.ErrorMessage?.Contains("not found") == true ||
+                       _liveReadingService.ErrorMessage?.Contains("not registered") == true
+                    ? NotFound(response)
+                    : BadRequest(response);
             }
 
             response.Message = result;

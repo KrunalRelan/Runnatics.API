@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Responses.PiDevice;
 using Runnatics.Models.Data.Entities;
-using Runnatics.Models.Data.Enumerations;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
 
@@ -23,13 +22,15 @@ namespace Runnatics.Services
 
         public async Task<List<PiEventDto>?> GetActiveEventsWithRacesAsync(CancellationToken ct)
         {
+            var today = DateTime.UtcNow.Date;
+
             var events = await _unitOfWork.GetRepository<Event>()
                 .GetQuery()
                 .AsNoTracking()
                 .Include(e => e.Races)
                 .Where(e => e.AuditProperties.IsActive
                          && !e.AuditProperties.IsDeleted
-                         && (e.Status == EventStatus.Active || e.Status == EventStatus.InProgress))
+                         && e.EventDate >= today)
                 .OrderBy(e => e.EventDate)
                 .ToListAsync(ct);
 

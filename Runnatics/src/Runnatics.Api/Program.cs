@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Runnatics.Api.Filters;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
@@ -71,6 +72,16 @@ builder.Services.AddSwaggerGen(c =>
             Array.Empty<string>()
         }
     });
+
+    c.AddSecurityDefinition("X-Device-Key", new OpenApiSecurityScheme
+    {
+        Description = "API key for Raspberry Pi device endpoints. Header: X-Device-Key: {key}",
+        Name = "X-Device-Key",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey
+    });
+
+    c.OperationFilter<DeviceKeyOperationFilter>();
 });
 
 // EF Core

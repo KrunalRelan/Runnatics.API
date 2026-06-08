@@ -25,7 +25,12 @@
       "Bash(git commit -m ' *)",
       "Bash(grep -v \"//\")",
       "Bash(git push *)",
-      "Bash(gh pr create --title 'bugfix: Testing Round 1 — API-1 through API-14' --body ' *)"
+      "Bash(gh pr create --title 'bugfix: Testing Round 1 — API-1 through API-14' --body ' *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\Runnatics.API\\\\Runnatics\\\\src\" -Recurse -Filter \"*Dto*\")",
+      "Bash(Select-Object FullName)",
+      "Bash(powershell *)",
+      "Bash(git commit *)",
+      "Bash(python *)"
     ]
   }
 }

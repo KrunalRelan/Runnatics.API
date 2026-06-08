@@ -227,6 +227,7 @@ builder.Services.AddScoped<IPublicResultsService, PublicResultsService>();
 builder.Services.AddScoped<IResultsExportService, ResultsExportService>();
 builder.Services.AddScoped<IBibMappingService, BibMappingService>();
 builder.Services.AddScoped<ILiveReadingService, LiveReadingService>();
+builder.Services.AddScoped<IPiDeviceService, PiDeviceService>();
 builder.Services.AddScoped<ISupportQueryService, SupportQueryService>();
 builder.Services.AddHttpClient<ISmsService, Msg91SmsService>();
 builder.Services.AddScoped<IEmailTemplateService, EmailTemplateService>();
@@ -364,12 +365,19 @@ app.UseHttpsRedirection();
 app.UseRouting();
 app.UseCors("AllowFrontend");
 
-// X-Device-Key guard for /api/rfid/.../live-readings (Raspberry Pi timing mat)
+// X-Device-Key guard for Raspberry Pi endpoints:
+//   /api/rfid/.../live-readings  — live chip ingest
+//   /api/pidevice/*              — device utility endpoints (event/race list, etc.)
 // Skip OPTIONS — preflight requests never carry custom headers
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.Value?.EndsWith("/live-readings", StringComparison.OrdinalIgnoreCase) == true &&
-        !HttpMethods.IsOptions(context.Request.Method))
+    var path = context.Request.Path.Value ?? string.Empty;
+    var isPiEndpoint =
+        (path.EndsWith("/live-readings", StringComparison.OrdinalIgnoreCase) ||
+         path.StartsWith("/api/pidevice", StringComparison.OrdinalIgnoreCase)) &&
+        !HttpMethods.IsOptions(context.Request.Method);
+
+    if (isPiEndpoint)
     {
         var expectedKey = app.Configuration["DeviceApi:Key"];
         var providedKey = context.Request.Headers["X-Device-Key"].ToString();

@@ -30,7 +30,14 @@
       "Bash(Select-Object FullName)",
       "Bash(powershell *)",
       "Bash(git commit *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(findstr /i \"src/main\")",
+      "Bash(findstr /i \"tsx ts\")",
+      "Read(//c/Projects/Runnatics.UI/**)",
+      "Read(//c/Projects/**)",
+      "Bash(git *)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)"
     ]
   }
 }

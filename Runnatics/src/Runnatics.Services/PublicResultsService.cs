@@ -187,8 +187,6 @@ namespace Runnatics.Services
                 var gender   = request.Gender;
                 var category = request.Category;
                 var showAll  = request.ShowAll;
-                int page     = Math.Max(1, request.PageNumber);
-                int pageSize = Math.Clamp(request.PageSize, 1, 200);
 
                 int decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
                 int decryptedRaceId  = Convert.ToInt32(_encryptionService.Decrypt(raceId));
@@ -241,6 +239,11 @@ namespace Runnatics.Services
                 int topN = (!showAll && (leaderboardSettings?.NumberOfResultsToShowCategory ?? 0) > 0)
                     ? leaderboardSettings!.NumberOfResultsToShowCategory!.Value
                     : (!showAll ? 3 : 0);
+
+                // When showAll is true, return all overall results (up to 1000); otherwise honour the
+                // caller's paging request (capped at 200 for regular browsing).
+                int pageSize = showAll ? 1000 : Math.Clamp(request.PageSize, 1, 200);
+                int page     = showAll ? 1    : Math.Max(1, request.PageNumber);
 
                 var resultsRepo = _repository.GetRepository<Results>();
 
@@ -361,9 +364,10 @@ namespace Runnatics.Services
                     .Take(pageSize)
                     .Select((r, idx) => new PublicLeaderboardEntryDto
                     {
-                        Rank  = r.OverallRank ?? ((page - 1) * pageSize + idx + 1),
-                        Name  = r.Participant.FullName,
-                        Bib   = r.Participant.BibNumber ?? string.Empty,
+                        Rank   = r.OverallRank ?? ((page - 1) * pageSize + idx + 1),
+                        Name   = r.Participant.FullName,
+                        Bib    = r.Participant.BibNumber ?? string.Empty,
+                        Gender = r.Participant.Gender,
                         ChipTime = r.NetTime.HasValue
                             ? TimeSpan.FromMilliseconds(r.NetTime.Value).ToString(@"hh\:mm\:ss")
                             : null,

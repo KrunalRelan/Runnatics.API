@@ -15,6 +15,9 @@
         public bool? CheckedIn { get; set; }
         public string? ChipId { get; set; }
 
+        /// <summary>BUG-16: admin-entered manual distance (km), shown in the BIB drill-down grid.</summary>
+        public decimal? ManualDistance { get; set; }
+
         /// <summary>
         /// True if the participant has an active EPC chip assignment
         /// </summary>

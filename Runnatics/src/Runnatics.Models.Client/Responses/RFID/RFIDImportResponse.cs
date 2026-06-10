@@ -9,6 +9,8 @@ namespace Runnatics.Models.Client.Responses.RFID
         public DateTime UploadedAt { get; set; }
         public int TotalReadings { get; set; }  // Changed from TotalRecords
         public int UniqueEpcs { get; set; }  // New: unique RFID tags
+        public int TotalTags { get; set; }      // BUG-19: distinct tags in the file (TotalTagsInFile)
+        public int UploadedTags { get; set; }   // BUG-19: tags successfully processed (TagsProcessed)
         public long? TimeRangeStart { get; set; }  // New: earliest timestamp
         public long? TimeRangeEnd { get; set; }  // New: latest timestamp
         public long FileSizeBytes { get; set; }  // New: file size

@@ -255,6 +255,35 @@ FORMAT:
 - **Pending**: ...
 -->
 
+### 2026-06-09 — Bug Fix Round 5 (P2 polish — BUG-09/11/12/15/16/17/18/19/20/21/22/23 + 2 TS errors)
+
+- **Result: EXECUTE complete.** API `dotnet build` ✅ 0 errors · UI `npx tsc --noEmit` ✅ 0 errors (both pre-existing TS errors fixed) · UI `npm run build` ✅. Decisions confirmed by user: BUG-11 show-all-rows; BUG-12 display/grouping-only (no import changes); BUG-16 column filter; BUG-09 keep race tabs.
+- **Verify-only (no code), confirmed during research**: BUG-09 (race tabs already per-RaceId from Round 4), BUG-15 ("Detections by Checkpoint" table already shows every reading w/ reader name + timestamp), BUG-18 (backend already gates EPC on IsTimed — RFIDImportService:1036 skip, ResultsService:1419 manual-time chip guard; BibMapping never forces EPC), BUG-21 (public nav already uses `<a href>`/`<Link>`, no programmatic navigate in pages/public).
+
+- **BUG-12 (no "Unknown" category)** — display/grouping layer only:
+  - Backend: `PublicResultsService.cs:318` grouped leaderboard, `DashboardService.cs` event+race category breakdowns, `ResultsExportService.cs:219` Excel category sheet — all now `.Where(category not null/empty/"Unknown")` then group; uncategorized still appear in Overall.
+  - `RFIDImportService.CalculateCategoryRankingsAsync` — only ranks finishers with a real category; explicitly nulls any stale `CategoryRank` on uncategorized finishers (so no misleading category rank shows).
+  - UI defensive guard: `EventResultsPage`/`GlobalResultsPage`/`LeaderboardPage` filter out blank/"Unknown" category buckets before rendering.
+  - Import write-defaults that store the literal "Unknown" were intentionally NOT touched (user decision — separate data-cleanup task).
+
+- **BUG-17 (gender M/F)** — `PublicResultsService.MapToResultDto:1069` now emits raw "M"/"F" (was "Male"/"Female") → fixes the `/results` search list. `DashboardService` gender breakdown keys now raw "M"/"F". UI `ParticipantDetail.tsx` (3 sites: 872/1248/1354) show M/F; `ViewParticipants` grid Gender column gets a display-only `valueFormatter` (male→M, female→F, other→O; underlying value unchanged for filtering). Filter-dropdown OPTION labels left as "Male"/"Female" (selectors, not data display).
+
+- **BUG-11 (remove "Show All Finishers")** — removed the button AND the 5-row cap in `EventResultsPage` `CategoryCard` and `GlobalResultsPage` `CategoryTable`; both now render all rows. `LeaderboardPage` already showed all.
+
+- **BUG-16 (BIB drill-down columns)** — Gender column already existed. Added **Manual Distance** column (`agNumberColumnFilter`) to `ViewParticipants` AG-Grid + mapped `manualDistance` into rows. Backend: added `ManualDistance` (decimal?) to `ParticipantSearchReponse` — AutoMapper auto-maps it (search uses `_mapper.Map`, ParticipantImportService:499). No SQL (entity column already exists).
+
+- **BUG-19 (reader re-upload + "X of Y tags")** — UI already supported re-upload + showed the snackbar, but it read `uploadedTags`/`totalTags` which the backend never returned (fell back to `totalReadings` → always "N of N"). Fix (backend): added `TotalTags` (=TotalTagsInFile) and `UploadedTags` (=valid distinct tags) to `RFIDImportResponse`, populated in both upload methods (`UploadRFIDFileAsync` + `UploadRFIDFileEventLevelAsync`). UI already consumes the camelCase fields → "X of Y" now accurate (X<Y when multi-EPC reads were skipped).
+
+- **BUG-20 (support reply not working)** — diagnosed UI-side: the "Save Comment" form required a Ticket Status, but the status dropdown started empty → silent validation fail. (Backend auth is fine: the `sub ?? NameIdentifier` fallback mirrors the working `AuthenticationController`/`UserContextService`, email send is non-throwing.) Fix: `SupportQueryDetailPage` now defaults the comment status to the query's current status on load and keeps it selected after save.
+
+- **BUG-23 (dashboard pie charts)** — Race-level chart existed but was fed the WRONG fields: backend returns `totalRegistered/totalFinishers/totalDnf/totalDns`, UI `DashboardStatsDto` reads `totalParticipants/totalStarted/totalFinished/totalDnfOrNotStarted` → existing race pie was rendering undefined. Fix: `DashboardService` now maps the raw backend shape (`totalStarted = registered − dns`, `totalDnfOrNotStarted = dnf + dns`) for BOTH event & race endpoints — repairs the race chart. Added new `EventStatsPanel.tsx` (cards Total/Started/Finished/DNF + progress pie Finished/Yet-to-Finish/DNF) mounted in `ViewEvent.tsx`. Note: backend has no first-class "Started"/in-progress field — values are derived from registered/finishers/dnf/dns.
+
+- **TS errors fixed**: `ParticipantDetail.tsx:564` (used `checkpointName` in the success snackbar instead of leaving it unused); `RaceDashboard.tsx:218` (`(percent ?? 0)`).
+
+- **Files modified — API**: `PublicResultsService.cs`, `DashboardService.cs`, `ResultsExportService.cs`, `RFIDImportService.cs`, `RFIDImportResponse.cs`, `ParticipantSearchReponse.cs`.
+- **Files modified — UI**: public `EventResultsPage.tsx`/`GlobalResultsPage.tsx`/`LeaderboardPage.tsx`; admin `ParticipantDetail.tsx`/`ViewParticipants.tsx`/`SupportQueryDetailPage.tsx`/`races/RaceDashboard.tsx`/`events/ViewEvent.tsx`; `services/DashboardService.ts`; **new** `events/EventStatsPanel.tsx`.
+- **No SQL scripts needed.** **Pending verify by user**: BUG-19 "X of Y" against a real multi-EPC file; BUG-23 event pie against an event with finishers; BUG-20 reply end-to-end.
+
 ### 2026-06-09 — FRONTEND REVIEW + VERIFY (Bug Fix Round 4 — UI repo @ C:\Projects\Runnatics.UI\Runnatics.Ui)
 
 - **Result: PASS.** `npm run build` (vite) ✅ built in 12s. `npx tsc --noEmit` ✅ for all 4 reviewed files (2 pre-existing errors exist in UNRELATED files not touched this round: `ParticipantDetail.tsx:564` unused var, `RaceDashboard.tsx:218` possibly-undefined — flag to UI owner, not this round's scope).

@@ -37,7 +37,8 @@
       "Read(//c/Projects/**)",
       "Bash(git *)",
       "Bash(npx tsc *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(grep -n \"RaceList\\\\|</Card>\\\\|{/\\\\*\" src/main/src/pages/admin/events/ViewEvent.tsx)"
     ]
   }
 }

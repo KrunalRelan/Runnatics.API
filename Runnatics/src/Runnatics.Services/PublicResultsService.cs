@@ -315,7 +315,11 @@ namespace Runnatics.Services
                     {
                         Gender = genderGroup.Key,
                         Categories = genderGroup
-                            .GroupBy(r => r.Participant.AgeCategory ?? "Unknown")
+                            // BUG-12: don't synthesize an "Unknown" category bucket — skip finishers
+                            // with no real age category (they still appear in OverallResults).
+                            .Where(r => !string.IsNullOrWhiteSpace(r.Participant.AgeCategory) &&
+                                        !string.Equals(r.Participant.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase))
+                            .GroupBy(r => r.Participant.AgeCategory!)
                             .OrderBy(c => c.Key)
                             .Select(catGroup =>
                             {
@@ -1066,7 +1070,7 @@ namespace Runnatics.Services
             ParticipantName = r.Participant?.FullName ?? string.Empty,
             RaceName = r.Race?.Title ?? string.Empty,
             AgeGroup = r.Participant?.AgeCategory,
-            Gender = r.Participant?.Gender switch { "M" => "Male", "F" => "Female", var g => g },
+            Gender = r.Participant?.Gender, // BUG-17: emit raw "M"/"F", not full words
             GunTime = r.GunTime.HasValue ? TimeSpan.FromMilliseconds(r.GunTime.Value) : null,
             NetTime = r.NetTime.HasValue ? TimeSpan.FromMilliseconds(r.NetTime.Value) : null,
             OverallRank = r.OverallRank,

@@ -539,6 +539,9 @@ namespace Runnatics.Services
                 await _repository.SaveChangesAsync();
 
                 var distinctEpcs = readings.Where(r => !r.IsMultipleEpc).Select(r => r.Epc).Distinct().Count();
+                // BUG-19: total distinct tags in the file (incl. any skipped multi-EPC reads) for the
+                // "X of Y tags uploaded" confirmation; X = valid tags ingested, Y = all distinct tags.
+                var totalDistinctTagsInFile = readings.Select(r => r.Epc).Distinct().Count();
 
                 // Update batch statistics
                 batch.TotalReadings = readings.Count;
@@ -556,6 +559,8 @@ namespace Runnatics.Services
                 response.UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString());
                 response.TotalReadings = readings.Count;
                 response.UniqueEpcs = distinctEpcs;
+                response.TotalTags = totalDistinctTagsInFile;   // BUG-19: Y
+                response.UploadedTags = distinctEpcs;            // BUG-19: X (valid tags ingested)
                 response.TimeRangeStart = batch.TimeRangeStart;
                 response.TimeRangeEnd = batch.TimeRangeEnd;
                 response.FileSizeBytes = request.File.Length;
@@ -748,6 +753,7 @@ namespace Runnatics.Services
 
                 // Update batch statistics
                 var distinctEpcsEventLevel = readings.Where(r => !r.IsMultipleEpc).Select(r => r.Epc).Distinct().Count();
+                var totalDistinctTagsEventLevel = readings.Select(r => r.Epc).Distinct().Count(); // BUG-19: Y
                 batch.TotalReadings = readings.Count;
                 batch.UniqueEpcs = distinctEpcsEventLevel;
                 batch.TotalTagsInFile = distinctEpcsEventLevel;
@@ -763,6 +769,8 @@ namespace Runnatics.Services
                 response.UploadBatchId = _encryptionService.Encrypt(batch.Id.ToString());
                 response.TotalReadings = readings.Count;
                 response.UniqueEpcs = distinctEpcsEventLevel;
+                response.TotalTags = totalDistinctTagsEventLevel;     // BUG-19: Y
+                response.UploadedTags = distinctEpcsEventLevel;       // BUG-19: X (valid tags ingested)
                 response.TimeRangeStart = readings.Min(r => r.TimestampMs);
                 response.TimeRangeEnd = readings.Max(r => r.TimestampMs);
                 response.FileSizeBytes = request.File.Length;
@@ -2735,9 +2743,27 @@ namespace Runnatics.Services
                 .OrderBy(r => r.GunTime ?? long.MaxValue)
                 .ToListAsync();
 
+            // BUG-12: only rank finishers that have a real age category — uncategorized
+            // finishers don't belong to a category bucket, so clear any stale CategoryRank
+            // rather than ranking them under an "Unknown" group.
+            bool HasCategory(Results r) =>
+                !string.IsNullOrWhiteSpace(r.Participant?.AgeCategory) &&
+                !string.Equals(r.Participant!.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase);
+
+            var uncategorized = results
+                .Where(r => !HasCategory(r) && r.CategoryRank != null)
+                .Select(result =>
+                {
+                    result.CategoryRank = null;
+                    result.AuditProperties.UpdatedBy = userId;
+                    result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    return result;
+                });
+
             // Process all rankings using LINQ - no nested for loops
             var categoryGroups = results
-                .GroupBy(r => r.Participant?.AgeCategory ?? "Unknown")
+                .Where(HasCategory)
+                .GroupBy(r => r.Participant!.AgeCategory!)
                 .ToList();
 
             var updatedResults = categoryGroups
@@ -2750,6 +2776,7 @@ namespace Runnatics.Services
                         result.AuditProperties.UpdatedDate = DateTime.UtcNow;
                         return result;
                     }))
+                .Concat(uncategorized)
                 .ToList();
 
             // Bulk update - single DB roundtrip

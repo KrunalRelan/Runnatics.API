@@ -216,7 +216,11 @@ namespace Runnatics.Services
                     return idx < 0 ? 999 : idx;
                 })
                 .SelectMany(genderGroup => genderGroup
-                    .GroupBy(r => r.Participant?.AgeCategory ?? "Unknown")
+                    // BUG-12: don't synthesize an "Unknown" category bucket (uncategorized
+                    // finishers still appear on the Overall Results sheet).
+                    .Where(r => !string.IsNullOrWhiteSpace(r.Participant?.AgeCategory) &&
+                                !string.Equals(r.Participant!.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase))
+                    .GroupBy(r => r.Participant!.AgeCategory!)
                     .OrderBy(c => c.Key)
                     .Select(catGroup => new
                     {

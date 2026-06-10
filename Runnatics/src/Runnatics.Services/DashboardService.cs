@@ -131,24 +131,27 @@ namespace Runnatics.Services
                     .ToListAsync(ct);
 
                 var genderBreakdown = allParticipants
-                    .GroupBy(p => p.Gender switch { "M" => "Male", "F" => "Female", var g => g ?? "Unknown" })
+                    .GroupBy(p => p.Gender ?? "Unknown") // BUG-17: emit raw "M"/"F"
                     .Select(g => new GenderBreakdownItem
                     {
                         Gender = g.Key,
                         Count = g.Count(),
                         Finishers = allResults.Count(r => r.Status == "Finished" &&
-                            (r.Gender switch { "M" => "Male", "F" => "Female", var x => x ?? "Unknown" }) == g.Key)
+                            (r.Gender ?? "Unknown") == g.Key)
                     })
                     .OrderBy(g => g.Gender)
                     .ToList();
 
                 var categoryBreakdown = allParticipants
-                    .GroupBy(p => p.AgeCategory ?? "Unknown")
+                    // BUG-12: don't synthesize an "Unknown" category bucket.
+                    .Where(p => !string.IsNullOrWhiteSpace(p.AgeCategory) &&
+                                !string.Equals(p.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase))
+                    .GroupBy(p => p.AgeCategory!)
                     .Select(c => new CategoryBreakdownItem
                     {
                         Category = c.Key,
                         Count = c.Count(),
-                        Finishers = allResults.Count(r => r.Status == "Finished" && (r.AgeCategory ?? "Unknown") == c.Key)
+                        Finishers = allResults.Count(r => r.Status == "Finished" && r.AgeCategory == c.Key)
                     })
                     .OrderBy(c => c.Category)
                     .ToList();
@@ -242,24 +245,27 @@ namespace Runnatics.Services
                     : null;
 
                 var genderBreakdown = participants
-                    .GroupBy(p => p.Gender switch { "M" => "Male", "F" => "Female", var g => g ?? "Unknown" })
+                    .GroupBy(p => p.Gender ?? "Unknown") // BUG-17: emit raw "M"/"F"
                     .Select(g => new GenderBreakdownItem
                     {
                         Gender = g.Key,
                         Count = g.Count(),
                         Finishers = finishers.Count(r =>
-                            (r.Gender switch { "M" => "Male", "F" => "Female", var x => x ?? "Unknown" }) == g.Key)
+                            (r.Gender ?? "Unknown") == g.Key)
                     })
                     .OrderBy(g => g.Gender)
                     .ToList();
 
                 var categoryBreakdown = participants
-                    .GroupBy(p => p.AgeCategory ?? "Unknown")
+                    // BUG-12: don't synthesize an "Unknown" category bucket.
+                    .Where(p => !string.IsNullOrWhiteSpace(p.AgeCategory) &&
+                                !string.Equals(p.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase))
+                    .GroupBy(p => p.AgeCategory!)
                     .Select(c => new CategoryBreakdownItem
                     {
                         Category = c.Key,
                         Count = c.Count(),
-                        Finishers = finishers.Count(r => (r.AgeCategory ?? "Unknown") == c.Key)
+                        Finishers = finishers.Count(r => r.AgeCategory == c.Key)
                     })
                     .OrderBy(c => c.Category)
                     .ToList();

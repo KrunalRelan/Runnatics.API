@@ -12,11 +12,15 @@ namespace Runnatics.Data.EF.Config
                 v => v == null ? null : NormalizeGender(v),
                 v => v);
 
+        // NOTE: this runs on the WRITE side of the value converter, which EF Core ALSO applies to
+        // query parameters (e.g. `r.Gender == participant.Gender`). Throwing here turns any read,
+        // query, or save that touches a legacy/blank gender value (e.g. "Unknown") into a 500.
+        // So normalize the known values and pass anything else through unchanged instead of throwing.
         private static string NormalizeGender(string raw) => raw.ToUpperInvariant() switch
         {
             "M" or "MALE" => "M",
             "F" or "FEMALE" => "F",
-            _ => throw new ArgumentException($"Invalid gender value: '{raw}'. Only M/F accepted.")
+            _ => raw
         };
 
         public void Configure(EntityTypeBuilder<Participant> builder)

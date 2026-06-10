@@ -87,9 +87,26 @@ namespace Runnatics.Services
                     ? publishedRaces.FirstOrDefault(r => r.Title.Equals(race, StringComparison.OrdinalIgnoreCase))
                     : null;
 
+                // BUG-07: a race was requested but did not resolve to a published race (typo, unpublished,
+                // title mismatch). Return no results rather than falling through to an unfiltered all-races
+                // query, which would re-introduce the cross-race leak.
+                if (!string.IsNullOrEmpty(race) && selectedRace == null)
+                {
+                    return new PublicResultsResponseDto
+                    {
+                        IsPublished = true,
+                        Results = [],
+                        Races = publishedRaces.Select(r => r.Title).ToList(),
+                        Page = page,
+                        PageSize = pageSize,
+                        TotalCount = 0,
+                        LeaderboardSettings = await GetEffectivePublicLeaderboardSettingsAsync(eventEntity.Id, null)
+                    };
+                }
+
                 var leaderboardSettings = await GetEffectivePublicLeaderboardSettingsAsync(eventEntity.Id, selectedRace?.Id);
 
-                var results = await GetPublicResultsAsync(eventEntity.Id, race, q, gender, page, pageSize);
+                var results = await GetPublicResultsAsync(eventEntity.Id, selectedRace?.Id, q, gender, page, pageSize);
 
                 var raceSettingsMap = publishedRaces
                     .Where(r => r.RaceSettings != null)
@@ -144,7 +161,7 @@ namespace Runnatics.Services
                     return null;
 
                 var results = await GetPublicResultsAsync(
-                    eventEntity.Id, raceName: null, searchQuery: bib, gender: null, page: 1, pageSize: 10);
+                    eventEntity.Id, raceId: null, searchQuery: bib, gender: null, page: 1, pageSize: 10);
 
                 var match = results.FirstOrDefault(r =>
                     r.Participant?.BibNumber != null &&
@@ -960,7 +977,7 @@ namespace Runnatics.Services
 
         private async Task<DataResultsPagingList> GetPublicResultsAsync(
             int eventId,
-            string? raceName,
+            int? raceId,
             string? searchQuery,
             string? gender,
             int page,
@@ -988,8 +1005,11 @@ namespace Runnatics.Services
                         .ThenInclude(st => st.ToCheckpoint)
                     .AsNoTracking();
 
-                if (!string.IsNullOrWhiteSpace(raceName))
-                    query = query.Where(r => r.Race.Title == raceName);
+                // BUG-07: scope by RaceId, not Race.Title. Title matching (or no filter at all when a
+                // race wasn't resolved) merged participants across races and sorted them by per-race
+                // OverallRank, leaking a 5KM Rank-1 into the 10KM list.
+                if (raceId.HasValue)
+                    query = query.Where(r => r.RaceId == raceId.Value);
 
                 if (!string.IsNullOrWhiteSpace(searchQuery))
                     query = query.Where(r =>

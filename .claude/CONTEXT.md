@@ -185,6 +185,67 @@ _Use this section to log what each agent built during the current session._
 - **Builds**: `npm run build` ✅ 0 errors · `dotnet build` ✅ 0 errors.
 - **Re-trace**: TCP multi-tag → one row flagged then state cleared (no poisoning of later rows). USB rapid-scan → 2nd scan silently gated, row stays mappable; deliberate re-scan after window maps normally; first scan of session passes (ref starts at 0). **BUG-01 now FIXED.**
 
+### 2026-06-09 — Bug Fix Round 2 / Round 2 (BUG-04, BUG-05, BUG-07)
+
+- **Key finding**: the bulk pipeline (`RFIDImportService`) and `ResultsService` have TWO divergent implementations of split-time and result calculation. The pipeline (runs after every upload) used the wrong logic; the correct logic already existed in `ResultsService`. Fixes align the pipeline with the correct logic.
+
+- **BUG-04 (split/cumulative)** — `RFIDImportService.CreateSplitTimesFromNormalizedReadingsAsync`:
+  - Root cause: split creation ordered each participant's readings by `ChipTime`, so stored `SegmentTime` chained in clock order, while every display path orders by `Checkpoint.DistanceFromStart` and prefers the stored `SegmentTime` → segments didn't sum to the displayed cumulative when chip-time order ≠ distance order (missed checkpoints, loops, clock skew).
+  - Fix: order readings by `Checkpoint.DistanceFromStart` then `ChipTime` (both the main query and the per-participant re-sort). `SplitTimeMs` (cumulative) stays `ChipTime − raceStart`. Display unchanged.
+  - Decision (user): Cumulative = net-from-start-line (chip time); start row ~0. Display already does this — no display change needed.
+
+- **BUG-05 (DNF/Finished)** — `RFIDImportService.CalculateRaceResultsAsync`:
+  - Root cause: status keyed only on presence at the single max-distance finish checkpoint; `IsMandatory` ignored. (Correct rule already in `ResultsService.ComputeParticipantStatusAsync`.)
+  - Fix: load mandatory checkpoint ids (fallback = highest-distance checkpoint if none flagged); `Finished` = ReadNormalized covers ALL mandatory ids; `DNS` = no start reading; `DNF` = started but missing ≥1 mandatory. Finish time/ranking now from the highest mandatory checkpoint (`finishGateCheckpoint`), ranked by GunTime. Backward compatible when no mandatory flagged.
+
+- **BUG-07 (wrong participant in wrong race)** — `PublicResultsService.GetPublicResultsAsync`:
+  - Root cause: public Overall results filtered by `r.Race.Title` string (or not at all when no race selected) and sorted by per-race `OverallRank`, merging races so a 5KM Rank-1 leaked into the 10KM list. (Admin `GetLeaderboardAsync` and `GetPublicGroupedLeaderboardAsync` are correctly RaceId-scoped — not the leak.)
+  - Fix: changed signature to `int? raceId` and filter `r.RaceId == raceId.Value`; `GetPublicEventResultsAsync` passes the resolved `selectedRace?.Id`; bib-lookup keeps `raceId: null` (intentional cross-race bib search).
+  - Decision (user): public Overall page should use per-race tabs (each scoped by RaceId), Male/Female split, Overall section before Age Category — primarily a FRONTEND change, still pending in the UI.
+
+- **Stale-data audit (race move, `ParticipantImportService.UpdateParticipantExtendedAsync`)**: race reassignment correctly migrates Results/SplitTimes/ReadNormalized/ChipAssignment to the new participant, sets `Results.RaceId → target`, recalcs both races' ranks, soft-deletes the old participant. **No orphaned rows remain under the old RaceId** → not a BUG-07 cause.
+  - ⚠️ **Flagged for BUG-06 (not fixed here)**: migrated `SplitTimes`/`ReadNormalized` keep their **source-race `CheckpointId`**, so after a move the timing data references the wrong race's checkpoints (orphaned) → moved participant shows missing splits / wrong status in the new race. Needs checkpoint remapping by distance — belongs to BUG-06 data-transfer scope.
+
+- **Files modified**: `RFIDImportService.cs` (BUG-04 + BUG-05), `PublicResultsService.cs` (BUG-07).
+- **Build**: `dotnet build` ✅ 0 errors.
+- **Pending**: BUG-07 frontend (race tabs / M-F split / section order); BUG-06 checkpoint-remap on race move.
+
+### 2026-06-09 — REVIEW + VERIFY findings (BUG-04, BUG-05, BUG-07)
+
+- **Result: PASS for all traced scenarios** (`dotnet build` ✅ 0 errors). Splits 0/5/10/21.1 chain correctly and sum to cumulative; missed-mandatory → DNF; missed non-mandatory → Finished; public 10 KM page shows only 10 KM. No DTO changes; per-participant reprocess + admin leaderboard unaffected (now consistent with the bulk pipeline).
+- **🟠 FLAW I introduced (BUG-07 edge case), NOT yet fixed** — `PublicResultsService.GetPublicEventResultsAsync` (~line 86-92): when a race title is supplied but does NOT resolve to a published race, `selectedRace` is null → `selectedRace?.Id` null → `GetPublicResultsAsync` applies no race filter → returns ALL races merged (re-introducing the cross-race leak). Old `Race.Title == raceName` returned empty in that case. Recommended fix: when `race` is non-empty but `selectedRace == null`, short-circuit to empty published results. Happy path (valid title) is correct.
+- **Edge cases verified safe**: `DistanceFromStart` is non-nullable `decimal` (no NULL ordering risk); `IsMandatory` non-nullable bool; zero-checkpoints guarded (Failed) before mandatory logic; `GetPublicResultByBibAsync` keeps `raceId: null` (intentional cross-race bib search).
+- **Pre-existing risks (NOT introduced, flagging only)**: (1) if every checkpoint is a child (`ParentDeviceId` set), `parentCheckpoints.First()` in `CalculateRaceResultsAsync` throws; (2) within a single batch, two readings at the same checkpoint can create duplicate `SplitTimes` rows (dedup key only checks pre-existing DB rows).
+- **✅ BUG-07 unresolved-race flaw FIXED**: `GetPublicEventResultsAsync` now short-circuits to an empty published result set when `race` is non-empty but `selectedRace == null` (race not found / unpublished), instead of falling through to an unfiltered all-races query. Happy path (valid title → filter by RaceId) and no-race-selected path (race empty → all races, backward compat) unchanged. `dotnet build` ✅ 0 errors.
+
+### 2026-06-09 — Bug Fix Round 2 / Round 3 (BUG-06, BUG-14)
+
+- **BUG-06 (race-category change — data transfer + reprocess)** — `ParticipantImportService.UpdateParticipantExtendedAsync` race-move block:
+  - Injected `IRFIDImportService` into `ParticipantImportService` (no circular dep — RFIDImportService doesn't reference it; both already registered in Program.cs 229/234).
+  - Build a `sourceCheckpointId → targetCheckpointId` map by `DistanceFromStart` (Name tiebreak) before the move transaction.
+  - Inside the transaction: **soft-delete** the migrated `SplitTimes` (rebuilt later); reassign `ReadNormalized` to the new participant AND **remap `CheckpointId`** to the target race's equivalent; readings with no target equivalent are **soft-deleted**. Kept old-race rank recalc; removed the redundant target-race rank recalc.
+  - After the transaction commits (not nested): call `_rfidImportService.CreateSplitTimesFromNormalizedReadingsAsync` + `CalculateRaceResultsAsync` for the **target race** (encrypted `participant.EventId` + encrypted `targetRaceId`) → rebuilds splits against the target's gun start and recomputes mandatory-aware status/ranks. Reprocess failures are logged, not fatal (the move already committed).
+  - Decisions (user): full reprocess via the pipeline; soft-delete orphaned readings; reprocess TARGET race only.
+  - "Process Result" button already exists (UI + `ProcessParticipantResultAsync`) — no new endpoint.
+
+- **BUG-14 (manual time edit)**:
+  - **Backend guard** (`ResultsService.RecordManualTimeAsync`): if `race.IsTimed` and the participant has no active `ChipAssignment` (`UnassignedAt == null && IsActive && !IsDeleted`) → set `ErrorMessage` ("Map an EPC chip… before recording a manual time for a timed race.") and return null (no throw). Applies to ALL checkpoints.
+  - **Controller** (`RFIDController.RecordManualTime`): added `ErrorMessage.Contains("EPC")` to the BadRequest branch so the guard returns 400 (not 500); the UI already surfaces `error.message` in the snackbar.
+  - **DTO** (`CheckpointTimeInfo`): added encrypted `CheckpointId`, populated in `ResultsService.LoadCheckpointTimesAsync` (loops over every active race checkpoint) — gives the UI an addressable id for checkpoints with no split.
+  - **UI** (`ParticipantDetail.tsx` + `CheckpointTime.ts` model): the splits/manual-time table now iterates the full `participant.checkpointTimes` list (merging the matching split by name) instead of `participant.splitTimes`. Every existing checkpoint — including missed ones and newly created ones — now renders an editable manual-time row keyed by the encrypted `checkpointId`. Satisfies "works for all checkpoints" + "auto-activates when a checkpoint is created". EPC-guard error shows via the existing snackbar.
+
+- **Files modified**: `ParticipantImportService.cs`, `ResultsService.cs`, `RFIDController.cs`, `CheckpointTimeInfo.cs`, `ParticipantDetail.tsx`, `models/participants/CheckpointTime.ts`.
+- **Builds**: `dotnet build` ✅ 0 errors · `npm run build` ✅ 0 errors.
+- **Pending (still open from earlier rounds)**: BUG-07 frontend (race tabs / M-F split / section order).
+
+### 2026-06-09 — REVIEW + VERIFY findings (BUG-06, BUG-14)
+
+- **Result: PASS.** `dotnet build` ✅ 0 errors · `npm run build` ✅ 0 errors. No blocking flaws.
+- **BUG-06 verified**: 21.1KM→10KM move soft-deletes 15/21.1km readings (no target equivalent), remaps 0/5/10km to new participant + new CheckpointId; exact-distance match only (different distances drop their readings, per approved design); DI of IRFIDImportService is acyclic; SplitTimes soft-delete uses correct audit pattern; ReadNormalized reassignment sets ParticipantId=newParticipant.Id AND remapped CheckpointId.
+- **BUG-06 limitation (documented, acceptable)**: the post-commit reprocess (`CreateSplitTimes`/`CalculateRaceResults`) returns `Status="Failed"` rather than throwing, so a reprocess failure can't roll back the committed move — it leaves the moved participant with remapped readings but stale/empty splits+ranks, recoverable via the existing "Process Result" button (logged as warning).
+- **BUG-14 verified**: Timed + no chip → 400 with the EPC message in the snackbar; Timed + chip → succeeds; Non-timed → guard skipped; zero checkpoints → empty table (no crash); encrypted CheckpointId decrypted in the service, encrypted in the service. Normal (no race-change) update path unaffected; `CheckpointTimeInfo`/`CheckpointTime` change is additive (only one constructor site).
+- **BUG-14 limitation (pre-existing, not introduced)**: split↔checkpoint merge is by checkpoint NAME, so loop races with duplicate checkpoint names could mis-attach a split row. Same approach as the prior code.
+
 <!--
 FORMAT:
 ### [Date] — [Agent] — [Feature/Task]

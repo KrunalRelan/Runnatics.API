@@ -977,6 +977,7 @@ namespace Runnatics.Services
             {
                 var info = new CheckpointTimeInfo
                 {
+                    CheckpointId = _encryptionService.Encrypt(checkpoint.Id.ToString()),
                     CheckpointName = checkpoint.Name ?? $"CP {checkpoint.DistanceFromStart}",
                     DistanceKm = checkpoint.DistanceFromStart
                 };
@@ -1425,6 +1426,25 @@ namespace Runnatics.Services
                 {
                     ErrorMessage = "Race not found or Race.StartTime is not configured. Cannot compute chip time.";
                     return null;
+                }
+
+                // BUG-14: for a Timed race, manual time must not be allowed unless the participant has an
+                // EPC chip mapped (an active ChipAssignment). Applies to every checkpoint.
+                if (race.IsTimed)
+                {
+                    var hasEpcMapped = await _repository.GetRepository<ChipAssignment>()
+                        .GetQuery(ca => ca.ParticipantId == decryptedParticipantId
+                                     && ca.UnassignedAt == null
+                                     && ca.AuditProperties.IsActive
+                                     && !ca.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .AnyAsync();
+
+                    if (!hasEpcMapped)
+                    {
+                        ErrorMessage = "Map an EPC chip to this participant before recording a manual time for a timed race.";
+                        return null;
+                    }
                 }
 
                 // Load all race checkpoints ordered by distance (start → finish)

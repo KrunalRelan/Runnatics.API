@@ -433,7 +433,8 @@ namespace Runnatics.Api.Controller
                     return NotFound(response);
 
                 if (_resultsService.ErrorMessage?.Contains("invalid") == true ||
-                    _resultsService.ErrorMessage?.Contains("after race start") == true)
+                    _resultsService.ErrorMessage?.Contains("after race start") == true ||
+                    _resultsService.ErrorMessage?.Contains("EPC") == true)
                     return BadRequest(response);
 
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);

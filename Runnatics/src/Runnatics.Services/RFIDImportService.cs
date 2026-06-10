@@ -2335,6 +2335,17 @@ namespace Runnatics.Services
                     startCheckpoint.Id, startCheckpoint.DistanceFromStart,
                     finishCheckpoint.Id, finishCheckpoint.DistanceFromStart);
 
+                // BUG-05: "Finished" requires detection at ALL mandatory checkpoints — not just the
+                // finish line. Fall back to the highest-distance checkpoint as the gate when none are
+                // flagged mandatory. Mirrors ResultsService.ComputeParticipantStatusAsync.
+                var mandatoryCheckpoints = checkpoints.Where(cp => cp.IsMandatory).ToList();
+                var mandatoryCheckpointIds = mandatoryCheckpoints.Count > 0
+                    ? mandatoryCheckpoints.Select(cp => cp.Id).ToHashSet()
+                    : new HashSet<int> { finishCheckpoint.Id };
+                var finishGateCheckpoint = mandatoryCheckpoints.Count > 0
+                    ? mandatoryCheckpoints.OrderByDescending(cp => cp.DistanceFromStart).First()
+                    : finishCheckpoint;
+
                 // Get ALL registered participants for this race
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
                 var allParticipants = await participantRepo.GetQuery(p =>
@@ -2364,19 +2375,32 @@ namespace Runnatics.Services
                     .Select(r => r.ParticipantId)
                     .ToHashSet();
 
-                // Get normalized readings at FINISH checkpoint — to determine Finished vs DNF
+                // Get normalized readings at the FINISH GATE (highest mandatory checkpoint) — used for
+                // finish time and ranking. Reaching the gate alone no longer implies "Finished".
                 var finishReadings = await normalizedRepo.GetQuery(rn =>
                     rn.EventId == decryptedEventId &&
-                    rn.CheckpointId == finishCheckpoint.Id &&
+                    rn.CheckpointId == finishGateCheckpoint.Id &&
                     rn.AuditProperties.IsActive &&
                     !rn.AuditProperties.IsDeleted)
                     .Include(rn => rn.Participant)
                     .OrderBy(rn => rn.GunTime ?? long.MaxValue)
                     .ToListAsync();
 
-                var participantsWithFinish = finishReadings
-                    .Select(r => r.ParticipantId)
-                    .ToHashSet();
+                // BUG-05: detections at ALL mandatory checkpoints — the source of truth for Finished.
+                var mandatoryIdList = mandatoryCheckpointIds.ToList();
+                var participantIdList = allParticipants.Select(p => p.Id).ToList();
+                var mandatoryDetections = await normalizedRepo.GetQuery(rn =>
+                    rn.EventId == decryptedEventId &&
+                    participantIdList.Contains(rn.ParticipantId) &&
+                    mandatoryIdList.Contains(rn.CheckpointId) &&
+                    rn.AuditProperties.IsActive &&
+                    !rn.AuditProperties.IsDeleted)
+                    .Select(rn => new { rn.ParticipantId, rn.CheckpointId })
+                    .ToListAsync();
+
+                var mandatoryDetectionsByParticipant = mandatoryDetections
+                    .GroupBy(d => d.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.Select(d => d.CheckpointId).ToHashSet());
 
                 // =====================================================================
                 // Validate result times before processing
@@ -2427,8 +2451,12 @@ namespace Runnatics.Services
 
                 foreach (var participant in allParticipants)
                 {
-                    if (participantsWithFinish.Contains(participant.Id))
+                    var covered = mandatoryDetectionsByParticipant.GetValueOrDefault(participant.Id, []);
+                    bool allMandatoryCovered = mandatoryCheckpointIds.All(id => covered.Contains(id));
+
+                    if (allMandatoryCovered)
                     {
+                        // Detected at every mandatory checkpoint → Finished
                         finishedParticipantIds.Add(participant.Id);
                     }
                     else if (!participantsWithStart.Contains(participant.Id))
@@ -2438,7 +2466,7 @@ namespace Runnatics.Services
                     }
                     else
                     {
-                        // Has start but no finish → Did Not Finish
+                        // Started but missed ≥1 mandatory checkpoint → Did Not Finish
                         dnfParticipantIds.Add(participant.Id);
                     }
                 }
@@ -4418,7 +4446,10 @@ namespace Runnatics.Services
                     !rn.AuditProperties.IsDeleted)
                     .Include(rn => rn.Checkpoint)
                     .Include(rn => rn.Participant)  // Need to include for RaceId filter
+                    // BUG-04: order by checkpoint DISTANCE (then time) so segment chaining matches
+                    // the distance-ordered display. Cumulative (SplitTimeMs) stays time-derived.
                     .OrderBy(rn => rn.ParticipantId)
+                    .ThenBy(rn => rn.Checkpoint.DistanceFromStart)
                     .ThenBy(rn => rn.ChipTime)
                     .ToListAsync();
 
@@ -4459,7 +4490,13 @@ namespace Runnatics.Services
                 foreach (var participantGroup in readingsByParticipant)
                 {
                     var participantId = participantGroup.Key;
-                    var participantReadings = participantGroup.OrderBy(r => r.ChipTime).ToList();
+                    // BUG-04: chain segments in checkpoint-distance order (tiebreak by time) so each
+                    // SegmentTime is the true interval between consecutive checkpoints, matching the
+                    // distance-ordered display where segments must sum to the cumulative.
+                    var participantReadings = participantGroup
+                        .OrderBy(r => r.Checkpoint.DistanceFromStart)
+                        .ThenBy(r => r.ChipTime)
+                        .ToList();
 
                     // Track previous checkpoint for segment calculations
                     int? previousCheckpointId = null;

@@ -7,6 +7,12 @@ namespace Runnatics.Models.Client.Responses.Participants
     public class CheckpointTimeInfo
     {
         /// <summary>
+        /// Encrypted checkpoint id — lets the UI record a manual time at this checkpoint
+        /// even when the participant has no detection/split here yet.
+        /// </summary>
+        public string? CheckpointId { get; set; }
+
+        /// <summary>
         /// Checkpoint name (e.g., "Start", "5 Km", "Finish")
         /// </summary>
         public string? CheckpointName { get; set; }

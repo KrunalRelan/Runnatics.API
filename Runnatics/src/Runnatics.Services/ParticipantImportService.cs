@@ -22,12 +22,14 @@ namespace Runnatics.Services
         IMapper mapper,
         ILogger<ParticipantImportService> logger,
         IUserContextService userContext,
-        IEncryptionService encryptionService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
+        IEncryptionService encryptionService,
+        IRFIDImportService rfidImportService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
     {
         protected readonly IMapper _mapper = mapper;
         private readonly ILogger<ParticipantImportService> _logger = logger;
         private readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
+        private readonly IRFIDImportService _rfidImportService = rfidImportService;
 
         public async Task<ParticipantImportResponse> UploadParticipantsCsvAsync(string eventId, ParticipantImportRequest request)
         {
@@ -2158,6 +2160,42 @@ namespace Runnatics.Services
                             return null;
                         }
 
+                        // BUG-06: build a source→target checkpoint map by DistanceFromStart (Name as
+                        // tiebreak). Checkpoints are per-race rows, so migrated readings must be remapped
+                        // to the target race's equivalent checkpoints; readings with no equivalent are
+                        // soft-deleted (they have no meaning in the new race).
+                        var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                        var sourceCheckpoints = await checkpointRepo.GetQuery(c =>
+                            c.RaceId == decryptedRaceId &&
+                            c.EventId == participant.EventId &&
+                            c.AuditProperties.IsActive &&
+                            !c.AuditProperties.IsDeleted)
+                            .AsNoTracking()
+                            .ToListAsync();
+                        var targetCheckpoints = await checkpointRepo.GetQuery(c =>
+                            c.RaceId == targetRaceId &&
+                            c.EventId == participant.EventId &&
+                            c.AuditProperties.IsActive &&
+                            !c.AuditProperties.IsDeleted)
+                            .AsNoTracking()
+                            .ToListAsync();
+
+                        var checkpointMap = new Dictionary<int, int>();
+                        foreach (var sc in sourceCheckpoints)
+                        {
+                            var candidates = targetCheckpoints
+                                .Where(tc => tc.DistanceFromStart == sc.DistanceFromStart)
+                                .ToList();
+                            var match = candidates.Count switch
+                            {
+                                0 => null,
+                                1 => candidates[0],
+                                _ => candidates.FirstOrDefault(tc => tc.Name == sc.Name) ?? candidates[0]
+                            };
+                            if (match != null)
+                                checkpointMap[sc.Id] = match.Id;
+                        }
+
                         // Soft-delete current and insert in new race
                         var newParticipant = new Models.Data.Entities.Participant
                         {
@@ -2217,7 +2255,9 @@ namespace Runnatics.Services
                             if (oldResults.Count > 0)
                                 await resultsRepo.UpdateRangeAsync(oldResults);
 
-                            // 2. Reassign SplitTimes rows to the new participant
+                            // 2. Soft-delete the participant's SplitTimes — they reference the source
+                            //    race's checkpoints and are time-relative to the source race's gun start.
+                            //    They are rebuilt for the target race by the post-commit reprocess.
                             var oldSplits = await splitTimesRepo.GetQuery(st =>
                                 st.ParticipantId == decryptedParticipantId &&
                                 st.AuditProperties.IsActive &&
@@ -2226,14 +2266,17 @@ namespace Runnatics.Services
 
                             foreach (var split in oldSplits)
                             {
-                                split.ParticipantId = newParticipant.Id;
+                                split.AuditProperties.IsActive = false;
+                                split.AuditProperties.IsDeleted = true;
                                 split.AuditProperties.UpdatedBy = userId;
                                 split.AuditProperties.UpdatedDate = DateTime.UtcNow;
                             }
                             if (oldSplits.Count > 0)
                                 await splitTimesRepo.UpdateRangeAsync(oldSplits);
 
-                            // 3. Reassign ReadNormalized rows to the new participant
+                            // 3. Reassign ReadNormalized rows to the new participant and REMAP their
+                            //    CheckpointId to the target race's equivalent checkpoint. Readings whose
+                            //    source checkpoint has no target equivalent are soft-deleted.
                             var oldReadings = await normalizedRepo.GetQuery(r =>
                                 r.ParticipantId == decryptedParticipantId &&
                                 r.EventId == participant.EventId &&
@@ -2243,9 +2286,21 @@ namespace Runnatics.Services
 
                             foreach (var reading in oldReadings)
                             {
-                                reading.ParticipantId = newParticipant.Id;
-                                reading.AuditProperties.UpdatedBy = userId;
-                                reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                                if (checkpointMap.TryGetValue(reading.CheckpointId, out var mappedCheckpointId))
+                                {
+                                    reading.ParticipantId = newParticipant.Id;
+                                    reading.CheckpointId = mappedCheckpointId;
+                                    reading.AuditProperties.UpdatedBy = userId;
+                                    reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                                }
+                                else
+                                {
+                                    // No equivalent checkpoint in the target race → soft-delete
+                                    reading.AuditProperties.IsActive = false;
+                                    reading.AuditProperties.IsDeleted = true;
+                                    reading.AuditProperties.UpdatedBy = userId;
+                                    reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                                }
                             }
                             if (oldReadings.Count > 0)
                                 await normalizedRepo.UpdateRangeAsync(oldReadings);
@@ -2267,14 +2322,25 @@ namespace Runnatics.Services
                             if (oldChipAssignments.Count > 0)
                                 await chipAssignmentRepo.UpdateRangeAsync(oldChipAssignments);
 
-                            // 5. Recalculate ranks for old race (participant removed)
+                            // 5. Recalculate ranks for old race (participant removed). The TARGET race is
+                            //    fully reprocessed after this transaction commits (step 7 below).
                             await RecalculateRaceRanksAsync(participant.EventId, decryptedRaceId, userId);
-
-                            // 6. Recalculate ranks for new race (participant added)
-                            await RecalculateRaceRanksAsync(participant.EventId, targetRaceId, userId);
                         });
 
-                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; results, splits, readings, and chip assignments migrated", participantId, decryptedRaceId, targetRaceId);
+                        // 7. Reprocess the TARGET race only: rebuild split times from the remapped
+                        //    ReadNormalized rows (against the target race's gun start) and recompute
+                        //    mandatory-aware status + rankings. Runs after the move transaction commits
+                        //    so the pipeline's own transactions are not nested.
+                        var encEventId = _encryptionService.Encrypt(participant.EventId.ToString());
+                        var encTargetRaceId = _encryptionService.Encrypt(targetRaceId.ToString());
+                        var splitResult = await _rfidImportService.CreateSplitTimesFromNormalizedReadingsAsync(encEventId, encTargetRaceId);
+                        if (splitResult.Status == "Failed")
+                            _logger.LogWarning("Target-race split rebuild failed after move of participant {ParticipantId} to Race {NewRace}: {Error}", participantId, targetRaceId, splitResult.ErrorMessage);
+                        var resultsResult = await _rfidImportService.CalculateRaceResultsAsync(encEventId, encTargetRaceId);
+                        if (resultsResult.Status == "Failed")
+                            _logger.LogWarning("Target-race results recalculation failed after move of participant {ParticipantId} to Race {NewRace}", participantId, targetRaceId);
+
+                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; readings remapped, splits/results reprocessed for target race", participantId, decryptedRaceId, targetRaceId);
                         return MapToSearchResponse(newParticipant);
                     }
                 }

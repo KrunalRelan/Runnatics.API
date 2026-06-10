@@ -176,6 +176,15 @@ _Use this section to log what each agent built during the current session._
 - **✅ BUG-03 code FIXED** (duplicate AutoMapper map removed; error surfaced) but **still BLOCKED on running `TestingFeedback_Round1_SchemaChanges_20260515.sql`** (adds `IsMandatory`).
 - **No files were modified during this review phase** (CLAUDE.md Rule 4). Blockers 1+2 and Risk 3 are pending a follow-up EXECUTE pass.
 
+### 2026-06-09 — EXECUTE pass 2 — BUG-01 review fixes (Blockers 1+2, Risk 3)
+
+- **FIX 1 (Blocker 1 — TDZ crash)**: Moved `useBibMappingHub()` + its `useEffect` in `BibMapping.tsx` to BELOW the `focusedRowId` useState declaration (now at lines 163/168-178). The deps array no longer reads `focusedRowId` before initialization → no more render crash.
+- **FIX 2 (Blocker 2 — stale multipleEpcEpcs)**: Added `clearMultipleEpc()` to `useBibMappingHub` (sets `multipleEpcEpcs` back to null). The `BibMapping.tsx` effect now calls `clearMultipleEpc()` immediately after consuming the event, so a later focus change can't re-fire it. Also reset `multipleEpcEpcs` to null in the hub's `onreconnected` handler.
+- **FIX 3 (Risk 3 — sticky lockout)**: The 500ms USB lockout in `handleSubmit` now silently `return`s instead of calling `setMultipleEpcError`. It's a debounce gate, not an error state — the row stays mappable once the window expires. Removed the now-unused `setMultipleEpcError` from `handleSubmit`'s dep array (still used by the multi-EPC effect).
+- **Files modified**: `src/main/src/hooks/useBibMappingHub.ts`, `src/main/src/pages/admin/bibMapping/BibMapping.tsx` (BUG-01 scope only — BUG-02/03 files untouched).
+- **Builds**: `npm run build` ✅ 0 errors · `dotnet build` ✅ 0 errors.
+- **Re-trace**: TCP multi-tag → one row flagged then state cleared (no poisoning of later rows). USB rapid-scan → 2nd scan silently gated, row stays mappable; deliberate re-scan after window maps normally; first scan of session passes (ref starts at 0). **BUG-01 now FIXED.**
+
 <!--
 FORMAT:
 ### [Date] — [Agent] — [Feature/Task]

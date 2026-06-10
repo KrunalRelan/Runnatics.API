@@ -131,9 +131,22 @@ namespace Runnatics.Services
                             _debounceLock.Release();
                         }
 
-                        // Broadcast the best RSSI read for each EPC
-                        foreach (var (batchEpc, batchRssi) in batch)
+                        // Multiple tags in one debounce window → single event so the UI can reject the batch
+                        if (batch.Count > 1)
                         {
+                            var epcs = batch.Keys.ToArray();
+                            try
+                            {
+                                await _hubContext.Clients.All.SendAsync("MultipleEpcDetected", epcs, stoppingToken);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to broadcast MultipleEpcDetected ({Count} EPCs) via SignalR", epcs.Length);
+                            }
+                        }
+                        else
+                        {
+                            var (batchEpc, batchRssi) = batch.First();
                             try
                             {
                                 await _hubContext.Clients.All.SendAsync("EpcDetected", batchEpc, batchRssi, stoppingToken);

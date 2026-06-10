@@ -565,7 +565,8 @@ namespace Runnatics.Services
                 var pageSize = Math.Clamp(request.PageSize, 1, 1000);
 
                 var participants = await query
-                    .OrderBy(p => p.BibNumber)
+                    .OrderBy(p => p.BibNumber == null ? 0 : p.BibNumber.Length)
+                    .ThenBy(p => p.BibNumber)
                     .Skip((pageNumber - 1) * pageSize)
                     .Take(pageSize)
                     .AsNoTracking()

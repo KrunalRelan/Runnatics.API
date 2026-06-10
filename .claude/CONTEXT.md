@@ -135,6 +135,47 @@ _Use this section to log what each agent built during the current session._
   - BUG API-14: Performance hardening (Brotli/Gzip compression, output cache on public endpoints, WAF note in DEPLOYMENT.md)
   - Run `db/scripts/TestingFeedback_Round1_SchemaChanges_20260515.sql` against Azure SQL before deploying
 
+### 2026-06-09 — Bug Fix Round 2 (BUG-01, BUG-02, BUG-03)
+
+- **BUG-01: Multiple Tags Auto-Map**
+  - **API fix** (`RfidReaderService.cs`): When debounce batch fires with `Count > 1`, now sends single `MultipleEpcDetected(string[] epcs)` SignalR event instead of N individual `EpcDetected` events.
+  - **UI fixes**:
+    - `useBibMappingHub.ts`: Added `multipleEpcEpcs: string[] | null` state + `MultipleEpcDetected` handler.
+    - `useBibMappingRows.ts`: Added `setMultipleEpcError(participantId)` function — sets `status: 'error', isMultipleEpc: true` on a row. Added `override.isMultipleEpc` to rows memo so override takes precedence over server value.
+    - `BibMapping.tsx`: Wired up `useBibMappingHub`, watches `multipleEpcEpcs` → calls `setMultipleEpcError(focusedRowId)`. Added 500ms lockout on `handleSubmit` — if a second submission arrives within 500ms of the last successful map, it's rejected as multiple EPC (guards against USB keyboard reader rapid EPC1+Enter → EPC2+Enter pattern).
+
+- **BUG-02: BIB Numbers Not Sequential**
+  - Root cause: `OrderBy(p => p.BibNumber)` on string column → lexicographic sort ("1","10","11","2").
+  - Fixed ALL four sort locations with length-first approach: `.OrderBy(p => p.BibNumber == null ? 0 : p.BibNumber.Length).ThenBy(p => p.BibNumber)` (EF Core translates this to `ORDER BY CASE WHEN ... THEN 0 ELSE LEN(BibNumber) END, BibNumber`).
+  - Files modified: `BibMappingService.cs` (line 568), `ParticipantImportService.cs` (lines 1799, 475, 1987).
+
+- **BUG-03: Checkpoint Creation Generic Error**
+  - **Root cause #1**: Duplicate `CreateMap<CheckpointRequest, Checkpoint>()` in `AutoMapperMappingProfile.cs` — second registration (lines 421-427) overwrote the complete first one (363-374). Second was missing `AuditProperties`, `Device`, `ParentDevice` ignore rules. **Fix**: Removed the duplicate registration.
+  - **Root cause #2**: `CheckpointsService.Create` catch block set `ErrorMessage = "Error creating checkpoint."` with no details. **Fix**: Now sets `ErrorMessage = $"Error creating checkpoint: {ex.Message}"`.
+  - **⚠️ BLOCKING**: The most likely actual runtime failure is still `SqlException: Invalid column name 'IsMandatory'` because `db/scripts/TestingFeedback_Round1_SchemaChanges_20260515.sql` has NOT been run against Azure SQL. Run this script manually before testing checkpoint creation.
+
+- **Files modified**:
+  - `Runnatics.Services/RfidReaderService.cs`
+  - `Runnatics.Services/CheckpointsService.cs`
+  - `Runnatics.Services/Mappings/AutoMapperMappingProfile.cs`
+  - `Runnatics.Services/BibMappingService.cs`
+  - `Runnatics.Services/ParticipantImportService.cs`
+  - `src/main/src/hooks/useBibMappingHub.ts`
+  - `src/main/src/pages/admin/bibMapping/useBibMappingRows.ts`
+  - `src/main/src/pages/admin/bibMapping/BibMapping.tsx`
+
+### 2026-06-09 — REVIEW + VERIFY findings (Bug Fix Round 2)
+
+- **Result: FAIL.** Both `dotnet build` and `npm run build` pass (0 errors) but the build does NOT catch the headline defect.
+- **🔴 BLOCKER 1 (BUG-01, `BibMapping.tsx`)**: `useEffect` at lines 162-166 references `focusedRowId` in its dependency array, but `focusedRowId` (useState) is declared later at line 172. The deps array is evaluated during render → Temporal Dead Zone → `ReferenceError: Cannot access 'focusedRowId' before initialization`. **The BIB Mapping page crashes/white-screens on every mount.** Fix: move `useBibMappingHub()` + the effect below the `focusedRowId` declaration.
+- **🔴 BLOCKER 2 (BUG-01, `useBibMappingHub.ts` + `BibMapping.tsx`)**: `multipleEpcEpcs` is set on `MultipleEpcDetected` but never reset. Effect depends on `[multipleEpcEpcs, focusedRowId]`, so after one real multi-EPC event, every later focus change re-fires the effect and falsely flags the newly focused row as Multiple-EPC. Also does NOT reset on SignalR reconnect. Fix: expose `clearMultipleEpc()` from the hub and call it after consuming the event.
+- **🟡 RISK 3 (BUG-01)**: The 500ms lockout calls `setMultipleEpcError`, which sets `isMultipleEpc: true`. That row then renders a static badge with disabled input/skip and the override survives refetch (prune keeps `status:'error'`). A legitimate fast scan (~2/sec) permanently bricks the BIB with no UI recovery. Recommend transient `flashError` instead, or add a clear/retry affordance.
+- **🟡 RISK 4 (BUG-03, security)**: `CheckpointsController` returns `ErrorMessage` (now containing `ex.Message`) in the 500 body. SQL exceptions can leak table/column or server/instance names. Approved as-is, but consider gating raw `ex.Message` to non-prod.
+- **✅ BUG-01 server side correct** (`RfidReaderService.cs`): `batch.Count > 1` → single `MultipleEpcDetected`; SignalR typing matches client.
+- **✅ BUG-02 FIXED**: All 4 sort sites identical (`BibMappingService.cs:568`, `ParticipantImportService.cs:475/1800/1989`); verified `1,2,9,10,11,20,100` orders correctly. Minor: alphanumeric BIBs (`A1/A10/B2`) order by length-then-lexical (acceptable).
+- **✅ BUG-03 code FIXED** (duplicate AutoMapper map removed; error surfaced) but **still BLOCKED on running `TestingFeedback_Round1_SchemaChanges_20260515.sql`** (adds `IsMandatory`).
+- **No files were modified during this review phase** (CLAUDE.md Rule 4). Blockers 1+2 and Risk 3 are pending a follow-up EXECUTE pass.
+
 <!--
 FORMAT:
 ### [Date] — [Agent] — [Feature/Task]

@@ -418,14 +418,6 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.LastSeenAt, opt => opt.Ignore())
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore());
 
-            CreateMap<CheckpointRequest, Checkpoint>()
-                .ForMember(dest => dest.Id, opt => opt.Ignore())
-                .ForMember(dest => dest.EventId, opt => opt.Ignore())
-                .ForMember(dest => dest.RaceId, opt => opt.Ignore())
-                .ForMember(dest => dest.DeviceId, opt => opt.Ignore())
-                .ForMember(dest => dest.ParentDeviceId, opt => opt.Ignore())
-                .ForMember(dest => dest.IsMandatory, opt => opt.MapFrom(src => src.IsMandatory));
-
             // NOTE: Duplicate CreateMap<Checkpoint, CheckpointResponse> removed.
             // The consolidated mapping at line 349 already includes DeviceName and ParentDeviceName.
             // A second CreateMap for the same types causes AutoMapper to override the first (last-wins),

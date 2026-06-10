@@ -88,7 +88,7 @@ namespace Runnatics.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error creating checkpoint for EventId: {EventId} RaceId: {RaceId}", eventId, raceId);
-                ErrorMessage = "Error creating checkpoint.";
+                ErrorMessage = $"Error creating checkpoint: {ex.Message}";
                 return false;
             }
         }

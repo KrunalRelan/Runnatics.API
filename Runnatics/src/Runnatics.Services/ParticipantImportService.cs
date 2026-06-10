@@ -472,6 +472,7 @@ namespace Runnatics.Services
                 var orderedQuery = joinedQuery
                     .OrderBy(x => x.StatusOrder)
                     .ThenBy(x => x.GunTime ?? long.MaxValue)
+                    .ThenBy(x => x.Participant.BibNumber == null ? 0 : x.Participant.BibNumber.Length)
                     .ThenBy(x => x.Participant.BibNumber);
 
                 // Get total count for pagination
@@ -1796,7 +1797,8 @@ namespace Runnatics.Services
                     p.RaceId == decryptedRaceId &&
                     p.AuditProperties.IsActive &&
                     !p.AuditProperties.IsDeleted)
-                    .OrderBy(p => p.BibNumber)
+                    .OrderBy(p => p.BibNumber == null ? 0 : p.BibNumber.Length)
+                    .ThenBy(p => p.BibNumber)
                     .AsNoTracking()
                     .ToListAsync();
 
@@ -1984,6 +1986,7 @@ namespace Runnatics.Services
                     .Select(p => (Participant: p, Result: results.TryGetValue(p.Id, out var r) ? r : null))
                     .OrderBy(x => x.Result?.Status == "Finished" ? 0 : 1)
                     .ThenBy(x => x.Result?.NetTime ?? long.MaxValue)
+                    .ThenBy(x => x.Participant.BibNumber == null ? 0 : x.Participant.BibNumber.Length)
                     .ThenBy(x => x.Participant.BibNumber)
                     .ToList();
 

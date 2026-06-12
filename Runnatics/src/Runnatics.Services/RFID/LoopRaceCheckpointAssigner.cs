@@ -4,21 +4,24 @@ using Runnatics.Models.Data.Entities;
 namespace Runnatics.Services.RFID
 {
     /// <summary>
-    /// Loop race checkpoint assignment using turnaround-based algorithm.
+    /// Shared-device checkpoint assignment (N-checkpoint, pass-ordinal based).
     /// 
     /// 5-STEP ALGORITHM:
     /// ┌───────────────────────────────────────────────────────────────┐
     /// │ Step 1: Load Data (readings, checkpoints, device mappings)   │
     /// │ Step 2: Identify Turnaround (single-device checkpoint)       │
     /// │ Step 3: Calculate Turnaround Time per Participant            │
-    /// │ Step 4: Assign Checkpoints (turnaround ref → chronological)  │
+    /// │ Step 4: Assign Checkpoints (pass ordinal → ordered list)     │
     /// │ Step 5: Deduplicate (Start=LAST, Others=EARLIEST)            │
     /// └───────────────────────────────────────────────────────────────┘
-    /// 
-    /// For loop races where a single device serves two checkpoints (e.g., Start + Finish),
-    /// this uses the turnaround checkpoint as a reference point to determine outbound vs return.
-    /// Devices in the same shared group (e.g., Device 11 & 12 both at Start/Finish)
-    /// share a single chronological rank counter for fallback assignment.
+    ///
+    /// A device that serves N checkpoints (N >= 2) holds them ordered by DistanceFromStart;
+    /// each pass-gap-separated pass maps by ordinal into that list — Sequential (point-to-point,
+    /// extra passes clamp to last) or Cyclic (loops, modulo), driven by RaceSettings.HasLoops.
+    /// N=2 out-and-back is the special case identical to the legacy outbound/return behavior;
+    /// turnaround reference and chronological group rank remain as fallbacks when no pass
+    /// ordinal was precomputed. Devices in the same shared group (parent + child at the same
+    /// location) share a single chronological rank counter and pass counter.
     /// </summary>
     public class LoopRaceCheckpointAssigner
     {
@@ -32,6 +35,22 @@ namespace Runnatics.Services.RFID
         #region Data Models
 
         /// <summary>
+        /// How a pass ordinal maps to a checkpoint index for a shared (multi-checkpoint) device.
+        /// Sequential: point-to-point — pass N → checkpoint[min(N, count-1)] (extra passes clamp to last).
+        /// Cyclic: loop with reused checkpoint rows — pass N → checkpoint[N % count] (wraps).
+        /// Driven by RaceSettings.HasLoops (true → Cyclic, false/null → Sequential).
+        /// NOTE: true cyclic persistence is limited downstream — Step 5 dedup and Phase 2
+        /// normalization keep ONE reading per (participant, checkpoint). Loop races should
+        /// model laps as DISTINCT checkpoint rows (GenerateLoopCheckpoints), which Sequential
+        /// handles end-to-end. See .claude/design/ISSUE-1-checkpoint-assignment-redesign.md.
+        /// </summary>
+        public enum AssignmentMode
+        {
+            Sequential,
+            Cyclic
+        }
+
+        /// <summary>
         /// Turnaround checkpoint config — the single device that maps to exactly one checkpoint.
         /// </summary>
         public class TurnaroundConfig
@@ -43,21 +62,53 @@ namespace Runnatics.Services.RFID
         }
 
         /// <summary>
-        /// Shared device mapping — a device that serves both an outbound and return checkpoint.
+        /// One checkpoint position in a shared device's ordered checkpoint list.
+        /// </summary>
+        public class CheckpointSlot
+        {
+            public int CheckpointId { get; set; }
+            public decimal Distance { get; set; }
+            public string Name { get; set; } = string.Empty;
+        }
+
+        /// <summary>
+        /// Shared device mapping — a device that serves N checkpoints (N >= 2) along the course.
+        /// Checkpoints are ordered by DistanceFromStart; the pass ordinal indexes into the list
+        /// (clamped for Sequential, modulo for Cyclic).
+        /// e.g., 7th GGHM 21KM: Box-1 → [Start 0km, 10.5km, Finish 21.1km] (N=3, Sequential).
         /// </summary>
         public class SharedDeviceMapping
         {
             public int DeviceId { get; set; }
-            public int OutboundCheckpointId { get; set; }
-            public int ReturnCheckpointId { get; set; }
-            public decimal OutboundDistance { get; set; }
-            public decimal ReturnDistance { get; set; }
+
+            /// <summary>Ordered by DistanceFromStart asc (tiebreak Name, then Id). Index = pass ordinal target.</summary>
+            public List<CheckpointSlot> Checkpoints { get; set; } = new();
+
+            public AssignmentMode Mode { get; set; } = AssignmentMode.Sequential;
+
             /// <summary>
-            /// Group key shared across parent + child devices at the same location.
-            /// e.g., "StartFinish" for Device 11 (Box 15) and Device 12 (Box 16).
-            /// Devices in the same group share a single chronological rank counter.
+            /// Group key shared across parent + child devices at the same location(s).
+            /// Devices in the same group share a single chronological rank counter
+            /// and a single pass counter.
             /// </summary>
             public string SharedGroupKey { get; set; } = string.Empty;
+
+            public int Count => Checkpoints.Count;
+
+            public bool StartsAtZero => Checkpoints.Count > 0 && Checkpoints[0].Distance == 0;
+
+            /// <summary>
+            /// Maps a 0-based pass ordinal to a checkpoint index.
+            /// Sequential clamps extra passes to the last checkpoint; Cyclic wraps.
+            /// </summary>
+            public int IndexForPass(int pass)
+            {
+                if (Checkpoints.Count == 0)
+                    return 0;
+                return Mode == AssignmentMode.Cyclic
+                    ? ((pass % Checkpoints.Count) + Checkpoints.Count) % Checkpoints.Count
+                    : Math.Min(Math.Max(pass, 0), Checkpoints.Count - 1);
+            }
         }
 
         /// <summary>
@@ -71,9 +122,10 @@ namespace Runnatics.Services.RFID
             public string? DeviceSerial { get; set; }
             public DateTime ReadTimeUtc { get; set; }
             /// <summary>
-            /// Pre-computed from pass index: true = outbound (Start), false = return (Finish), null = use turnaround/chronological fallback.
+            /// Pre-computed 0-based pass ordinal within the reading's shared group
+            /// (pass-gap separated). null = no override (use turnaround/chronological fallback).
             /// </summary>
-            public bool? IsOutboundOverride { get; set; }
+            public int? PassIndexOverride { get; set; }
         }
 
         /// <summary>
@@ -137,16 +189,19 @@ namespace Runnatics.Services.RFID
         #region Step 2b: Identify Shared Devices
 
         /// <summary>
-        /// STEP 2b: Build shared device mappings — devices mapped to 2 checkpoints (outbound + return).
-        /// Assigns a SharedGroupKey so that parent + child devices at the same location share ranks.
-        /// 
-        /// Example grouping:
-        ///   Device 11 (Box 15) → Start/Finish   → SharedGroupKey = "StartFinish"
-        ///   Device 12 (Box 16) → Start/Finish   → SharedGroupKey = "StartFinish"  (child of 11)
-        ///   Device 13 (Box 19) → 5KM/16.1KM     → SharedGroupKey = "5Km16Km"
-        ///   Device 14 (Box 24) → 5KM/16.1KM     → SharedGroupKey = "5Km16Km"      (child of 13)
+        /// STEP 2b: Build shared device mappings — devices mapped to N checkpoints (N >= 2),
+        /// ordered by DistanceFromStart. Assigns a SharedGroupKey so that parent + child
+        /// devices at the same location(s) share ranks and pass counters.
+        ///
+        /// Example grouping (out-and-back, N=2):
+        ///   Device 11 (Box 15) → Start/Finish   → SharedGroupKey = "Start_Finish"
+        ///   Device 12 (Box 16) → Start/Finish   → SharedGroupKey = "Start_Finish"  (child of 11)
+        /// Example (point-to-point reuse, N=3 — 7th GGHM):
+        ///   Device 1 (Box 01)  → Start/10.5KM/Finish → SharedGroupKey = "Start_10.5KM_Finish"
         /// </summary>
-        public Dictionary<int, SharedDeviceMapping> IdentifySharedDevices(List<Checkpoint> checkpoints)
+        public Dictionary<int, SharedDeviceMapping> IdentifySharedDevices(
+            List<Checkpoint> checkpoints,
+            AssignmentMode mode = AssignmentMode.Sequential)
         {
             var result = new Dictionary<int, SharedDeviceMapping>();
 
@@ -156,7 +211,7 @@ namespace Runnatics.Services.RFID
             var primarySharedGroups = checkpoints
                 .Where(cp => cp.DeviceId > 0 && (!cp.ParentDeviceId.HasValue || cp.ParentDeviceId == 0))
                 .GroupBy(cp => cp.DeviceId)
-                .Where(g => g.Count() == 2)
+                .Where(g => g.Count() >= 2)
                 .ToList();
 
             // Map: DeviceId → SharedGroupKey
@@ -165,28 +220,26 @@ namespace Runnatics.Services.RFID
 
             foreach (var group in primarySharedGroups)
             {
-                var cps = group.OrderBy(cp => cp.DistanceFromStart).ToList();
-                var (outbound, returnCp) = ResolveOutboundReturn(cps[0], cps[1], group.Key);
+                var slots = OrderCheckpointsByDistance(group, group.Key);
 
                 // Generate group key from checkpoint names
-                var groupKey = GenerateGroupKey(outbound, returnCp, groupIndex++);
+                var groupKey = GenerateGroupKey(slots, groupIndex++);
                 deviceToGroupKey[group.Key] = groupKey;
 
                 result[group.Key] = new SharedDeviceMapping
                 {
                     DeviceId = group.Key,
-                    OutboundCheckpointId = outbound.Id,
-                    ReturnCheckpointId = returnCp.Id,
-                    OutboundDistance = outbound.DistanceFromStart,
-                    ReturnDistance = returnCp.DistanceFromStart,
+                    Checkpoints = slots,
+                    Mode = mode,
                     SharedGroupKey = groupKey
                 };
 
                 _logger.LogInformation(
-                    "Shared device: Device {DeviceId} → Outbound '{OutName}' ({OutDist}km, ID:{OutId}) / Return '{RetName}' ({RetDist}km, ID:{RetId}), Group={Group}",
+                    "Shared device: Device {DeviceId} → {Count} checkpoints [{Slots}], Mode={Mode}, Group={Group}",
                     group.Key,
-                    outbound.Name, outbound.DistanceFromStart, outbound.Id,
-                    returnCp.Name, returnCp.DistanceFromStart, returnCp.Id,
+                    slots.Count,
+                    string.Join(" → ", slots.Select(s => $"'{s.Name}' ({s.Distance}km, ID:{s.CheckpointId})")),
+                    mode,
                     groupKey);
             }
 
@@ -196,79 +249,81 @@ namespace Runnatics.Services.RFID
             var childSharedGroups = checkpoints
                 .Where(cp => cp.DeviceId > 0 && cp.ParentDeviceId.HasValue && cp.ParentDeviceId > 0)
                 .GroupBy(cp => cp.DeviceId)
-                .Where(g => g.Count() == 2)
+                .Where(g => g.Count() >= 2)
                 .ToList();
 
             foreach (var group in childSharedGroups)
             {
-                var cps = group.OrderBy(cp => cp.DistanceFromStart).ToList();
-                var (outbound, returnCp) = ResolveOutboundReturn(cps[0], cps[1], group.Key);
+                var slots = OrderCheckpointsByDistance(group, group.Key);
 
                 // Find the parent device's group key
-                var parentDeviceId = cps[0].ParentDeviceId!.Value;
+                var parentDeviceId = group.First().ParentDeviceId!.Value;
                 var groupKey = deviceToGroupKey.TryGetValue(parentDeviceId, out var parentKey)
                     ? parentKey
-                    : GenerateGroupKey(outbound, returnCp, groupIndex++);
+                    : GenerateGroupKey(slots, groupIndex++);
 
                 deviceToGroupKey[group.Key] = groupKey;
 
                 result[group.Key] = new SharedDeviceMapping
                 {
                     DeviceId = group.Key,
-                    OutboundCheckpointId = outbound.Id,
-                    ReturnCheckpointId = returnCp.Id,
-                    OutboundDistance = outbound.DistanceFromStart,
-                    ReturnDistance = returnCp.DistanceFromStart,
+                    Checkpoints = slots,
+                    Mode = mode,
                     SharedGroupKey = groupKey
                 };
 
                 _logger.LogInformation(
-                    "Child shared device: Device {DeviceId} (parent:{ParentId}) → Group={Group}",
-                    group.Key, parentDeviceId, groupKey);
+                    "Child shared device: Device {DeviceId} (parent:{ParentId}) → {Count} checkpoints, Group={Group}",
+                    group.Key, parentDeviceId, slots.Count, groupKey);
             }
 
             return result;
         }
 
         /// <summary>
-        /// Determines which checkpoint is outbound vs return by name first, then by distance.
+        /// Orders a device's checkpoints by DistanceFromStart (tiebreak: Name, then Id) and
+        /// projects them to CheckpointSlots. Distance is authoritative for ordinal position;
+        /// equal distances are warned (ordinal order between them is ambiguous).
         /// </summary>
-        private (Checkpoint outbound, Checkpoint returnCp) ResolveOutboundReturn(
-            Checkpoint cp1, Checkpoint cp2, int deviceId)
+        private List<CheckpointSlot> OrderCheckpointsByDistance(IEnumerable<Checkpoint> cps, int deviceId)
         {
-            // Strategy 1: Match by name
-            var startCp = new[] { cp1, cp2 }.FirstOrDefault(cp =>
-                cp.Name?.Contains("Start", StringComparison.OrdinalIgnoreCase) == true ||
-                cp.Name?.Contains("Begin", StringComparison.OrdinalIgnoreCase) == true);
-            var finishCp = new[] { cp1, cp2 }.FirstOrDefault(cp =>
-                cp.Name?.Contains("Finish", StringComparison.OrdinalIgnoreCase) == true ||
-                cp.Name?.Contains("End", StringComparison.OrdinalIgnoreCase) == true);
+            var ordered = cps
+                .OrderBy(cp => cp.DistanceFromStart)
+                .ThenBy(cp => cp.Name)
+                .ThenBy(cp => cp.Id)
+                .ToList();
 
-            if (startCp != null && finishCp != null && startCp.Id != finishCp.Id)
-                return (startCp, finishCp);
-
-            // Strategy 2: Lower distance = outbound
-            var ordered = new[] { cp1, cp2 }.OrderBy(cp => cp.DistanceFromStart).ToArray();
-
-            if (ordered[0].DistanceFromStart == ordered[1].DistanceFromStart)
+            for (int i = 1; i < ordered.Count; i++)
             {
-                _logger.LogWarning(
-                    "Device {DeviceId}: Both checkpoints have same distance ({Dist}km). " +
-                    "Outbound/return assignment may be incorrect. Fix DistanceFromStart.",
-                    deviceId, ordered[0].DistanceFromStart);
+                if (ordered[i].DistanceFromStart == ordered[i - 1].DistanceFromStart)
+                {
+                    _logger.LogWarning(
+                        "Device {DeviceId}: Checkpoints '{Cp1}' and '{Cp2}' have the same distance ({Dist}km). " +
+                        "Pass-ordinal assignment between them may be incorrect. Fix DistanceFromStart.",
+                        deviceId, ordered[i - 1].Name, ordered[i].Name, ordered[i].DistanceFromStart);
+                }
             }
 
-            return (ordered[0], ordered[1]);
+            return ordered
+                .Select(cp => new CheckpointSlot
+                {
+                    CheckpointId = cp.Id,
+                    Distance = cp.DistanceFromStart,
+                    Name = cp.Name ?? string.Empty
+                })
+                .ToList();
         }
 
-        private static string GenerateGroupKey(Checkpoint outbound, Checkpoint returnCp, int fallbackIndex)
+        private static string GenerateGroupKey(List<CheckpointSlot> slots, int fallbackIndex)
         {
-            var outName = outbound.Name?.Replace(" ", "") ?? "Out";
-            var retName = returnCp.Name?.Replace(" ", "") ?? "Ret";
+            var names = slots
+                .Select(s => s.Name.Replace(" ", ""))
+                .Where(n => n.Length > 0)
+                .ToList();
 
-            // e.g., "Start_Finish" or "5KM_16.1KM"
-            if (outName.Length > 0 && retName.Length > 0)
-                return $"{outName}_{retName}";
+            // e.g., "Start_Finish" or "Start_10.5KM_Finish"
+            if (names.Count == slots.Count && names.Count > 0)
+                return string.Join("_", names);
 
             return $"SharedGroup_{fallbackIndex}";
         }
@@ -323,17 +378,21 @@ namespace Runnatics.Services.RFID
 
         /// <summary>
         /// STEP 4: Assign checkpoints to ALL readings for ALL participants.
-        /// 
-        /// Priority 1: Use turnaround reference if participant has turnaround reading.
-        ///              Reading BEFORE turnaround → Outbound checkpoint
-        ///              Reading AFTER turnaround  → Return checkpoint
-        /// 
+        ///
+        /// Priority 0: Pre-computed pass ordinal (PassIndexOverride) — production-dominant path.
+        ///              pass ordinal → Checkpoints[IndexForPass(pass)]
+        ///              (Sequential clamps extra passes to last; Cyclic wraps.)
+        ///
+        /// Priority 1: Turnaround reference if participant has a turnaround reading.
+        ///              Reading BEFORE turnaround → first checkpoint (pass 0)
+        ///              Reading AFTER turnaround  → last checkpoint (pass N-1)
+        ///              (For N=2 this is exactly the legacy outbound/return behavior.)
+        ///
         /// Priority 2: Chronological order within shared device GROUP.
-        ///              1st reading across all devices in group → Outbound
-        ///              2nd+ reading across all devices in group → Return
-        /// 
+        ///              k-th reading across all devices in group → pass ordinal k-1.
+        ///
         /// CRITICAL: Chronological ranking is per SHARED GROUP, not per device.
-        /// Devices 11 and 12 both belong to "StartFinish" group and share a single rank counter.
+        /// Parent + child devices at the same location share a single rank counter.
         /// This matches the SQL: ROW_NUMBER() OVER (PARTITION BY Epc, SharedGroup ORDER BY ReadTimeUtc)
         /// </summary>
         public List<AssignedReading> AssignAllCheckpoints(
@@ -392,34 +451,37 @@ namespace Runnatics.Services.RFID
                         continue;
                     }
 
-                    // Case 2: Shared device → determine outbound vs return
+                    // Case 2: Shared device → map pass ordinal to the ordered checkpoint list
                     if (sharedDevices.TryGetValue(reading.DeviceId, out var mapping))
                     {
-                        bool isOutbound;
+                        int pass;
                         string method;
 
-                        if (reading.IsOutboundOverride.HasValue)
+                        if (reading.PassIndexOverride.HasValue)
                         {
-                            // Priority 0: Pre-computed pass index (pass[0]=outbound, pass[1]=return)
-                            isOutbound = reading.IsOutboundOverride.Value;
+                            // Priority 0: Pre-computed pass ordinal (pass-gap separated)
+                            pass = reading.PassIndexOverride.Value;
                             method = "PassIndex";
                             passIndexAssignments++;
                         }
                         else if (hasTurnaround)
                         {
-                            // Priority 1: Turnaround reference
-                            isOutbound = reading.ReadTimeUtc < participantTurnaround!.Value;
+                            // Priority 1: Turnaround reference — before = first, after = last.
+                            // For N=2 this is exactly the legacy outbound/return behavior.
+                            pass = reading.ReadTimeUtc < participantTurnaround!.Value ? 0 : mapping.Count - 1;
                             method = "TurnaroundReference";
                             turnaroundAssignments++;
                         }
                         else
                         {
-                            // Priority 2: Chronological rank within shared group
+                            // Priority 2: Chronological rank within shared group (1-based → 0-based pass)
                             var rank = groupRanks.TryGetValue(reading.ReadingId, out var r) ? r : 1;
-                            isOutbound = rank == 1;
+                            pass = rank - 1;
                             method = "ChronologicalOrder";
                             chronologicalAssignments++;
                         }
+
+                        var slot = mapping.Checkpoints[mapping.IndexForPass(pass)];
 
                         results.Add(new AssignedReading
                         {
@@ -427,9 +489,9 @@ namespace Runnatics.Services.RFID
                             Epc = epc,
                             DeviceId = reading.DeviceId,
                             ReadTimeUtc = reading.ReadTimeUtc,
-                            CheckpointId = isOutbound ? mapping.OutboundCheckpointId : mapping.ReturnCheckpointId,
-                            DistanceFromStart = isOutbound ? mapping.OutboundDistance : mapping.ReturnDistance,
-                            CheckpointName = isOutbound ? "Outbound" : "Return",
+                            CheckpointId = slot.CheckpointId,
+                            DistanceFromStart = slot.Distance,
+                            CheckpointName = slot.Name,
                             AssignmentMethod = method
                         });
                         continue;

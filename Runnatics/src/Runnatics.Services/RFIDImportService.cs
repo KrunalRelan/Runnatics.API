@@ -3823,6 +3823,15 @@ namespace Runnatics.Services
                 var passGapThreshold = (raceSettings?.PassGapThresholdSeconds > 0) ? raceSettings.PassGapThresholdSeconds.Value : 300;
                 var earlyStartCutOff = (raceSettings?.EarlyStartCutOff > 0) ? raceSettings.EarlyStartCutOff.Value : 10;
 
+                // ISSUE-1: pass-ordinal → checkpoint mapping mode. Sequential (point-to-point,
+                // extra passes clamp to last checkpoint) unless the race is flagged as a loop
+                // (HasLoops=true → Cyclic, pass % N). Loop races SHOULD model laps as distinct
+                // checkpoint rows (GenerateLoopCheckpoints) — Sequential then handles them
+                // end-to-end; Cyclic reuse of checkpoint rows collapses laps downstream.
+                var assignmentMode = raceSettings?.HasLoops == true
+                    ? LoopRaceCheckpointAssigner.AssignmentMode.Cyclic
+                    : LoopRaceCheckpointAssigner.AssignmentMode.Sequential;
+
                 // 1b. Devices — build resolution map for BOTH serial (MAC) AND friendly name
                 var deviceRepo = _repository.GetRepository<Device>();
                 var devices = await deviceRepo.GetQuery(d =>
@@ -4139,7 +4148,7 @@ namespace Runnatics.Services
                 var assigner = new LoopRaceCheckpointAssigner(_logger);
 
                 var turnaroundConfig = assigner.IdentifyTurnaroundCheckpoint(checkpoints);
-                var sharedDevices = assigner.IdentifySharedDevices(checkpoints);
+                var sharedDevices = assigner.IdentifySharedDevices(checkpoints, assignmentMode);
 
                 // Build single-device checkpoint lookup (non-shared, non-turnaround)
                 var singleDeviceCheckpoints = checkpoints
@@ -4196,7 +4205,7 @@ namespace Runnatics.Services
                                     if (gap <= dedupWindowSeconds)
                                     {
                                         var isStartBound = sharedDevices.TryGetValue(reading.DeviceId, out var m)
-                                            && m.OutboundDistance == 0;
+                                            && m.StartsAtZero;
                                         var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
                                         if (isStartBound && isFirstPass)
                                             collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
@@ -4234,13 +4243,15 @@ namespace Runnatics.Services
                 }
 
                 // ================================================================
-                // BUG 2 FIX: Pre-compute outbound/return direction from pass index.
-                // pass[0] → outbound (Start, smallest DistanceFromStart)
-                // pass[1] → return  (Finish, largest DistanceFromStart)
-                // 1 pass only → outbound (participant is DNF; Finish mandatory checkpoint missing)
+                // BUG 2 FIX + ISSUE-1: Pre-compute the pass ORDINAL per shared group.
+                // pass[0] → first checkpoint (smallest DistanceFromStart)
+                // pass[k] → k-th checkpoint in distance order (Sequential clamps extra
+                //           passes to the last checkpoint; Cyclic wraps via pass % N)
+                // 1 pass only → first checkpoint (participant is DNF; later mandatory
+                //               checkpoints missing)
                 // This replaces turnaround-reference for shared devices so that participants
                 // who crossed the Start mat slightly before gun time (filtered by raceStartTime
-                // in the past) now correctly get a Start assignment on their first recorded pass.
+                // in the past) correctly get a Start assignment on their first recorded pass.
                 // ================================================================
                 int passIndexOverrideCount = 0;
                 foreach (var (_, epcReadings) in readingsByEpc)
@@ -4254,7 +4265,7 @@ namespace Runnatics.Services
                         var sortedPasses = grp.OrderBy(r => r.ReadTimeUtc).ToList();
                         for (int pi = 0; pi < sortedPasses.Count; pi++)
                         {
-                            sortedPasses[pi].IsOutboundOverride = pi == 0;  // 0=outbound, 1+=return
+                            sortedPasses[pi].PassIndexOverride = pi;  // 0-based pass ordinal
                             passIndexOverrideCount++;
                         }
                     }
@@ -4263,8 +4274,8 @@ namespace Runnatics.Services
                 if (passIndexOverrideCount > 0)
                 {
                     _logger.LogInformation(
-                        "BUG 2 FIX: Set IsOutboundOverride on {Count} shared-device readings via pass index",
-                        passIndexOverrideCount);
+                        "BUG 2 FIX + ISSUE-1: Set PassIndexOverride on {Count} shared-device readings via pass ordinal (Mode={Mode})",
+                        passIndexOverrideCount, assignmentMode);
                 }
 
                 // ================================================================

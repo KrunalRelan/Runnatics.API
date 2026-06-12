@@ -838,65 +838,16 @@ namespace Runnatics.Services
                 existingParticipant.AgeCategory = string.IsNullOrWhiteSpace(existingParticipant.AgeCategory) ? "Unknown" : existingParticipant.AgeCategory.Trim();
 
                 ///If existing race id is different than the new race id, then user is moving participant to another race.
-                ///so, we need to deleted that record from existing and add a new record in the new race.
+                ///so, we need to delete that record from existing and add a new record in the new race.
                 if (existingParticipant.RaceId != decryptedRaceId)
                 {
-                    //insert the record in participant table with new race id
-                    var newParticipant = _mapper.Map<Models.Data.Entities.Participant>(editParticipant);
-                    newParticipant.EventId = existingParticipant.EventId;
-                    newParticipant.TenantId = _userContext.TenantId;
-                    newParticipant.RaceId = decryptedRaceId;
-                    newParticipant.AuditProperties = new Models.Data.Common.AuditProperties
-                    {
-                        CreatedBy = _userContext.UserId,
-                        CreatedDate = DateTime.UtcNow,
-                        IsActive = true,
-                        IsDeleted = false
-                    };
-                    existingParticipant.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                    existingParticipant.AuditProperties.IsActive = false;
-                    existingParticipant.AuditProperties.IsDeleted = true;
-                    existingParticipant.AuditProperties.UpdatedBy = _userContext.UserId;
-
-                    await _repository.ExecuteInTransactionAsync(async () =>
-                    {
-                        await participantRepo.AddAsync(newParticipant);
-                        await participantRepo.UpdateAsync(existingParticipant);
-
-                        // Flush so newParticipant.Id is populated before we reference it
-                        await _repository.SaveChangesAsync();
-
-                        // Transfer chip assignments from old to new participant
-                        var chipRepo = _repository.GetRepository<ChipAssignment>();
-                        var oldChips = await chipRepo.GetQuery(ca =>
-                            ca.ParticipantId == decryptParticipantId &&
-                            ca.AuditProperties.IsActive &&
-                            !ca.AuditProperties.IsDeleted)
-                            .ToListAsync();
-
-                        if (oldChips.Count > 0)
-                        {
-                            // ParticipantId is part of the composite PK — cannot mutate in-place.
-                            // Delete old rows and re-insert under the new participant.
-                            await chipRepo.BulkDeleteAsync(oldChips);
-                            var newChips = oldChips.Select(ca => new ChipAssignment
-                            {
-                                EventId = ca.EventId,
-                                ParticipantId = newParticipant.Id,
-                                ChipId = ca.ChipId,
-                                AssignedAt = ca.AssignedAt,
-                                AssignedByUserId = ca.AssignedByUserId,
-                                AuditProperties = new Models.Data.Common.AuditProperties
-                                {
-                                    CreatedBy = _userContext.UserId,
-                                    CreatedDate = DateTime.UtcNow,
-                                    IsActive = true,
-                                    IsDeleted = false
-                                }
-                            }).ToList();
-                            await chipRepo.BulkInsertAsync(newChips);
-                        }
-                    });
+                    // BUG-06: race move — migrate ALL timing data (Results/SplitTimes/ReadNormalized
+                    // with CheckpointId remap + ChipAssignment) and reprocess the target race via the
+                    // shared migration, instead of moving only the participant row + chips.
+                    // NOTE: decryptedRaceId is the TARGET race here (from the request);
+                    // existingParticipant.RaceId is the source. Scalar edits were already applied to
+                    // existingParticipant above via _mapper.Map, so the new participant inherits them.
+                    await MigrateParticipantToRaceAsync(existingParticipant, decryptedRaceId);
                     return;
                 }
                 else
@@ -2145,203 +2096,13 @@ namespace Runnatics.Services
                     targetRaceId = Convert.ToInt32(_encryptionService.Decrypt(request.RaceId));
                     if (targetRaceId != decryptedRaceId)
                     {
-                        var raceRepo = _repository.GetRepository<Race>();
-                        var targetRaceExists = await raceRepo.GetQuery(r =>
-                            r.Id == targetRaceId &&
-                            r.EventId == participant.EventId &&
-                            r.AuditProperties.IsActive &&
-                            !r.AuditProperties.IsDeleted)
-                            .AsNoTracking()
-                            .AnyAsync();
-
-                        if (!targetRaceExists)
-                        {
-                            ErrorMessage = "Target race not found or does not belong to this event";
-                            return null;
-                        }
-
-                        // BUG-06: build a source→target checkpoint map by DistanceFromStart (Name as
-                        // tiebreak). Checkpoints are per-race rows, so migrated readings must be remapped
-                        // to the target race's equivalent checkpoints; readings with no equivalent are
-                        // soft-deleted (they have no meaning in the new race).
-                        var checkpointRepo = _repository.GetRepository<Checkpoint>();
-                        var sourceCheckpoints = await checkpointRepo.GetQuery(c =>
-                            c.RaceId == decryptedRaceId &&
-                            c.EventId == participant.EventId &&
-                            c.AuditProperties.IsActive &&
-                            !c.AuditProperties.IsDeleted)
-                            .AsNoTracking()
-                            .ToListAsync();
-                        var targetCheckpoints = await checkpointRepo.GetQuery(c =>
-                            c.RaceId == targetRaceId &&
-                            c.EventId == participant.EventId &&
-                            c.AuditProperties.IsActive &&
-                            !c.AuditProperties.IsDeleted)
-                            .AsNoTracking()
-                            .ToListAsync();
-
-                        var checkpointMap = new Dictionary<int, int>();
-                        foreach (var sc in sourceCheckpoints)
-                        {
-                            var candidates = targetCheckpoints
-                                .Where(tc => tc.DistanceFromStart == sc.DistanceFromStart)
-                                .ToList();
-                            var match = candidates.Count switch
-                            {
-                                0 => null,
-                                1 => candidates[0],
-                                _ => candidates.FirstOrDefault(tc => tc.Name == sc.Name) ?? candidates[0]
-                            };
-                            if (match != null)
-                                checkpointMap[sc.Id] = match.Id;
-                        }
-
-                        // Soft-delete current and insert in new race
-                        var newParticipant = new Models.Data.Entities.Participant
-                        {
-                            TenantId = tenantId,
-                            EventId = participant.EventId,
-                            RaceId = targetRaceId,
-                            BibNumber = participant.BibNumber,
-                            FirstName = participant.FirstName,
-                            LastName = participant.LastName,
-                            Email = participant.Email,
-                            Phone = participant.Phone,
-                            Gender = participant.Gender,
-                            AgeCategory = participant.AgeCategory,
-                            ManualDistance = participant.ManualDistance,
-                            LoopCount = participant.LoopCount,
-                            Status = participant.Status,
-                            AuditProperties = new Models.Data.Common.AuditProperties
-                            {
-                                CreatedBy = userId,
-                                CreatedDate = DateTime.UtcNow,
-                                IsActive = true,
-                                IsDeleted = false
-                            }
-                        };
-
-                        participant.AuditProperties.IsActive = false;
-                        participant.AuditProperties.IsDeleted = true;
-
-                        await _repository.ExecuteInTransactionAsync(async () =>
-                        {
-                            // Soft-delete old participant and insert new one in target race
-                            await participantRepo.UpdateAsync(participant);
-                            await participantRepo.AddAsync(newParticipant);
-
-                            // Flush so newParticipant.Id is populated by EF before we reference it below
-                            await _repository.SaveChangesAsync();
-
-                            var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
-                            var splitTimesRepo = _repository.GetRepository<SplitTimes>();
-                            var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-
-                            // 1. Reassign Results rows to the new participant and target race
-                            var oldResults = await resultsRepo.GetQuery(r =>
-                                r.ParticipantId == decryptedParticipantId &&
-                                r.RaceId == decryptedRaceId &&
-                                r.AuditProperties.IsActive &&
-                                !r.AuditProperties.IsDeleted)
-                                .ToListAsync();
-
-                            foreach (var res in oldResults)
-                            {
-                                res.ParticipantId = newParticipant.Id;
-                                res.RaceId = targetRaceId;
-                                res.AuditProperties.UpdatedBy = userId;
-                                res.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            }
-                            if (oldResults.Count > 0)
-                                await resultsRepo.UpdateRangeAsync(oldResults);
-
-                            // 2. Soft-delete the participant's SplitTimes — they reference the source
-                            //    race's checkpoints and are time-relative to the source race's gun start.
-                            //    They are rebuilt for the target race by the post-commit reprocess.
-                            var oldSplits = await splitTimesRepo.GetQuery(st =>
-                                st.ParticipantId == decryptedParticipantId &&
-                                st.AuditProperties.IsActive &&
-                                !st.AuditProperties.IsDeleted)
-                                .ToListAsync();
-
-                            foreach (var split in oldSplits)
-                            {
-                                split.AuditProperties.IsActive = false;
-                                split.AuditProperties.IsDeleted = true;
-                                split.AuditProperties.UpdatedBy = userId;
-                                split.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            }
-                            if (oldSplits.Count > 0)
-                                await splitTimesRepo.UpdateRangeAsync(oldSplits);
-
-                            // 3. Reassign ReadNormalized rows to the new participant and REMAP their
-                            //    CheckpointId to the target race's equivalent checkpoint. Readings whose
-                            //    source checkpoint has no target equivalent are soft-deleted.
-                            var oldReadings = await normalizedRepo.GetQuery(r =>
-                                r.ParticipantId == decryptedParticipantId &&
-                                r.EventId == participant.EventId &&
-                                r.AuditProperties.IsActive &&
-                                !r.AuditProperties.IsDeleted)
-                                .ToListAsync();
-
-                            foreach (var reading in oldReadings)
-                            {
-                                if (checkpointMap.TryGetValue(reading.CheckpointId, out var mappedCheckpointId))
-                                {
-                                    reading.ParticipantId = newParticipant.Id;
-                                    reading.CheckpointId = mappedCheckpointId;
-                                    reading.AuditProperties.UpdatedBy = userId;
-                                    reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                                }
-                                else
-                                {
-                                    // No equivalent checkpoint in the target race → soft-delete
-                                    reading.AuditProperties.IsActive = false;
-                                    reading.AuditProperties.IsDeleted = true;
-                                    reading.AuditProperties.UpdatedBy = userId;
-                                    reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                                }
-                            }
-                            if (oldReadings.Count > 0)
-                                await normalizedRepo.UpdateRangeAsync(oldReadings);
-
-                            // 4. Reassign ChipAssignment rows to the new participant
-                            var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
-                            var oldChipAssignments = await chipAssignmentRepo.GetQuery(ca =>
-                                ca.ParticipantId == decryptedParticipantId &&
-                                ca.AuditProperties.IsActive &&
-                                !ca.AuditProperties.IsDeleted)
-                                .ToListAsync();
-
-                            foreach (var ca in oldChipAssignments)
-                            {
-                                ca.ParticipantId = newParticipant.Id;
-                                ca.AuditProperties.UpdatedBy = userId;
-                                ca.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                            }
-                            if (oldChipAssignments.Count > 0)
-                                await chipAssignmentRepo.UpdateRangeAsync(oldChipAssignments);
-
-                            // 5. Recalculate ranks for old race (participant removed). The TARGET race is
-                            //    fully reprocessed after this transaction commits (step 7 below).
-                            await RecalculateRaceRanksAsync(participant.EventId, decryptedRaceId, userId);
-                        });
-
-                        // 7. Reprocess the TARGET race only: rebuild split times from the remapped
-                        //    ReadNormalized rows (against the target race's gun start) and recompute
-                        //    mandatory-aware status + rankings. Runs after the move transaction commits
-                        //    so the pipeline's own transactions are not nested.
-                        var encEventId = _encryptionService.Encrypt(participant.EventId.ToString());
-                        var encTargetRaceId = _encryptionService.Encrypt(targetRaceId.ToString());
-                        var splitResult = await _rfidImportService.CreateSplitTimesFromNormalizedReadingsAsync(encEventId, encTargetRaceId);
-                        if (splitResult.Status == "Failed")
-                            _logger.LogWarning("Target-race split rebuild failed after move of participant {ParticipantId} to Race {NewRace}: {Error}", participantId, targetRaceId, splitResult.ErrorMessage);
-                        var resultsResult = await _rfidImportService.CalculateRaceResultsAsync(encEventId, encTargetRaceId);
-                        if (resultsResult.Status == "Failed")
-                            _logger.LogWarning("Target-race results recalculation failed after move of participant {ParticipantId} to Race {NewRace}", participantId, targetRaceId);
-
-                        _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; readings remapped, splits/results reprocessed for target race", participantId, decryptedRaceId, targetRaceId);
-                        return MapToSearchResponse(newParticipant);
+                        // BUG-06: full timing-data migration + target-race reprocess (shared logic).
+                        // Scalar edits above were applied to `participant`; the new participant copies
+                        // its fields from that entity inside the shared method.
+                        var movedParticipant = await MigrateParticipantToRaceAsync(participant, targetRaceId);
+                        if (movedParticipant == null)
+                            return null; // target race invalid — ErrorMessage already set
+                        return MapToSearchResponse(movedParticipant);
                     }
                 }
 
@@ -2479,6 +2240,234 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error in UpdateParticipantExtendedAsync for participant {ParticipantId}", participantId);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// BUG-06: Moves a participant to a different race within the same event, migrating ALL
+        /// timing data — Results, SplitTimes (soft-deleted, rebuilt by reprocess), ReadNormalized
+        /// (reassigned + CheckpointId remapped to the target race's equivalent checkpoint by
+        /// DistanceFromStart; readings with no equivalent are soft-deleted) and ChipAssignment —
+        /// then reprocesses the target race (rebuild splits + recompute mandatory-aware status/ranks).
+        /// The source participant is soft-deleted and a new one is created in the target race.
+        ///
+        /// Call with the source participant already loaded and any scalar field edits already applied
+        /// to it (the new participant copies its fields from the source entity). Returns the new
+        /// participant, or null if the target race is invalid (ErrorMessage is set).
+        ///
+        /// Shared by UpdateParticipantExtendedAsync and EditParticipant so both edit paths migrate
+        /// timing data identically — do not duplicate this logic.
+        /// </summary>
+        private async Task<Models.Data.Entities.Participant?> MigrateParticipantToRaceAsync(
+            Models.Data.Entities.Participant sourceParticipant,
+            int targetRaceId)
+        {
+            var userId = _userContext.UserId;
+            var tenantId = _userContext.TenantId;
+            var sourceRaceId = sourceParticipant.RaceId;
+            var sourceParticipantId = sourceParticipant.Id;
+            var eventId = sourceParticipant.EventId;
+
+            var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+
+            var raceRepo = _repository.GetRepository<Race>();
+            var targetRaceExists = await raceRepo.GetQuery(r =>
+                r.Id == targetRaceId &&
+                r.EventId == eventId &&
+                r.AuditProperties.IsActive &&
+                !r.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .AnyAsync();
+
+            if (!targetRaceExists)
+            {
+                ErrorMessage = "Target race not found or does not belong to this event";
+                return null;
+            }
+
+            // BUG-06: build a source→target checkpoint map by DistanceFromStart (Name as
+            // tiebreak). Checkpoints are per-race rows, so migrated readings must be remapped
+            // to the target race's equivalent checkpoints; readings with no equivalent are
+            // soft-deleted (they have no meaning in the new race).
+            var checkpointRepo = _repository.GetRepository<Checkpoint>();
+            var sourceCheckpoints = await checkpointRepo.GetQuery(c =>
+                c.RaceId == sourceRaceId &&
+                c.EventId == eventId &&
+                c.AuditProperties.IsActive &&
+                !c.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .ToListAsync();
+            var targetCheckpoints = await checkpointRepo.GetQuery(c =>
+                c.RaceId == targetRaceId &&
+                c.EventId == eventId &&
+                c.AuditProperties.IsActive &&
+                !c.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var checkpointMap = new Dictionary<int, int>();
+            foreach (var sc in sourceCheckpoints)
+            {
+                var candidates = targetCheckpoints
+                    .Where(tc => tc.DistanceFromStart == sc.DistanceFromStart)
+                    .ToList();
+                var match = candidates.Count switch
+                {
+                    0 => null,
+                    1 => candidates[0],
+                    _ => candidates.FirstOrDefault(tc => tc.Name == sc.Name) ?? candidates[0]
+                };
+                if (match != null)
+                    checkpointMap[sc.Id] = match.Id;
+            }
+
+            // Soft-delete current and insert in new race
+            var newParticipant = new Models.Data.Entities.Participant
+            {
+                TenantId = tenantId,
+                EventId = eventId,
+                RaceId = targetRaceId,
+                BibNumber = sourceParticipant.BibNumber,
+                FirstName = sourceParticipant.FirstName,
+                LastName = sourceParticipant.LastName,
+                Email = sourceParticipant.Email,
+                Phone = sourceParticipant.Phone,
+                Gender = sourceParticipant.Gender,
+                AgeCategory = sourceParticipant.AgeCategory,
+                ManualDistance = sourceParticipant.ManualDistance,
+                LoopCount = sourceParticipant.LoopCount,
+                Status = sourceParticipant.Status,
+                AuditProperties = new Models.Data.Common.AuditProperties
+                {
+                    CreatedBy = userId,
+                    CreatedDate = DateTime.UtcNow,
+                    IsActive = true,
+                    IsDeleted = false
+                }
+            };
+
+            sourceParticipant.AuditProperties.IsActive = false;
+            sourceParticipant.AuditProperties.IsDeleted = true;
+            sourceParticipant.AuditProperties.UpdatedBy = userId;
+            sourceParticipant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+
+            await _repository.ExecuteInTransactionAsync(async () =>
+            {
+                // Soft-delete old participant and insert new one in target race
+                await participantRepo.UpdateAsync(sourceParticipant);
+                await participantRepo.AddAsync(newParticipant);
+
+                // Flush so newParticipant.Id is populated by EF before we reference it below
+                await _repository.SaveChangesAsync();
+
+                var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                var splitTimesRepo = _repository.GetRepository<SplitTimes>();
+                var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+
+                // 1. Reassign Results rows to the new participant and target race
+                var oldResults = await resultsRepo.GetQuery(r =>
+                    r.ParticipantId == sourceParticipantId &&
+                    r.RaceId == sourceRaceId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                foreach (var res in oldResults)
+                {
+                    res.ParticipantId = newParticipant.Id;
+                    res.RaceId = targetRaceId;
+                    res.AuditProperties.UpdatedBy = userId;
+                    res.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                }
+                if (oldResults.Count > 0)
+                    await resultsRepo.UpdateRangeAsync(oldResults);
+
+                // 2. Soft-delete the participant's SplitTimes — they reference the source
+                //    race's checkpoints and are time-relative to the source race's gun start.
+                //    They are rebuilt for the target race by the post-commit reprocess.
+                var oldSplits = await splitTimesRepo.GetQuery(st =>
+                    st.ParticipantId == sourceParticipantId &&
+                    st.AuditProperties.IsActive &&
+                    !st.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                foreach (var split in oldSplits)
+                {
+                    split.AuditProperties.IsActive = false;
+                    split.AuditProperties.IsDeleted = true;
+                    split.AuditProperties.UpdatedBy = userId;
+                    split.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                }
+                if (oldSplits.Count > 0)
+                    await splitTimesRepo.UpdateRangeAsync(oldSplits);
+
+                // 3. Reassign ReadNormalized rows to the new participant and REMAP their
+                //    CheckpointId to the target race's equivalent checkpoint. Readings whose
+                //    source checkpoint has no target equivalent are soft-deleted.
+                var oldReadings = await normalizedRepo.GetQuery(r =>
+                    r.ParticipantId == sourceParticipantId &&
+                    r.EventId == eventId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                foreach (var reading in oldReadings)
+                {
+                    if (checkpointMap.TryGetValue(reading.CheckpointId, out var mappedCheckpointId))
+                    {
+                        reading.ParticipantId = newParticipant.Id;
+                        reading.CheckpointId = mappedCheckpointId;
+                        reading.AuditProperties.UpdatedBy = userId;
+                        reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    }
+                    else
+                    {
+                        // No equivalent checkpoint in the target race → soft-delete
+                        reading.AuditProperties.IsActive = false;
+                        reading.AuditProperties.IsDeleted = true;
+                        reading.AuditProperties.UpdatedBy = userId;
+                        reading.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    }
+                }
+                if (oldReadings.Count > 0)
+                    await normalizedRepo.UpdateRangeAsync(oldReadings);
+
+                // 4. Reassign ChipAssignment rows to the new participant
+                var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+                var oldChipAssignments = await chipAssignmentRepo.GetQuery(ca =>
+                    ca.ParticipantId == sourceParticipantId &&
+                    ca.AuditProperties.IsActive &&
+                    !ca.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                foreach (var ca in oldChipAssignments)
+                {
+                    ca.ParticipantId = newParticipant.Id;
+                    ca.AuditProperties.UpdatedBy = userId;
+                    ca.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                }
+                if (oldChipAssignments.Count > 0)
+                    await chipAssignmentRepo.UpdateRangeAsync(oldChipAssignments);
+
+                // 5. Recalculate ranks for old race (participant removed). The TARGET race is
+                //    fully reprocessed after this transaction commits (below).
+                await RecalculateRaceRanksAsync(eventId, sourceRaceId, userId);
+            });
+
+            // 6. Reprocess the TARGET race only: rebuild split times from the remapped
+            //    ReadNormalized rows (against the target race's gun start) and recompute
+            //    mandatory-aware status + rankings. Runs after the move transaction commits
+            //    so the pipeline's own transactions are not nested.
+            var encEventId = _encryptionService.Encrypt(eventId.ToString());
+            var encTargetRaceId = _encryptionService.Encrypt(targetRaceId.ToString());
+            var splitResult = await _rfidImportService.CreateSplitTimesFromNormalizedReadingsAsync(encEventId, encTargetRaceId);
+            if (splitResult.Status == "Failed")
+                _logger.LogWarning("Target-race split rebuild failed after move of participant {ParticipantId} to Race {NewRace}: {Error}", sourceParticipantId, targetRaceId, splitResult.ErrorMessage);
+            var resultsResult = await _rfidImportService.CalculateRaceResultsAsync(encEventId, encTargetRaceId);
+            if (resultsResult.Status == "Failed")
+                _logger.LogWarning("Target-race results recalculation failed after move of participant {ParticipantId} to Race {NewRace}", sourceParticipantId, targetRaceId);
+
+            _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; readings remapped, splits/results reprocessed for target race", sourceParticipantId, sourceRaceId, targetRaceId);
+            return newParticipant;
         }
 
         private async Task RecalculateRaceRanksAsync(int eventId, int raceId, int userId)

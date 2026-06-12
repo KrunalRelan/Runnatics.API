@@ -38,7 +38,8 @@
       "Bash(git *)",
       "Bash(npx tsc *)",
       "Bash(npm run *)",
-      "Bash(grep -n \"RaceList\\\\|</Card>\\\\|{/\\\\*\" src/main/src/pages/admin/events/ViewEvent.tsx)"
+      "Bash(grep -n \"RaceList\\\\|</Card>\\\\|{/\\\\*\" src/main/src/pages/admin/events/ViewEvent.tsx)",
+      "PowerShell(cd C:\\\\Projects\\\\Runnatics.Ui\\\\Runnatics.Ui; npx tsc --noEmit 2>&1 | Select-String -Pattern \"EditParticipant\" -Context 0,1; Write-Output \"---exit:$LASTEXITCODE---\")"
     ]
   }
 }

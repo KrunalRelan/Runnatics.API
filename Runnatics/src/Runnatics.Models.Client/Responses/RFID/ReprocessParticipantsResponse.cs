@@ -15,6 +15,7 @@ namespace Runnatics.Models.Client.Responses.RFID
         // Clearing phase
         public int ParticipantsCleared { get; set; }
         public int ReadingsCleared { get; set; }
+        public int SplitTimesCleared { get; set; }
         public int ResultsCleared { get; set; }
         
         // Reprocessing phase

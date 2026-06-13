@@ -3389,6 +3389,29 @@ namespace Runnatics.Services
                     _logger.LogInformation("Cleared {Count} normalized readings", normalized.Count);
                 }
 
+                // 2b. Delete SplitTimes (FIX A — stale-row root cause).
+                // The pipeline (CreateSplitTimesFromNormalizedReadingsAsync) is insert-only with a
+                // skip-if-exists guard, so any SplitTimes row that survives a Clear is NEVER rebuilt
+                // and freezes whatever (possibly buggy) SegmentTime it was written with. The Clear
+                // gate previously wiped Results + ReadNormalized but left SplitTimes orphaned, so a
+                // forceReprocess=true rebuild skipped those rows. Hard-delete them here (scoped by
+                // RaceId via Participant join, mirroring the ReadNormalized step above) so the gate
+                // is complete and the rebuild starts from an empty SplitTimes set. Hard-delete to
+                // match the surrounding Results/ReadNormalized BulkDeleteAsync — this is an explicit
+                // destructive reset; the skip-guards themselves are intentionally left untouched.
+                var splitTimeRepo = _repository.GetRepository<SplitTimes>();
+                var splitTimes = await splitTimeRepo.GetQuery(st =>
+                    st.EventId == decryptedEventId &&
+                    st.Participant.RaceId == decryptedRaceId)
+                    .ToListAsync();
+
+                if (splitTimes.Count > 0)
+                {
+                    await splitTimeRepo.BulkDeleteAsync(splitTimes);
+                    response.SplitTimesCleared = splitTimes.Count;
+                    _logger.LogInformation("Cleared {Count} split times", splitTimes.Count);
+                }
+
                 // 3. Get batch IDs for this race (including event-level batches)
                 // For event-level batches, we need to handle their readings that belong to this race's participants
                 var batchRepo = _repository.GetRepository<UploadBatch>();
@@ -3604,6 +3627,23 @@ namespace Runnatics.Services
                     {
                         await normalizedRepo.DeleteRangeAsync(normalized.Select(n => n.Id).ToList());
                         response.ReadingsCleared = normalized.Count;
+                    }
+
+                    // 2b. Delete their SplitTimes (FIX B — same stale-row root cause as FIX A,
+                    // for the per-participant "Process Result" path). CreateSplitTimesFromNormalizedReadingsAsync
+                    // is insert-only with a skip-if-exists guard, so a participant's stale SplitTimes
+                    // would survive this reprocess and never be rebuilt. Hard-delete them (mirrors the
+                    // ReadNormalized DeleteRangeAsync above) so the subsequent ProcessCompleteWorkflowAsync
+                    // rebuilds clean splits for these participants. Skip-guards intentionally untouched.
+                    var splitTimeRepo = _repository.GetRepository<SplitTimes>();
+                    var splitTimes = await splitTimeRepo.GetQuery(st =>
+                        validParticipantIds.Contains(st.ParticipantId))
+                        .ToListAsync();
+
+                    if (splitTimes.Count > 0)
+                    {
+                        await splitTimeRepo.DeleteRangeAsync(splitTimes.Select(st => st.Id).ToList());
+                        response.SplitTimesCleared = splitTimes.Count;
                     }
 
                     // 3. Reset their RawRFIDReading (if we have the IDs)

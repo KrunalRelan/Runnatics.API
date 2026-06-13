@@ -12,14 +12,16 @@ namespace Runnatics.Models.Client.Responses.RFID
         // Statistics
         public int ResultsCleared { get; set; }
         public int NormalizedReadingsCleared { get; set; }
+        public int SplitTimesCleared { get; set; }
         public int AssignmentsCleared { get; set; }
         public int ReadingsReset { get; set; }
         public int BatchesReset { get; set; }
         public int UploadsDeleted { get; set; }
-        
+
         // Summary
-        public string Summary => 
+        public string Summary =>
             $"Cleared {ResultsCleared} results, {NormalizedReadingsCleared} normalized readings, " +
+            $"{SplitTimesCleared} split times, " +
             $"{AssignmentsCleared} checkpoint assignments. Reset {BatchesReset} batches.";
     }
 }

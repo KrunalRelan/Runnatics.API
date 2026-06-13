@@ -122,6 +122,24 @@ _Use this section to log what each agent built during the current session._
 - **➡️ BUG-25 ordering:** BUG-25 (start-row split = 00:00:00) MUST build on this clamped baseline — clamp first (done), then BUG-25. BUG-25 can also resolve the item-2 start-row negative-net finding (set start net/split to 0).
 - **Prod verify (after deploy):** reprocess RaceId 47, then confirm 2242/2127 have `NetTime ≤ GunTime` (Chip ≤ Gun) on `Results`.
 
+### 2026-06-13 — SplitTimes/ReadNormalized stale-row fix (Clear gate completion) — Opus EXECUTE
+
+- **Unifying root cause (user-confirmed via prod RaceId 47):** the ENTIRE RFID pipeline is insert-only / skip-if-exists, so no shipped fix (BUG-04 SegmentTime, BUG-27 gun clamp) ever reaches data that was already processed:
+  - `DeduplicateAndNormalizeAsync` filters out raw reads that already have a `ReadNormalized` (`~1855-1864`) → BUG-27 clamp never re-fired on Bibs 2242/2127.
+  - `CreateSplitTimesFromNormalizedReadingsAsync` skips any `(ParticipantId, CheckpointId)` that already has a SplitTime (`~4578-4588`) → Bib 2262's May 5.25/15.75 km rows (old code, `SegmentTime == SplitTimeMs`) survived while the other 7 checkpoints got correct rebuilt rows.
+  - The intended escape hatch (`ClearProcessedDataAsync`, and per-participant `ReprocessParticipantsAsync`) deleted Results + ReadNormalized + assignments but **NOT SplitTimes** → even a `forceReprocess=true` rebuild left the stale splits, and the splits skip-guard then skipped them.
+- **🏛️ ARCHITECTURAL DECISION (user-approved):** the skip-guards are the **live-ingest concurrency-safety mechanism** — `LiveReadingService:155` (Raspberry Pi) and other incremental paths call `ProcessCompleteWorkflowAsync` WITHOUT a Clear; insert-only/skip-existing keeps each live append cheap and idempotent (concurrent appends are safe). **A full rebuild is correctly gated by `forceReprocess=true` → `ClearProcessedDataAsync`, NOT by removing the skip-guards.** Removing the guards (the originally-proposed Fix 1/Fix 3) would make every Pi batch delete-and-rebuild the whole race's normalized data mid-event — the corruption risk we explicitly avoided. **So the fix completes the Clear gate; it does NOT touch the guards.**
+- **Fixes (2 sites in `RFIDImportService`, both hard-delete to match the existing sibling `BulkDeleteAsync`/`DeleteRangeAsync` — these are explicit destructive resets, decision (A)):**
+  1. **FIX A — `ClearProcessedDataAsync`** (new step "2b"): hard-delete all SplitTimes for the race (scoped `st.EventId == … && st.Participant.RaceId == …`, unfiltered on IsActive/IsDeleted so soft-deleted orphans are cleaned too), mirroring the ReadNormalized step. Added `SplitTimesCleared` to `ClearDataResponse` (+ Summary line).
+  2. **FIX B — `ReprocessParticipantsAsync`** (new step "2b"): hard-delete the targeted participants' SplitTimes (`validParticipantIds.Contains(st.ParticipantId)`), mirroring their ReadNormalized `DeleteRangeAsync`, so the per-participant "Process Result" button also yields clean splits. Added `SplitTimesCleared` to `ReprocessParticipantsResponse`.
+- **NOT changed (deliberately):** dedup skip-guard (`~1855`), splits skip-guard (`~4578`), and the existing ReadNormalized/Results delete semantics. Soft-delete remains correct only for the BUG-06 race-move rebuild (not a destructive reset).
+- **Build:** `Runnatics.Services` ✅ 0 errors. **Tests:** assigner ✅ 19/19 (`DOTNET_ROLL_FORWARD=LatestMajor`).
+- **▶️ RUNBOOK — repair prod RaceId 47 (and any race with stale timing data) AFTER deploy:**
+  1. **Deploy** this build.
+  2. **Full reprocess:** `POST /api/rfid/{eventId}/{raceId}/process-all?forceReprocess=true` — Clear now wipes Results + ReadNormalized + **SplitTimes** + assignments → `ProcessCompleteWorkflowAsync` rebuilds everything from raw reads (empty tables → nothing to skip → BUG-27 clamp fires on every ReadNormalized, SegmentTime rebuilt on every SplitTime). (Manual equivalent: `DELETE …/clear-processed-data?keepUploads=true` then `POST …/process-all`.)
+  3. **Verify:** (a) Bibs 2242/2127 `NetTime ≤ GunTime` (Chip ≤ Gun — clamp fired on rebuilt ReadNormalized); (b) Bib 2262 5.25/15.75 km `SegmentTime ≠ SplitTimeMs` (splits rebuilt with BUG-04 distance-chaining). Start-row split `= 0` is **BUG-25, separate** (still pending; must build on the BUG-27 clamped baseline).
+  - ⚠️ Do NOT use a plain (non-force) reprocess to repair stale data — by design it preserves already-processed rows (live-ingest semantics). Repair REQUIRES the Clear gate.
+
 ### PENDING — next session: BUG-24 + BUG-25 (user-confirmed scope, 2026-06-11)
 
 - **BUG-25 (GLOBAL split/race-time rules — not race-specific).** Rules confirmed by user:

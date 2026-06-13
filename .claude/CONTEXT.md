@@ -122,6 +122,20 @@ _Use this section to log what each agent built during the current session._
 - **➡️ BUG-25 ordering:** BUG-25 (start-row split = 00:00:00) MUST build on this clamped baseline — clamp first (done), then BUG-25. BUG-25 can also resolve the item-2 start-row negative-net finding (set start net/split to 0).
 - **Prod verify (after deploy):** reprocess RaceId 47, then confirm 2242/2127 have `NetTime ≤ GunTime` (Chip ≤ Gun) on `Results`.
 
+### 2026-06-13 — BUG-24 (public grouped leaderboard not honouring Leaderboard Settings) — Opus EXECUTE (backend half)
+
+- **Root cause (NOT settings resolution — that was correct):** `PublicResultsService.GetPublicGroupedLeaderboardAsync` resolved settings via the right hierarchy (race row where `OverrideSettings==true`, else event row `RaceId==null`, else defaults — same chain as `GetEffectivePublicLeaderboardSettingsAsync`), but **mis-applied** them. A single `rankOnNet = SortByOverallChipTime` drove BOTH Overall and Category sort → Category ignored `SortByCategory*`; `NumberOfResultsToShowOverall` was never read (Overall used pageSize paging); `ShowOverallResults`/`ShowCategoryResults` were never read and the DTO didn't carry them.
+- **Settings storage:** one `LeaderboardSettings` table; event row = `RaceId NULL`, race row = `RaceId set` + `OverrideSettings` bool. Columns: `Show{Overall,Category}Results`, `SortBy{Overall,Category}{Chip,Gun}Time`, `NumberOfResultsToShow{Overall,Category}`, `OverrideSettings`.
+- **Fixes (backend, approved scope):**
+  1. **Independent sort:** `overallRankOnNet` (←`SortByOverallChipTime ?? true`) drives Overall sort + podium + top-level `RankBy`; `categoryRankOnNet` (←`SortByCategoryChipTime ?? true`) drives category `OrderBy` + per-category `RankBy` label.
+  2. **Independent counts:** `categoryTopN` from `NumberOfResultsToShowCategory` (keeps historical default 3 when unset, non-showAll); new `overallTopN` from `NumberOfResultsToShowOverall` caps `OverallResults` (paging disabled when capped); no cap when `showAll`.
+  3. **Show toggles:** new `ShowOverall`/`ShowCategory` bools on `PublicGroupedLeaderboardDto`; when OFF the section's list is built empty so the public page hides it.
+  4. **Per-section labels:** new `OverallRankBy`/`CategoryRankBy` (additive). Both use the **no-space `"ChipTime"`/`"GunTime"`** format — the form the FE already string-matches on top-level `RankBy` (per BUG-08 review; the spaced `"Chip time"` on `PublicCategoryGroupDto.RankBy` is never consumed and was left as-is).
+- **Files modified:** `PublicResultsService.cs` (`GetPublicGroupedLeaderboardAsync` only), `Public/PublicGroupedLeaderboardDto.cs` (4 additive fields).
+- **Out of scope (frontend):** the flat `/results` page (`GetPublicEventResultsAsync`) already returns `LeaderboardSettings` to the FE correctly and applies nothing itself — if that page misbehaves it's a UI fix (`C:\Projects\Runnatics.UI`, not in this workspace). **BUG-24 needs its UI half** (consume `OverallRankBy`/`CategoryRankBy`/`ShowOverall`/`ShowCategory`) before it's testable end-to-end.
+- **Build:** `Runnatics.Services` ✅ 0 errors (14 pre-existing warnings). **Trace (event SRWYS41SkT, event-level row, override OFF):** Overall→Chip/cap5/shown, Category→**Gun**/cap5/shown, sorts diverge. ✓
+- **No SQL** (all columns already exist).
+
 ### 2026-06-13 — SplitTimes/ReadNormalized stale-row fix (Clear gate completion) — Opus EXECUTE
 
 - **Unifying root cause (user-confirmed via prod RaceId 47):** the ENTIRE RFID pipeline is insert-only / skip-if-exists, so no shipped fix (BUG-04 SegmentTime, BUG-27 gun clamp) ever reaches data that was already processed:

@@ -235,10 +235,23 @@ namespace Runnatics.Services
                         .FirstOrDefaultAsync(ct);
                 }
 
-                bool rankOnNet = leaderboardSettings?.SortByOverallChipTime ?? true;
-                int topN = (!showAll && (leaderboardSettings?.NumberOfResultsToShowCategory ?? 0) > 0)
+                // BUG-24: Overall and Category sort INDEPENDENTLY. Previously a single flag
+                // (from SortByOverallChipTime) drove both, so Category ignored its own setting.
+                bool overallRankOnNet  = leaderboardSettings?.SortByOverallChipTime  ?? true;
+                bool categoryRankOnNet = leaderboardSettings?.SortByCategoryChipTime ?? true;
+
+                // BUG-24: honour the Show Overall / Show Category toggles.
+                bool showOverall  = leaderboardSettings?.ShowOverallResults  ?? true;
+                bool showCategory = leaderboardSettings?.ShowCategoryResults ?? true;
+
+                // BUG-24: independent per-section result caps. 0 (or showAll) = no cap.
+                // Category keeps its historical default of 3 when no count is configured.
+                int categoryTopN = (!showAll && (leaderboardSettings?.NumberOfResultsToShowCategory ?? 0) > 0)
                     ? leaderboardSettings!.NumberOfResultsToShowCategory!.Value
                     : (!showAll ? 3 : 0);
+                int overallTopN = (!showAll && (leaderboardSettings?.NumberOfResultsToShowOverall ?? 0) > 0)
+                    ? leaderboardSettings!.NumberOfResultsToShowOverall!.Value
+                    : 0;
 
                 // When showAll is true, return all overall results (up to 1000); otherwise honour the
                 // caller's paging request (capped at 200 for regular browsing).
@@ -256,7 +269,7 @@ namespace Runnatics.Services
                                    !r.AuditProperties.IsDeleted)
                     .Include(r => r.Participant)
                     .AsNoTracking()
-                    .OrderBy(r => rankOnNet ? r.NetTime ?? long.MaxValue : r.GunTime ?? long.MaxValue)
+                    .OrderBy(r => overallRankOnNet ? r.NetTime ?? long.MaxValue : r.GunTime ?? long.MaxValue)
                     .Take(3)
                     .ToListAsync(ct);
 
@@ -304,7 +317,9 @@ namespace Runnatics.Services
 
                 // Grouped categories — normalize "M"→"Male", "F"→"Female" for display
                 var genderOrder = new[] { "male", "female" };
-                var grouped = allFinishers
+                var grouped = !showCategory
+                    ? new List<PublicGenderGroupDto>()
+                    : allFinishers
                     .GroupBy(r => (r.Participant.Gender switch { "M" => "Male", "F" => "Female", var g => g }) ?? "Unknown")
                     .OrderBy(g =>
                     {
@@ -323,7 +338,7 @@ namespace Runnatics.Services
                             .OrderBy(c => c.Key)
                             .Select(catGroup =>
                             {
-                                var sorted = rankOnNet
+                                var sorted = categoryRankOnNet
                                     ? catGroup.OrderBy(r => r.NetTime ?? long.MaxValue).ToList()
                                     : catGroup.OrderBy(r => r.GunTime ?? long.MaxValue).ToList();
 
@@ -343,13 +358,13 @@ namespace Runnatics.Services
                                     })
                                     .ToList();
 
-                                if (topN > 0)
-                                    participants = participants.Take(topN).ToList();
+                                if (categoryTopN > 0)
+                                    participants = participants.Take(categoryTopN).ToList();
 
                                 return new PublicCategoryGroupDto
                                 {
                                     CategoryName = catGroup.Key,
-                                    RankBy       = rankOnNet ? "Chip time" : "Gun time",
+                                    RankBy       = categoryRankOnNet ? "Chip time" : "Gun time",
                                     Participants = participants
                                 };
                             })
@@ -361,11 +376,20 @@ namespace Runnatics.Services
                 int totalOverall = allFinishers.Count;
                 int totalPages   = totalOverall == 0 ? 0 : (int)Math.Ceiling(totalOverall / (double)pageSize);
 
-                var overallResults = (rankOnNet
+                var overallSorted = (overallRankOnNet
                     ? allFinishers.OrderBy(r => r.NetTime ?? long.MaxValue)
                     : allFinishers.OrderBy(r => r.GunTime ?? long.MaxValue))
-                    .Skip((page - 1) * pageSize)
-                    .Take(pageSize)
+                    .ToList();
+
+                // BUG-24: when a NumberOfResultsToShowOverall cap is configured, return the top N
+                // (paging disabled); otherwise honour the caller's page/pageSize. Hidden section → empty.
+                IEnumerable<Results> overallSlice = overallTopN > 0
+                    ? overallSorted.Take(overallTopN)
+                    : overallSorted.Skip((page - 1) * pageSize).Take(pageSize);
+
+                var overallResults = !showOverall
+                    ? new List<PublicLeaderboardEntryDto>()
+                    : overallSlice
                     .Select((r, idx) => new PublicLeaderboardEntryDto
                     {
                         Rank   = r.OverallRank ?? ((page - 1) * pageSize + idx + 1),
@@ -391,7 +415,11 @@ namespace Runnatics.Services
                     RaceName          = race.Title,
                     RaceDate          = race.StartTime ?? eventEntity.EventDate,
                     RaceDistance      = race.Distance,
-                    RankBy            = rankOnNet ? "ChipTime" : "GunTime",
+                    RankBy            = overallRankOnNet ? "ChipTime" : "GunTime",
+                    OverallRankBy     = overallRankOnNet ? "ChipTime" : "GunTime",
+                    CategoryRankBy    = categoryRankOnNet ? "ChipTime" : "GunTime",
+                    ShowOverall       = showOverall,
+                    ShowCategory      = showCategory,
                     EventBannerBase64 = eventEntity.BannerImage,
                     Podium            = podium,
                     GenderCategories  = grouped,

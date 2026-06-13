@@ -1423,13 +1423,13 @@ namespace Runnatics.Services
                 !e.AuditProperties.IsDeleted;
         }
 
-        private static string? MapRaceStatusToDbString(RaceStatus status) => status switch
+        private static string? MapRaceStatusToDbString(int statusValue) => statusValue switch
         {
-            RaceStatus.Registered => "Registered",
-            RaceStatus.Completed  => "Finished",
-            RaceStatus.DNF        => "DNF",
-            RaceStatus.NoShow     => "DNS",
-            _                     => null
+            1 => "Registered",
+            2 => "Finished",
+            3 => "DNF",
+            4 => "DNS",
+            _ => null
         };
 
         /// <summary>

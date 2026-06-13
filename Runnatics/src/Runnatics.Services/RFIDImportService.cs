@@ -2061,7 +2061,26 @@ namespace Runnatics.Services
 
                 foreach (var startReading in startCheckpointReadings)
                 {
-                    participantStartTimes[startReading.ParticipantId] = startReading.StartTime;
+                    // BUG-27: Gun clamp. A runner cannot start their personal (net) clock before
+                    // the official gun. The start-mat read can be a few seconds-to-minutes BEFORE
+                    // Race.StartTime (the EarlyStartCutOff window admits pre-gun reads), which would
+                    // make NetTime = finish - startMat LARGER than GunTime = finish - gun — the
+                    // physically impossible Chip Time > Gun Time. Clamp the baseline up to the gun.
+                    var clampedStart = raceStartTime.HasValue && raceStartTime.Value > startReading.StartTime
+                        ? raceStartTime.Value
+                        : startReading.StartTime;
+
+                    if (clampedStart != startReading.StartTime)
+                    {
+                        _logger.LogInformation(
+                            "BUG-27 gun clamp: Participant {ParticipantId} crossed start mat at {MatTime} " +
+                            "(before gun {GunTime}). Clamping net baseline to gun time.",
+                            startReading.ParticipantId,
+                            startReading.StartTime.ToString("HH:mm:ss.fff"),
+                            raceStartTime!.Value.ToString("HH:mm:ss.fff"));
+                    }
+
+                    participantStartTimes[startReading.ParticipantId] = clampedStart;
                 }
 
                 _logger.LogInformation(

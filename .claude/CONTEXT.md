@@ -102,6 +102,26 @@ _Use this section to log what each agent built during the current session._
   `SELECT Status, COUNT(*) FROM Results r JOIN Participants p ON r.ParticipantId=p.Id WHERE p.RaceId=47 AND r.IsActive=1 AND r.IsDeleted=0 GROUP BY Status;`
   Expected ≈ 142 Finished / 25 DNF / 51 DNS (Excel baseline).
 
+### 2026-06-12 — BUG-27 Phase A (gun clamp on net-time start baseline) — Sonnet EXECUTE
+
+- **Confirmed issue (prod, 7th GGHM RaceId 47):** Bibs 2242/2127 crossed the Start mat ~2m22s BEFORE the gun (`Race.StartTime`). The `EarlyStartCutOff` window (default 10 min, `RFIDImportService.cs:4061`) admits those pre-gun reads, but nothing clamped the baseline → `NetTime = finish − startMat` came out LARGER than `GunTime = finish − gun` → impossible Chip 1:40:45 > Gun 1:38:23.
+- **Fix (1 site, `RFIDImportService.DeduplicateAndNormalizeAsync`, ~line 2062):** when building `participantStartTimes`, clamp the net baseline up to the gun: `clampedStart = (raceStartTime.HasValue && raceStartTime > startMat) ? gun : startMat`. Guarded on `raceStartTime.HasValue`. Logs each clamp. For normal (post-gun) starters `Max(startMat, gun) = startMat` → no change. This makes every non-start checkpoint's `NetTime = finishChip − gun = GunTime` for early starters → fixes 2242/2127.
+- **Selection direction unchanged (already correct):** start=LAST / finish=FIRST / intermediate=FIRST were already implemented at `2080-2088` (start identified by min `DistanceFromStart`). Not touched.
+- **⚠️ Item-2 verification — FINDING (NOT clean, pre-existing, NOT fixed this pass):** the start-checkpoint's OWN row sets `netTime = gunTime` (`2151-2156`) using the RAW `gunTime = startMat − gun`, which is **negative for early starters** — it does NOT consume the clamped baseline. So the start ROW stores negative Net/Gun for 2242/2127. This is pre-existing (was negative before) and does NOT affect the headline finish-time bug (the start row isn't a `finishReading`, so it skips the `negativeGunTimes` Fail-gate at `2446`; its split is already skipped by the `splitTimeMs < 0` guard at `4605`). Logical-correct value would be `0` (clamp start-row net to `max(0, startMat − clampedBaseline)`). **Left for user decision / fold into BUG-25.**
+- **Decision (C) — single-mat (startCheckpointId == finishCheckpointId):** code-level — occurs only when a race has ONE checkpoint (or all checkpoints at the same `DistanceFromStart`), since start = min-distance Id and finish = max-distance Id. In that case the single group hits `isStartCheckpoint == true` → picks **LAST** → a single-mat finish would wrongly take the last crossing instead of FIRST. **Could not query prod DB from this sandbox** — user to run the SQL below to confirm whether any real race hits it. Documented only, not fixed (out of Phase A scope).
+  ```sql
+  -- Races whose only distinct checkpoint distance is one value → start Id == finish Id (single logical mat)
+  SELECT c.RaceId, COUNT(DISTINCT c.Id) AS CheckpointCount,
+         COUNT(DISTINCT c.DistanceFromStart) AS DistinctDistances
+  FROM Checkpoints c
+  WHERE c.IsActive = 1 AND c.IsDeleted = 0
+  GROUP BY c.RaceId
+  HAVING COUNT(DISTINCT c.DistanceFromStart) = 1;
+  ```
+- **Build:** `Runnatics.Services` ✅ 0 errors (14 pre-existing warnings). **Tests:** assigner ✅ 19/19 (`DOTNET_ROLL_FORWARD=LatestMajor` for net8.0).
+- **➡️ BUG-25 ordering:** BUG-25 (start-row split = 00:00:00) MUST build on this clamped baseline — clamp first (done), then BUG-25. BUG-25 can also resolve the item-2 start-row negative-net finding (set start net/split to 0).
+- **Prod verify (after deploy):** reprocess RaceId 47, then confirm 2242/2127 have `NetTime ≤ GunTime` (Chip ≤ Gun) on `Results`.
+
 ### PENDING — next session: BUG-24 + BUG-25 (user-confirmed scope, 2026-06-11)
 
 - **BUG-25 (GLOBAL split/race-time rules — not race-specific).** Rules confirmed by user:

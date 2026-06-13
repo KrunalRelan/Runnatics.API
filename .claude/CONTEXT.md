@@ -173,13 +173,22 @@ _Use this section to log what each agent built during the current session._
   3. **Verify:** (a) Bibs 2242/2127 `NetTime ≤ GunTime` (Chip ≤ Gun — clamp fired on rebuilt ReadNormalized); (b) Bib 2262 5.25/15.75 km `SegmentTime ≠ SplitTimeMs` (splits rebuilt with BUG-04 distance-chaining). Start-row split `= 0` is **BUG-25, separate** (still pending; must build on the BUG-27 clamped baseline).
   - ⚠️ Do NOT use a plain (non-force) reprocess to repair stale data — by design it preserves already-processed rows (live-ingest semantics). Repair REQUIRES the Clear gate.
 
-### PENDING — next session: BUG-24 + BUG-25 (user-confirmed scope, 2026-06-11)
+### ▶️ NEXT — BUG-25 remaining surfaces (page-scoped public split details DONE 2026-06-13, `f5f148b`)
 
 - **BUG-25 (GLOBAL split/race-time rules — not race-specific).** Rules confirmed by user:
   - **Start checkpoint (`DistanceFromStart = 0`):** Split Time = `00:00:00` (baseline, no prior checkpoint); Race Time = `00:00:00` (net-from-start-line is zero by definition).
   - **Every subsequent checkpoint:** Split Time = this checkpoint time − previous checkpoint time; Race Time = this checkpoint time − start-line crossing time.
-  - Applies to EVERY place splits are calculated or displayed: public participant split details page, admin participant detail / BIB drill-down, leaderboard split view, results export (Excel), public grouped leaderboard per-participant drill-down.
-- **BUG-24** — queued alongside (details to come in next session).
+  - Applies to EVERY place splits are calculated or displayed.
+- **DONE:** ✅ **public participant split details page** — `PublicResultsService.GetPublicParticipantDetailAsync` now zeroes the start row (Split=Race=`00:00:00`, speed `—`) and computes segment-based speed (`f5f148b`, 2026-06-13).
+- **➡️ REMAINING SURFACES (next):**
+  1. **admin participant detail / BIB drill-down** — start row = `00:00:00`/`00:00:00`; segment split times.
+  2. **leaderboard split view**.
+  3. **results export (Excel)** (`ResultsExportService`).
+  4. **public grouped leaderboard per-participant drill-down**.
+  - Pattern to reuse: distance-keyed start-row detection (`DistanceFromStart == 0`), Split=`SegmentTime` (start→0), Race=`SplitTimeMs` (start→0); see `f5f148b` for the reference implementation.
+  - ⚠️ Also fold in the latent **pace-semantics inconsistency** flagged 2026-06-13: `ResultsService.CalculateResultsAsync:167` writes `SplitTimes.Pace` as a *cumulative* avg pace while `RecordManualTimeAsync` writes a *segment* pace — decide one definition and apply consistently while touching these surfaces.
+
+- **BUG-24 — backend DONE** (`9b9f510`/`80ee3e9`, verified 2026-06-13). **Frontend half pending** (UI repo): consume `ShowOverall`/`ShowCategory`/`OverallRankBy`/`CategoryRankBy` + per-section caps; Option B dual Male/Female podiums; gender-only filter dropdown; remove grid-header "X finishers" (keep participant-stats "of N"). Research session dispatched 2026-06-13.
 
 ### 2026-05-29 — backend-agent — Live Timing Ingest (Raspberry Pi → API)
 

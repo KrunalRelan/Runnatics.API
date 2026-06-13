@@ -180,7 +180,8 @@ _Use this section to log what each agent built during the current session._
   - **Every subsequent checkpoint:** Split Time = this checkpoint time − previous checkpoint time; Race Time = this checkpoint time − start-line crossing time.
   - Applies to EVERY place splits are calculated or displayed.
 - **DONE:** ✅ **public participant split details page** — `PublicResultsService.GetPublicParticipantDetailAsync` now zeroes the start row (Split=Race=`00:00:00`, speed `—`) and computes segment-based speed (`f5f148b`, 2026-06-13).
-- **➡️ REMAINING SURFACES (next):**
+- **✅ PROD VERIFIED (2026-06-13):** Multiple participants confirmed — Start row `00:00:00`/`00:00:00`/`—`; all segment speeds in realistic running range (10–15 km/h); Race Time increases consistently row to row; Split Times sensible per segment. Public-facing results correct and ready for Punit/Deepender to test the full flow.
+- **➡️ REMAINING SURFACES (lower priority — internal/admin only):**
   1. **admin participant detail / BIB drill-down** — start row = `00:00:00`/`00:00:00`; segment split times.
   2. **leaderboard split view**.
   3. **results export (Excel)** (`ResultsExportService`).

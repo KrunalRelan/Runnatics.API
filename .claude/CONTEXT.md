@@ -64,6 +64,19 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-13 — Public Split Details: speed bug + start-row 00:00:00 (BUG-25 display, page-scoped) — Opus EXECUTE
+
+- **Symptom (Bib 2262, RaceId 47):** public Split Details page (`racetik.com/p/{id}` → "Split Details" tab) showed impossible running speeds (30.86 / 43.49 / 64 / 79 / 86 km/h) and a Start row of 00:00:33 — even though the backend `SplitTimes` data was correct (post Clear-gate rebuild).
+- **Root cause was BACKEND, not UI** (the brief assumed UI repo): `ParticipantDetailPage.tsx` / `getParticipantDetail` (`Runnatics.UI .../src/api/publicApi.ts`) do **zero** math — they render `split.speed/splitTime/raceTime/splitDist` verbatim. The computation is in `PublicResultsService.GetPublicParticipantDetailAsync`. The speed line divided the **cumulative** `ToCheckpoint.DistanceFromStart` by the **per-segment** `SegmentTime` (`st.Distance` is never populated by the pipeline, so it always fell back to cumulative distance). `cumulativeDist ÷ segmentTime` reproduced every reported number to the decimal.
+- **Sweep (user-requested) — the buggy `cumulativeDistance ÷ SegmentTime` formula existed in EXACTLY ONE place.** `ResultsService.RecordManualTimeAsync` (`~1582`) already computed segment speed correctly; `PublicResultsService` avg-pace (`~544/567`) and `ResultsService` (`~167`) are legitimate cumulative-time ÷ cumulative-distance avg pace. 🟡 Noted out-of-scope: `ResultsService.CalculateResultsAsync:167` writes `SplitTimes.Pace` as a *cumulative* avg pace while the manual path writes a *segment* pace — latent pace-semantics inconsistency, tracked separately.
+- **Fix (`PublicResultsService.cs`, `GetPublicParticipantDetailAsync` split projection ~584-606; backend-only, no UI/DTO/SQL change):**
+  1. **Speed** = `segDist / (SegmentTime / 3_600_000)` where `segDist = thisDist − prevDist` (previous row's `DistanceFromStart`; splits already ordered by distance). Guarded `segDist > 0` and `idx > 0` for the prev-row access.
+  2. **Start row** (`DistanceFromStart == 0`) → `SplitTime` = `RaceTime` = `"00:00:00"`, `Speed = null` (renders "—"). Keyed on **distance, not row index**, so a finisher who missed the start mat (first row at >0 km) is NOT wrongly zeroed.
+  3. All other rows keep `SegmentTime`/`SplitTimeMs` unchanged.
+- **Trace (Bib 2262):** speeds now 17.0 / 16.2 / 13.1 / 18.3 / 15.3 / 15.0 / 14.8 km/h (all ~13–18); Start row 00:00:00 / 00:00:00 / —.
+- **Build:** `Runnatics.Services` ✅ 0 errors. **Commit** `f5f148b` (pushed to master). No deploy of UI needed.
+- **Scope note:** this is the **page-scoped** BUG-25 display piece (start row = 0). Other BUG-25 surfaces (admin participant detail, leaderboard split view, Excel export, grouped drill-down) remain tracked under BUG-25 (PENDING).
+
 ### 2026-06-11 — Post-deploy regression round (ISSUE-1/2/3)
 
 - **ISSUE-3 (gender dropdown resets to "Unknown") — FIXED (UI only).**

@@ -188,7 +188,12 @@ _Use this section to log what each agent built during the current session._
   - Pattern to reuse: distance-keyed start-row detection (`DistanceFromStart == 0`), Split=`SegmentTime` (start→0), Race=`SplitTimeMs` (start→0); see `f5f148b` for the reference implementation.
   - ⚠️ Also fold in the latent **pace-semantics inconsistency** flagged 2026-06-13: `ResultsService.CalculateResultsAsync:167` writes `SplitTimes.Pace` as a *cumulative* avg pace while `RecordManualTimeAsync` writes a *segment* pace — decide one definition and apply consistently while touching these surfaces.
 
-- **BUG-24 — backend DONE** (`9b9f510`/`80ee3e9`, verified 2026-06-13). **Frontend half pending** (UI repo): consume `ShowOverall`/`ShowCategory`/`OverallRankBy`/`CategoryRankBy` + per-section caps; Option B dual Male/Female podiums; gender-only filter dropdown; remove grid-header "X finishers" (keep participant-stats "of N"). Research session dispatched 2026-06-13.
+- **BUG-24 — FULLY DONE** (backend `9b9f510`/`80ee3e9`; UI `3860638`, both merged to master 2026-06-13).
+  - **UI changes (GlobalResultsPage.tsx only, commit `3860638`):**
+    1. **Category cap:** dropped `showAll: true` from `getGroupedLeaderboard` call → backend now applies `NumberOfResultsToShowCategory` per age-bracket.
+    2. **Finisher header removed:** deleted the `{data?.totalFinishers} finishers` block from the Leaderboard header. Participant-stats "of N" on `ParticipantDetailPage` is a different endpoint — left untouched.
+    3. **Gender filter:** replaced `getResultBrackets` cascade (age-category dropdown) with a hardcoded Male/Female dropdown; renamed `bracket`→`gender` state; passes `gender:` to API (not `category:`). Selecting Male/Female filters the backend's `genderCategories` → grid shows only that gender's age-bracket columns; both genders shown by default.
+    4. **Dual podium:** replaced `derivePodium` (single mixed-gender pool) with `derivePodiumForGender(genderCategories, targetGender, overallRankBy)`; derive `malePodium` + `femalePodium` separately; render both side-by-side in a grid (Male label | Female label); only show the matching gender's podium when filter is active. Now reads `overallRankBy ?? rankBy` (was missing — `overallRankBy` was never consumed) → podium sort honours Overall sort setting independently of Category sort.
 
 ### 2026-05-29 — backend-agent — Live Timing Ingest (Raspberry Pi → API)
 

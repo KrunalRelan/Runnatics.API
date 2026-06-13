@@ -64,6 +64,19 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-13 — BUG-1 (gender reset on save) + BUG-2 (status filter broken) — admin participant screens — Sonnet EXECUTE
+
+- **BUG-1 — Gender lost on ParticipantDetail.tsx inline save:**
+  - Root cause: `ParticipantDetail.tsx` edit form had no `editGender` state; `handleSaveEdit` sent no `gender` field → backend coerced missing/null gender to `"Unknown"`. The `EditParticipant.tsx` modal (from ViewParticipants list) was already correct.
+  - Fix (`ParticipantDetail.tsx`, UI repo): added `toGenderValue()` helper (same as `EditParticipant.tsx`); added `const [editGender, setEditGender] = useState('')`; populated in populate-useEffect via `setEditGender(toGenderValue(participant.gender || ''))`; added Gender Select (M/F/Other) to edit form; added `gender: editGender || undefined` to `handleSaveEdit` payload.
+  - Note: full-name-in-firstName / empty-lastName data issue flagged per user instruction, not fixed (data-import problem).
+
+- **BUG-2 — Status filter returns nothing for "Completed" and "No Show":**
+  - Root cause: `ParticipantImportService` at two sites called `.ToString()` on `RaceStatus` enum → `Completed→"Completed"` ≠ DB `"Finished"`, `NoShow→"NoShow"` ≠ DB `"DNS"`. Registered and DNF worked by coincidence (enum names match DB strings).
+  - Fix (`ParticipantImportService.cs`): added private static `MapRaceStatusToDbString(RaceStatus)` (`Completed→"Finished"`, `NoShow→"DNS"`, others→name); applied at both filter sites — paginated-search `if (request.Status.HasValue)` block (~line 414) and `BuildSearchExpression` predicate (~line 1418). No enum rename, no DTO change, no SQL.
+  - Fix (`ViewParticipants.tsx`): renamed "No Show" MenuItem label to "DNS".
+- **Builds:** `dotnet build` ✅ 0 errors · `npm run build` ✅ built in ~20s.
+
 ### 2026-06-13 — Public Split Details: speed bug + start-row 00:00:00 (BUG-25 display, page-scoped) — Opus EXECUTE
 
 - **Symptom (Bib 2262, RaceId 47):** public Split Details page (`racetik.com/p/{id}` → "Split Details" tab) showed impossible running speeds (30.86 / 43.49 / 64 / 79 / 86 km/h) and a Start row of 00:00:33 — even though the backend `SplitTimes` data was correct (post Clear-gate rebuild).

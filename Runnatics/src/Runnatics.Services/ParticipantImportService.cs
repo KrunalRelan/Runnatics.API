@@ -413,8 +413,9 @@ namespace Runnatics.Services
                 // Apply status filter if provided
                 if (request.Status.HasValue)
                 {
-                    var statusString = request.Status.Value.ToString();
-                    participantQuery = participantQuery.Where(p => p.Status == statusString);
+                    var statusString = MapRaceStatusToDbString(request.Status.Value);
+                    if (statusString != null)
+                        participantQuery = participantQuery.Where(p => p.Status == statusString);
                 }
 
                 // Apply gender filter if provided
@@ -1415,12 +1416,21 @@ namespace Runnatics.Services
             return e =>
                 e.EventId == eventId &&
                 e.RaceId == raceId &&
-                (!request.Status.HasValue || e.Status == request.Status.Value.ToString()) &&
+                (!request.Status.HasValue || e.Status == MapRaceStatusToDbString(request.Status.Value)) &&
                 (!request.Gender.HasValue || e.Gender == request.Gender.Value.ToString()) &&
                 (string.IsNullOrEmpty(request.Category) || e.AgeCategory == request.Category) &&
                 e.AuditProperties.IsActive &&
                 !e.AuditProperties.IsDeleted;
         }
+
+        private static string? MapRaceStatusToDbString(RaceStatus status) => status switch
+        {
+            RaceStatus.Registered => "Registered",
+            RaceStatus.Completed  => "Finished",
+            RaceStatus.DNF        => "DNF",
+            RaceStatus.NoShow     => "DNS",
+            _                     => null
+        };
 
         /// <summary>
         /// Combines the base expression with a free-text search across multiple fields (BibNumber, FirstName, LastName, Email, Mobile).

@@ -581,23 +581,39 @@ namespace Runnatics.Services
                     };
                 }
 
-                var splitDtos = splits.Select(st =>
+                // splits is ordered by ToCheckpoint.DistanceFromStart (see query above), so we can
+                // walk it with the previous checkpoint's distance to derive each SEGMENT.
+                var splitDtos = splits.Select((st, idx) =>
                 {
+                    var thisDist = st.ToCheckpoint?.DistanceFromStart;
+                    // Start row = the start-line checkpoint (DistanceFromStart == 0). It carries no
+                    // prior segment, and its SplitTimeMs/SegmentTime hold only the gun→mat offset.
+                    // Keyed on distance (not idx 0) so a finisher who missed the start mat — whose
+                    // first recorded row is a >0 km checkpoint — is NOT wrongly zeroed.
+                    bool isStartRow = thisDist.HasValue && thisDist.Value == 0m;
+
                     decimal? speed = null;
-                    if (st.SegmentTime is { } segMs && segMs > 0)
+                    if (!isStartRow && st.SegmentTime is { } segMs && segMs > 0 && thisDist.HasValue)
                     {
-                        var distKm = st.Distance ?? st.ToCheckpoint?.DistanceFromStart;
-                        if (distKm.HasValue)
-                            speed = Math.Round(distKm.Value / ((decimal)segMs / 3600000.0m), 2);
+                        // Speed bug fix: segment distance = this checkpoint − previous checkpoint
+                        // (NOT cumulative DistanceFromStart), divided by this segment's time.
+                        var prevDist = idx > 0 ? (splits[idx - 1].ToCheckpoint?.DistanceFromStart ?? 0m) : 0m;
+                        var segDistKm = thisDist.Value - prevDist;
+                        if (segDistKm > 0)
+                            speed = Math.Round(segDistKm / ((decimal)segMs / 3600000.0m), 2);
                     }
 
                     return new PublicSplitDetailDto
                     {
                         Checkpoint = st.ToCheckpoint?.Name ?? string.Empty,
-                        SplitTime  = st.SegmentTime.HasValue ? FormatMs(st.SegmentTime.Value) : null,
-                        RaceTime   = st.SplitTimeMs.HasValue ? FormatMs(st.SplitTimeMs.Value) : null,
+                        // BUG-25 (page-scoped): the Start row's split and race time are 0 by
+                        // definition — the personal clock starts at the gun, not before it.
+                        SplitTime  = isStartRow ? "00:00:00"
+                                     : (st.SegmentTime.HasValue ? FormatMs(st.SegmentTime.Value) : null),
+                        RaceTime   = isStartRow ? "00:00:00"
+                                     : (st.SplitTimeMs.HasValue ? FormatMs(st.SplitTimeMs.Value) : null),
                         RaceRank   = st.Rank,
-                        SplitDist  = st.ToCheckpoint?.DistanceFromStart,
+                        SplitDist  = thisDist,
                         Pace       = st.Pace.HasValue ? FormatPace(st.Pace.Value) : null,
                         Speed      = speed
                     };

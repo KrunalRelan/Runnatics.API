@@ -132,7 +132,13 @@ _Use this section to log what each agent built during the current session._
   3. **Show toggles:** new `ShowOverall`/`ShowCategory` bools on `PublicGroupedLeaderboardDto`; when OFF the section's list is built empty so the public page hides it.
   4. **Per-section labels:** new `OverallRankBy`/`CategoryRankBy` (additive). Both use the **no-space `"ChipTime"`/`"GunTime"`** format — the form the FE already string-matches on top-level `RankBy` (per BUG-08 review; the spaced `"Chip time"` on `PublicCategoryGroupDto.RankBy` is never consumed and was left as-is).
 - **Files modified:** `PublicResultsService.cs` (`GetPublicGroupedLeaderboardAsync` only), `Public/PublicGroupedLeaderboardDto.cs` (4 additive fields).
-- **Out of scope (frontend):** the flat `/results` page (`GetPublicEventResultsAsync`) already returns `LeaderboardSettings` to the FE correctly and applies nothing itself — if that page misbehaves it's a UI fix (`C:\Projects\Runnatics.UI`, not in this workspace). **BUG-24 needs its UI half** (consume `OverallRankBy`/`CategoryRankBy`/`ShowOverall`/`ShowCategory`) before it's testable end-to-end.
+- **Out of scope (frontend):** the flat `/results` page (`GetPublicEventResultsAsync`) already returns `LeaderboardSettings` to the FE correctly and applies nothing itself — if that page misbehaves it's a UI fix (`C:\Projects\Runnatics.UI`, not in this workspace).
+- **✅ UI half DONE (2026-06-13, repo `C:\Projects\Runnatics.UI\Runnatics.Ui`):** consumes the new fields.
+  - `src/api/publicApi.ts` — added `overallRankBy?`, `categoryRankBy?`, `showOverall?`, `showCategory?` to `GroupedLeaderboardResponse` (all optional → old responses behave as before).
+  - `EventResultsPage.tsx` (real Overall table + Age Category) — split `isGunTime` into `isGunTimeOverall` (←`overallRankBy ?? rankBy`) and `isGunTimeCategory` (←`categoryRankBy ?? rankBy`); Overall podium/table use the overall flag, Age Category uses the category flag; Overall section + its Pagination gated on `showOverall`, Age Category on `showCategory` (default true via `!== false`).
+  - `LeaderboardPage.tsx` & `GlobalResultsPage.tsx` (podium + male/female category columns) — category columns use `categoryRankBy`; podium gated on `showOverall`; category grid gated on `showCategory`.
+  - **Build:** `npm run build` (Vite) ✅ built in ~13s, all bundles emitted. (Raw `tsc -p tsconfig.app.json` floods pre-existing project-wide `@/`-alias + verbatimModuleSyntax errors unrelated to this change — Vite is the source of truth, per prior rounds.)
+  - **Not committed yet** — awaiting user go-ahead to push the UI repo.
 - **Build:** `Runnatics.Services` ✅ 0 errors (14 pre-existing warnings). **Trace (event SRWYS41SkT, event-level row, override OFF):** Overall→Chip/cap5/shown, Category→**Gun**/cap5/shown, sorts diverge. ✓
 - **No SQL** (all columns already exist).
 

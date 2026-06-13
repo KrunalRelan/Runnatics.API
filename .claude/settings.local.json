@@ -39,7 +39,8 @@
       "Bash(npx tsc *)",
       "Bash(npm run *)",
       "Bash(grep -n \"RaceList\\\\|</Card>\\\\|{/\\\\*\" src/main/src/pages/admin/events/ViewEvent.tsx)",
-      "PowerShell(cd C:\\\\Projects\\\\Runnatics.Ui\\\\Runnatics.Ui; npx tsc --noEmit 2>&1 | Select-String -Pattern \"EditParticipant\" -Context 0,1; Write-Output \"---exit:$LASTEXITCODE---\")"
+      "PowerShell(cd C:\\\\Projects\\\\Runnatics.Ui\\\\Runnatics.Ui; npx tsc --noEmit 2>&1 | Select-String -Pattern \"EditParticipant\" -Context 0,1; Write-Output \"---exit:$LASTEXITCODE---\")",
+      "PowerShell(cd C:\\\\Projects\\\\Runnatics.API; dotnet build 2>&1 | Select-String -Pattern \": error|Build succeeded|Build FAILED\" | Select-Object -First 10; $env:DOTNET_ROLL_FORWARD='LatestMajor'; dotnet test Runnatics\\\\tests\\\\Runnatics.Services.Tests\\\\Runnatics.Services.Tests.csproj 2>&1 | Select-String -Pattern \"Passed!|Failed!\" | Select-Object -First 3)"
     ]
   }
 }

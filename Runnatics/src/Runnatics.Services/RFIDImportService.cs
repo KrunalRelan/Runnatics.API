@@ -2343,16 +2343,27 @@ namespace Runnatics.Services
                     startCheckpoint.Id, startCheckpoint.DistanceFromStart,
                     finishCheckpoint.Id, finishCheckpoint.DistanceFromStart);
 
-                // BUG-05: "Finished" requires detection at ALL mandatory checkpoints — not just the
-                // finish line. Fall back to the highest-distance checkpoint as the gate when none are
-                // flagged mandatory. Mirrors ResultsService.ComputeParticipantStatusAsync.
+                // BUG-05 + BUG-26: "Finished" requires detection at ALL mandatory DISTANCES — not
+                // per checkpoint ID. Two devices at the same DistanceFromStart (e.g. parent +
+                // sibling at the finish line) are ONE logical gate: a detection at ANY checkpoint
+                // at that distance satisfies it. Fall back to the highest-distance checkpoint's
+                // distance when none are flagged mandatory. Mirrors ResultsService
+                // (CalculateResultsAsync / ComputeParticipantStatusAsync / RecordManualTimeAsync).
                 var mandatoryCheckpoints = checkpoints.Where(cp => cp.IsMandatory).ToList();
-                var mandatoryCheckpointIds = mandatoryCheckpoints.Count > 0
-                    ? mandatoryCheckpoints.Select(cp => cp.Id).ToHashSet()
-                    : new HashSet<int> { finishCheckpoint.Id };
-                var finishGateCheckpoint = mandatoryCheckpoints.Count > 0
-                    ? mandatoryCheckpoints.OrderByDescending(cp => cp.DistanceFromStart).First()
-                    : finishCheckpoint;
+                var mandatoryDistances = mandatoryCheckpoints.Count > 0
+                    ? mandatoryCheckpoints.Select(cp => cp.DistanceFromStart).Distinct().ToList()
+                    : new List<decimal> { finishCheckpoint.DistanceFromStart };
+
+                // ALL active checkpoint IDs at each mandatory distance (flagged or not — a reading
+                // on an unflagged sibling/child device at the same distance still satisfies the gate).
+                var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
+                    d => d,
+                    d => checkpoints.Where(cp => cp.DistanceFromStart == d).Select(cp => cp.Id).ToHashSet());
+
+                // Finish gate = highest mandatory distance; readings at ANY checkpoint at that
+                // distance provide finish time/ranking (status and time come from the same rule).
+                var finishGateDistance = mandatoryDistances.Max();
+                var finishGateCheckpointIds = idsByMandatoryDistance[finishGateDistance].ToList();
 
                 // Get ALL registered participants for this race
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
@@ -2370,11 +2381,18 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                // Get normalized readings at START checkpoint — to determine DNS
+                // Get normalized readings at the START gate — to determine DNS.
+                // BUG-26: the start gate is per-DISTANCE too — a detection at ANY checkpoint at
+                // the start distance (parent, sibling or child device) counts as "started".
+                var startGateCheckpointIds = checkpoints
+                    .Where(cp => cp.DistanceFromStart == startCheckpoint.DistanceFromStart)
+                    .Select(cp => cp.Id)
+                    .ToList();
+
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
                 var startReadings = await normalizedRepo.GetQuery(rn =>
                     rn.EventId == decryptedEventId &&
-                    rn.CheckpointId == startCheckpoint.Id &&
+                    startGateCheckpointIds.Contains(rn.CheckpointId) &&
                     rn.AuditProperties.IsActive &&
                     !rn.AuditProperties.IsDeleted)
                     .ToListAsync();
@@ -2383,24 +2401,36 @@ namespace Runnatics.Services
                     .Select(r => r.ParticipantId)
                     .ToHashSet();
 
-                // Get normalized readings at the FINISH GATE (highest mandatory checkpoint) — used for
-                // finish time and ranking. Reaching the gate alone no longer implies "Finished".
-                var finishReadings = await normalizedRepo.GetQuery(rn =>
+                // Get normalized readings at the FINISH GATE (all checkpoints at the highest
+                // mandatory distance) — used for finish time and ranking. Reaching the gate alone
+                // no longer implies "Finished".
+                var finishReadingsRaw = await normalizedRepo.GetQuery(rn =>
                     rn.EventId == decryptedEventId &&
-                    rn.CheckpointId == finishGateCheckpoint.Id &&
+                    finishGateCheckpointIds.Contains(rn.CheckpointId) &&
                     rn.AuditProperties.IsActive &&
                     !rn.AuditProperties.IsDeleted)
                     .Include(rn => rn.Participant)
-                    .OrderBy(rn => rn.GunTime ?? long.MaxValue)
                     .ToListAsync();
 
-                // BUG-05: detections at ALL mandatory checkpoints — the source of truth for Finished.
-                var mandatoryIdList = mandatoryCheckpointIds.ToList();
+                // BUG-26: multiple devices can cover the finish distance — collapse to ONE gate
+                // reading per participant (earliest GunTime wins) so ranking/result rows are unique.
+                var finishReadings = finishReadingsRaw
+                    .GroupBy(rn => rn.ParticipantId)
+                    .Select(g => g.OrderBy(rn => rn.GunTime ?? long.MaxValue).First())
+                    .OrderBy(rn => rn.GunTime ?? long.MaxValue)
+                    .ToList();
+
+                // BUG-05 + BUG-26: detections at ALL checkpoints at mandatory distances — the
+                // source of truth for Finished.
+                var mandatoryGateIdList = idsByMandatoryDistance.Values
+                    .SelectMany(ids => ids)
+                    .Distinct()
+                    .ToList();
                 var participantIdList = allParticipants.Select(p => p.Id).ToList();
                 var mandatoryDetections = await normalizedRepo.GetQuery(rn =>
                     rn.EventId == decryptedEventId &&
                     participantIdList.Contains(rn.ParticipantId) &&
-                    mandatoryIdList.Contains(rn.CheckpointId) &&
+                    mandatoryGateIdList.Contains(rn.CheckpointId) &&
                     rn.AuditProperties.IsActive &&
                     !rn.AuditProperties.IsDeleted)
                     .Select(rn => new { rn.ParticipantId, rn.CheckpointId })
@@ -2460,11 +2490,13 @@ namespace Runnatics.Services
                 foreach (var participant in allParticipants)
                 {
                     var covered = mandatoryDetectionsByParticipant.GetValueOrDefault(participant.Id, []);
-                    bool allMandatoryCovered = mandatoryCheckpointIds.All(id => covered.Contains(id));
+                    // BUG-26: a mandatory DISTANCE is satisfied by a detection at ANY checkpoint
+                    // at that distance (not every checkpoint ID individually).
+                    bool allMandatoryCovered = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
 
                     if (allMandatoryCovered)
                     {
-                        // Detected at every mandatory checkpoint → Finished
+                        // Detected at every mandatory distance → Finished
                         finishedParticipantIds.Add(participant.Id);
                     }
                     else if (!participantsWithStart.Contains(participant.Id))

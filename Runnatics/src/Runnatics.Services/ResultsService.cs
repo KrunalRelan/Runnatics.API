@@ -291,14 +291,23 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                // Mandatory checkpoints define "Finished"; fall back to highest-distance if none flagged
+                // BUG-26: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two devices
+                // at the same DistanceFromStart are ONE logical gate — a detection at ANY checkpoint
+                // at that distance satisfies it. Fall back to the highest distance if none flagged.
+                // Mirrors RFIDImportService.CalculateRaceResultsAsync.
                 var mandatoryCheckpoints = allCheckpoints.Where(c => c.IsMandatory).ToList();
-                var finishCheckpoint = mandatoryCheckpoints.Count > 0
-                    ? mandatoryCheckpoints.OrderByDescending(c => c.DistanceFromStart).First()
-                    : allCheckpoints.First(); // already sorted descending
-                var mandatoryCheckpointIds = mandatoryCheckpoints.Count > 0
-                    ? mandatoryCheckpoints.Select(c => c.Id).ToHashSet()
-                    : new HashSet<int> { finishCheckpoint.Id };
+                var mandatoryDistances = mandatoryCheckpoints.Count > 0
+                    ? mandatoryCheckpoints.Select(c => c.DistanceFromStart).Distinct().ToList()
+                    : new List<decimal> { allCheckpoints.First().DistanceFromStart }; // already sorted descending
+
+                var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
+                    d => d,
+                    d => allCheckpoints.Where(c => c.DistanceFromStart == d).Select(c => c.Id).ToHashSet());
+
+                // Finish gate = ALL checkpoints at the highest mandatory distance — finish time and
+                // status must come from the same rule.
+                var finishGateDistance = mandatoryDistances.Max();
+                var finishGateCheckpointIds = idsByMandatoryDistance[finishGateDistance];
 
                 // Get all participants in the race
                 var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
@@ -324,14 +333,14 @@ namespace Runnatics.Services
                     .GroupBy(st => st.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.ToList());
 
-                // Load ReadNormalized detections at mandatory checkpoints for all race participants.
+                // Load ReadNormalized detections at the mandatory gates for all race participants.
                 // This is the source of truth for Finished vs DNF — EPC reads AND manual entries both land here.
                 var participantIds = allParticipants.Select(p => p.Id).ToList();
-                var mandatoryIdList = mandatoryCheckpointIds.ToList();
+                var mandatoryGateIdList = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
                 var readNormalizedRepo = _repository.GetRepository<ReadNormalized>();
                 var allDetections = await readNormalizedRepo.GetQuery(rn =>
                     participantIds.Contains(rn.ParticipantId) &&
-                    mandatoryIdList.Contains(rn.CheckpointId) &&
+                    mandatoryGateIdList.Contains(rn.CheckpointId) &&
                     !rn.AuditProperties.IsDeleted)
                     .Select(rn => new { rn.ParticipantId, rn.CheckpointId })
                     .ToListAsync();
@@ -340,12 +349,13 @@ namespace Runnatics.Services
                     .GroupBy(d => d.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.Select(d => d.CheckpointId).ToHashSet());
 
-                // Finisher = all mandatory checkpoints detected in ReadNormalized
+                // Finisher = every mandatory DISTANCE satisfied by a detection at ANY checkpoint
+                // at that distance
                 var finisherIds = allParticipants
                     .Where(p =>
                     {
                         var covered = detectionsByParticipant.GetValueOrDefault(p.Id, []);
-                        return mandatoryCheckpointIds.All(id => covered.Contains(id));
+                        return mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
                     })
                     .Select(p => p.Id)
                     .ToHashSet();
@@ -384,15 +394,18 @@ namespace Runnatics.Services
                     {
                         var pSplits = splitsByParticipant.GetValueOrDefault(participant.Id, []);
                         var covered = detectionsByParticipant.GetValueOrDefault(participant.Id, []);
-                        bool isFinisher = mandatoryCheckpointIds.All(id => covered.Contains(id));
+                        bool isFinisher = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
 
                         string status = isFinisher ? ResultStatus.Finished : ResultStatus.DNF;
                         long? finishTime = null;
 
                         if (isFinisher)
                         {
+                            // BUG-26: finish time from a split at ANY checkpoint at the finish-gate
+                            // distance (earliest wins) — same rule that granted Finished status.
                             finishTime = pSplits
-                                .Where(st => st.ToCheckpointId == finishCheckpoint.Id || st.CheckpointId == finishCheckpoint.Id)
+                                .Where(st => finishGateCheckpointIds.Contains(st.ToCheckpointId) ||
+                                             (st.CheckpointId.HasValue && finishGateCheckpointIds.Contains(st.CheckpointId.Value)))
                                 .OrderBy(st => st.SplitTimeMs)
                                 .FirstOrDefault()?.SplitTimeMs;
                         }
@@ -1500,43 +1513,36 @@ namespace Runnatics.Services
                 var splitRepo = _repository.GetRepository<SplitTimes>();
                 var rnRepo = _repository.GetRepository<ReadNormalized>();
 
-                // Determine which checkpoints are mandatory (for status computation)
-                var mandatoryIds = await _repository.GetRepository<Checkpoint>()
-                    .GetQuery(cp => cp.RaceId == decryptedRaceId
-                                 && cp.EventId == decryptedEventId
-                                 && cp.IsMandatory
-                                 && cp.AuditProperties.IsActive
-                                 && !cp.AuditProperties.IsDeleted)
-                    .Select(cp => cp.Id)
+                // BUG-26: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two devices
+                // at the same DistanceFromStart are ONE logical gate — a detection at ANY checkpoint
+                // at that distance satisfies it. Mirrors RFIDImportService.CalculateRaceResultsAsync
+                // and ComputeParticipantStatusAsync. (raceCheckpoints already holds all active
+                // checkpoints for this race — no extra query needed.)
+                var mandatoryDistances = raceCheckpoints.Any(c => c.IsMandatory)
+                    ? raceCheckpoints.Where(c => c.IsMandatory).Select(c => c.DistanceFromStart).Distinct().ToList()
+                    // Fallback: the highest distance acts as the mandatory finish gate
+                    : new List<decimal> { raceCheckpoints.Max(c => c.DistanceFromStart) };
+
+                var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
+                    d => d,
+                    d => raceCheckpoints.Where(c => c.DistanceFromStart == d).Select(c => c.Id).ToHashSet());
+
+                var mandatoryGateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
+
+                // Existing ReadNormalized detections at the mandatory gates for this participant
+                var existingDetectedIds = await rnRepo.GetQuery(rn =>
+                    rn.ParticipantId == decryptedParticipantId &&
+                    mandatoryGateIds.Contains(rn.CheckpointId) &&
+                    !rn.AuditProperties.IsDeleted)
+                    .Select(rn => rn.CheckpointId)
+                    .Distinct()
                     .ToListAsync();
-
-                if (mandatoryIds.Count == 0)
-                {
-                    // Fallback: treat the highest-distance checkpoint as mandatory
-                    var fallbackId = raceCheckpoints
-                        .OrderByDescending(c => c.DistanceFromStart)
-                        .Select(c => c.Id)
-                        .FirstOrDefault();
-                    if (fallbackId != 0)
-                        mandatoryIds = [fallbackId];
-                }
-
-                // Existing ReadNormalized detections at mandatory checkpoints for this participant
-                var existingDetectedIds = mandatoryIds.Count > 0
-                    ? await rnRepo.GetQuery(rn =>
-                        rn.ParticipantId == decryptedParticipantId &&
-                        mandatoryIds.Contains(rn.CheckpointId) &&
-                        !rn.AuditProperties.IsDeleted)
-                        .Select(rn => rn.CheckpointId)
-                        .Distinct()
-                        .ToListAsync()
-                    : new List<int>();
 
                 // Add the checkpoint being recorded now to the covered set (in-memory, before DB write)
                 var coveredCheckpointIds = existingDetectedIds.ToHashSet();
                 coveredCheckpointIds.Add(decryptedCheckpointId);
 
-                var computedStatus = mandatoryIds.Count > 0 && mandatoryIds.All(id => coveredCheckpointIds.Contains(id))
+                var computedStatus = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(coveredCheckpointIds))
                     ? ResultStatus.Finished
                     : ResultStatus.DNF;
 
@@ -1916,42 +1922,41 @@ namespace Runnatics.Services
 
         private async Task<string> ComputeParticipantStatusAsync(int eventId, int raceId, int participantId)
         {
-            var mandatoryIds = await _repository.GetRepository<Checkpoint>()
+            // BUG-26: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two devices at
+            // the same DistanceFromStart are ONE logical gate — a detection at ANY checkpoint at
+            // that distance satisfies it. Mirrors RFIDImportService.CalculateRaceResultsAsync.
+            var allCheckpoints = await _repository.GetRepository<Checkpoint>()
                 .GetQuery(cp => cp.RaceId == raceId
                              && cp.EventId == eventId
-                             && cp.IsMandatory
                              && cp.AuditProperties.IsActive
                              && !cp.AuditProperties.IsDeleted)
-                .Select(cp => cp.Id)
+                .Select(cp => new { cp.Id, cp.DistanceFromStart, cp.IsMandatory })
                 .ToListAsync();
 
-            if (mandatoryIds.Count == 0)
-            {
-                // Fallback: highest-distance checkpoint acts as the mandatory finish gate
-                var fallbackId = await _repository.GetRepository<Checkpoint>()
-                    .GetQuery(cp => cp.RaceId == raceId
-                                 && cp.EventId == eventId
-                                 && cp.AuditProperties.IsActive
-                                 && !cp.AuditProperties.IsDeleted)
-                    .OrderByDescending(cp => cp.DistanceFromStart)
-                    .Select(cp => cp.Id)
-                    .FirstOrDefaultAsync();
-                if (fallbackId != 0)
-                    mandatoryIds = [fallbackId];
-            }
-
-            if (mandatoryIds.Count == 0)
+            if (allCheckpoints.Count == 0)
                 return ResultStatus.DNF;
 
-            var detectedIds = await _repository.GetRepository<ReadNormalized>()
+            var mandatoryDistances = allCheckpoints.Any(cp => cp.IsMandatory)
+                ? allCheckpoints.Where(cp => cp.IsMandatory).Select(cp => cp.DistanceFromStart).Distinct().ToList()
+                // Fallback: the highest distance acts as the mandatory finish gate
+                : new List<decimal> { allCheckpoints.Max(cp => cp.DistanceFromStart) };
+
+            var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
+                d => d,
+                d => allCheckpoints.Where(cp => cp.DistanceFromStart == d).Select(cp => cp.Id).ToHashSet());
+
+            var gateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
+
+            var detectedIds = (await _repository.GetRepository<ReadNormalized>()
                 .GetQuery(rn => rn.ParticipantId == participantId
-                             && mandatoryIds.Contains(rn.CheckpointId)
+                             && gateIds.Contains(rn.CheckpointId)
                              && !rn.AuditProperties.IsDeleted)
                 .Select(rn => rn.CheckpointId)
                 .Distinct()
-                .ToListAsync();
+                .ToListAsync())
+                .ToHashSet();
 
-            return mandatoryIds.All(id => detectedIds.Contains(id))
+            return mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(detectedIds))
                 ? ResultStatus.Finished
                 : ResultStatus.DNF;
         }

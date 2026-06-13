@@ -87,6 +87,29 @@ _Use this section to log what each agent built during the current session._
   - **Known limitations (documented in design doc §7):** L1 — true cyclic persistence needs lap-discriminated dedup keys + lap column on `ReadNormalized` (future, schema); L2 — a missed read on the SAME device group shifts later pass ordinals (location-blind hardware, monotonic validation can't catch; future expected-time-window mitigation); legacy upload-time path (`ProcessRFIDImportAsync` ~1108-1389, "LoopRaceSequence") left untouched — Phase 1.5 FIX #7 wipes/rebuilds its assignments.
   - **To verify the 7th GGHM fix in prod:** deploy, then re-trigger processing for the 21KM race (Phase 1.5 deletes + recreates all assignments) and confirm `ReadNormalized`/`SplitTimes` populate for all 6 devices. Note prior open item still stands: run the `IsMandatory` schema script if not yet applied (required by `CalculateRaceResultsAsync`).
 
+### 2026-06-12 — BUG-26 (mandatory checkpoint evaluation per-DISTANCE, not per-checkpoint-ID)
+
+- **Rule (user-approved):** mandatory distances = DISTINCT `DistanceFromStart` where any active checkpoint is `IsMandatory`; a distance is SATISFIED if the participant has active `ReadNormalized` at ANY checkpoint at that distance (flagged or not — covers unflagged sibling/child devices); `Finished` = ALL mandatory distances satisfied. Fallback when none flagged: max distance (now distance-based, accepts any device at that distance). Previously `Finished` required a detection at EVERY mandatory checkpoint **ID** → two mandatory devices at the same distance wrongly produced DNF.
+- **Fixed in ALL FOUR sites** (research found 2 beyond the reported 2; user approved including them — one rule everywhere):
+  1. `RFIDImportService.CalculateRaceResultsAsync` — distance-group build, widened `mandatoryDetections` query, per-distance classification; **finish gate widened** to all checkpoint IDs at the highest mandatory distance, with finish readings collapsed to ONE per participant (earliest GunTime) so ranking/result rows stay unique (status and time come from the same rule).
+  2. `ResultsService.ComputeParticipantStatusAsync` — full rewrite to per-distance (loads Id+Distance+IsMandatory in one query).
+  3. `ResultsService.RecordManualTimeAsync` — per-distance status after manual entry; now derives groups from the already-loaded `raceCheckpoints` (removed a redundant DB query); the in-memory `coveredCheckpointIds.Add(recordedCheckpoint)` still satisfies its own distance group.
+  4. `ResultsService.CalculateResultsAsync` — per-distance finisher check (both occurrences) + finish time from a split at ANY checkpoint at the finish-gate distance (earliest `SplitTimeMs`; handles nullable `SplitTimes.CheckpointId`).
+- **Verify:** `dotnet build` per site ✅ ×4 · full solution ✅ · assigner tests ✅ 19/19 · traced the 21.1km two-mandatory-device case through all four sites (sibling-only detection → Finished with time+rank; dual detection → one rank row).
+- **⚠️ Env note:** .NET 8 runtime is no longer installed on this machine (only 10.0.8) — `dotnet test` needs `$env:DOTNET_ROLL_FORWARD='LatestMajor'` to run the net8.0 test project. Consider retargeting tests to net10.0 or installing the .NET 8 runtime.
+- **✅ DNS start-gate also fixed (user-approved follow-up):** the DNS check in `CalculateRaceResultsAsync` now loads start readings from ALL checkpoint IDs at the start distance (`startGateCheckpointIds`) instead of the single `startCheckpoint.Id` — a participant read only by a sibling/child device at the start line now counts as "started" (DNF, not DNS). The DNS gate exists only in this site (ResultsService paths classify Finished/DNF only). Build ✅ · 19/19 tests ✅.
+- **Prod verification (after deploy):** reprocess RaceId 47 (7th GGHM 21KM), then
+  `SELECT Status, COUNT(*) FROM Results r JOIN Participants p ON r.ParticipantId=p.Id WHERE p.RaceId=47 AND r.IsActive=1 AND r.IsDeleted=0 GROUP BY Status;`
+  Expected ≈ 142 Finished / 25 DNF / 51 DNS (Excel baseline).
+
+### PENDING — next session: BUG-24 + BUG-25 (user-confirmed scope, 2026-06-11)
+
+- **BUG-25 (GLOBAL split/race-time rules — not race-specific).** Rules confirmed by user:
+  - **Start checkpoint (`DistanceFromStart = 0`):** Split Time = `00:00:00` (baseline, no prior checkpoint); Race Time = `00:00:00` (net-from-start-line is zero by definition).
+  - **Every subsequent checkpoint:** Split Time = this checkpoint time − previous checkpoint time; Race Time = this checkpoint time − start-line crossing time.
+  - Applies to EVERY place splits are calculated or displayed: public participant split details page, admin participant detail / BIB drill-down, leaderboard split view, results export (Excel), public grouped leaderboard per-participant drill-down.
+- **BUG-24** — queued alongside (details to come in next session).
+
 ### 2026-05-29 — backend-agent — Live Timing Ingest (Raspberry Pi → API)
 
 - **Branch**: `master`

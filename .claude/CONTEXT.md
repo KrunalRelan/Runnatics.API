@@ -64,6 +64,26 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-14 — Race-move CONSOLIDATION REFACTOR (the real fix; replaces the 3-patch saga) — Opus EXECUTE
+
+**Why:** three patches to `MigrateParticipantToRaceAsync` each exposed the next layer (tracking 500 → SaveChanges flush → `DbUpdateConcurrencyException` "expected 1 row, affected 0"). Root model was wrong: the method **reassigned derived/normalized timing in place across races** (`UPDATE Results.RaceId`, `UPDATE ReadNormalized.CheckpointId+ParticipantId`, soft-delete SplitTimes). A 21.1K finisher's 9 detections / 8 splits live at 5/10/15/21 km mats that **don't exist on a 5K** — carrying them is garbage AND the phantom-PK 0-rows source. No concurrency token exists anywhere (verified), so 0-rows = PK-absent at write time, not a token mismatch. `BulkUpdate` would have HIDDEN the 0-rows and persisted corrupt data — explicitly rejected.
+
+**Data-model facts established:** `ReadNormalized` is **race-bound** (no `RaceId` column; bound via `CheckpointId`→race-specific `Checkpoint` + race-relative Gun/Net times; `RawReadId`→`ReadRaw`). `ReadRaw` (EPC/reader/timestamp) is the **immutable physical-detection audit trail**, NOT participant-keyed; `ReadNormalized.RawReadId→ReadRaw` is `OnDelete:SetNull`, so deleting `ReadNormalized` never touches `ReadRaw` (confirmed before deleting). `Results↔Participant` is 1:1 with a UNIQUE `Results.ParticipantId` index.
+
+**Refactor (`ParticipantImportService.cs` only):**
+- `MigrateParticipantToRaceAsync` → **`MoveParticipantToRaceAsync`** (runtime move, not an EF migration; old name violated no-migrations convention + misled debugging). Both callers renamed (`EditParticipant`, `UpdateParticipantExtendedAsync`).
+- **SAVE (one transaction):** move registration on the **same Participant row** (`RaceId=target`, `Status="Registered"`, audit); **HARD-DELETE** this participant's `Results`/`SplitTimes`/`ReadNormalized` via `BulkDeleteAsync` (retain `ReadRaw`); `ChipAssignment` untouched (same row); re-rank **source race only**. No cross-race reassignment, no new participant row, **no inline target reprocess**.
+- `RecalculateRaceRanksAsync` → **`ReRankRaceAsync`**: dropped `.Include(Participant)` (no graph cascade), projects gender/category via dict, writes via `BulkUpdateAsync`.
+- Removed now-unused `IServiceScopeFactory` injection + DI using (the `afe3cbe` inline reprocess is gone).
+- **PROCESS RESULT unchanged** — owns the target rebuild (fresh context). Cross-distance move → participant has no target detections → DNS (correct) until manual time.
+
+**Why the failure class is gone:** only ONE tracked entity (participant) per transaction (everything else bulk) → no NoTracking double-attach; derived rows deleted not re-read-then-written → no phantom-PK 0-rows; derived data never carried across layouts → no corrupt 21km-on-5K data.
+
+**Build:** ✅ 0 errors. **Tests:** Services ✅ 19/19.
+**Prod verify (bib 2148, 21.1K→5K):** Save → Registered/DNS in 5K, source 21.1K re-ranked without them, no 500, no 0-rows, `ReadRaw` retained.
+**Booked follow-up:** same-distance move should re-normalize from retained `ReadRaw` instead of delete-to-DNS.
+**Supersedes:** the BUG A `afe3cbe` (fresh-scope) + `d43d59b` (SaveChanges flush) patches — both targeted symptoms of this wrong model.
+
 ### 2026-06-14 — BUG B (process-result 404) — DONE (UI repo)
 
 - **Symptom:** `POST /api/Results/{eventId}/{raceId}/participant/{participantId}/process-result` → 404 from the participant detail page.
@@ -97,7 +117,7 @@ _Use this section to log what each agent built during the current session._
 **Files modified this pass:** `Runnatics.Services/ParticipantImportService.cs` (SaveChanges before source re-rank). (`afe3cbe` already shipped the fresh-scope isolation + dedupe guard.)
 **Prod verify (after deploy):** move bib 2148 (21.1K → 5K) via the **Race** dropdown → confirm no 500, source (21.1K) re-ranked without them, target (5K) ranks them in.
 
-**Problem 2 (UI, "process-then-save doesn't move runner") — NOT a backend bug; pending user network-tab check.** Payload showed `category:"18 to 30"` changed but `raceId` unchanged → admin likely changed the **Category** dropdown (relabels age bracket within the SAME race), not the **Race** dropdown (which triggers the move). `ParticipantDetail.tsx` race-move binding looks correct (`handleRaceIdChange → confirm → setEditRaceId → raceId:editRaceId`). User to confirm: change the **Race** dropdown specifically and verify the PUT `raceId` becomes the 5K id. No UI code until confirmed.
+**Problem 2 (UI, "process-then-save doesn't move runner") — ✅ RESOLVED, NOT a bug (user-confirmed 2026-06-14).** User verified in the network tab: changing the **Race** dropdown DOES send the target 5K id in the PUT `raceId`. The earlier payload (`category:"18 to 30"` changed, `raceId` unchanged) was the admin changing the **Category** dropdown — which relabels the age bracket within the SAME race and never triggers a move. `ParticipantDetail.tsx` race-move binding is correct (`handleRaceIdChange → confirm → setEditRaceId → raceId:editRaceId`). No UI change needed. (UX note for the future refactor: Category vs Race dropdowns are easy to confuse — consider clearer labeling/separation.)
 
 **📌 BOOKED (separate session) — race-move/category-change consolidation refactor.** This path has now produced 5 distinct bugs. Target model: on **Save** = move registration + invalidate derived data; on **Process Result** = recompute splits/results + re-rank BOTH races; derived data always rebuilt, never carried across races. Settle first: is `ReadNormalized` keyed by RaceId or by EPC+Event (decides whether "move the readings" is real work or a reprocess no-op). Do NOT fold into a bugfix — dedicated pass.
 

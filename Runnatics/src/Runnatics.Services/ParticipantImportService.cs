@@ -1,6 +1,7 @@
 using AutoMapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Common;
@@ -23,13 +24,13 @@ namespace Runnatics.Services
         ILogger<ParticipantImportService> logger,
         IUserContextService userContext,
         IEncryptionService encryptionService,
-        IRFIDImportService rfidImportService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
+        IServiceScopeFactory scopeFactory) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
     {
         protected readonly IMapper _mapper = mapper;
         private readonly ILogger<ParticipantImportService> _logger = logger;
         private readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
-        private readonly IRFIDImportService _rfidImportService = rfidImportService;
+        private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
 
         public async Task<ParticipantImportResponse> UploadParticipantsCsvAsync(string eventId, ParticipantImportRequest request)
         {
@@ -2484,14 +2485,27 @@ namespace Runnatics.Services
             //    ReadNormalized rows (against the target race's gun start) and recompute
             //    mandatory-aware status + rankings. Runs after the move transaction commits
             //    so the pipeline's own transactions are not nested.
+            //    CRITICAL: resolve IRFIDImportService from a FRESH DI scope so the reprocess
+            //    runs on its own DbContext with an empty change tracker. The migration above
+            //    leaves the moved Results/ReadNormalized rows tracked on THIS request's
+            //    DbContext; running CalculateRaceResultsAsync on the same context would attempt
+            //    to track those rows again → "another instance with the same key is already
+            //    being tracked". A fresh scope (mirrors LiveReadingService) eliminates the
+            //    collision. Awaited (not fire-and-forget) so the move reflects fresh results
+            //    before the request returns; HttpContext is intact so the scoped user context
+            //    still resolves the current user/tenant.
             var encEventId = _encryptionService.Encrypt(eventId.ToString());
             var encTargetRaceId = _encryptionService.Encrypt(targetRaceId.ToString());
-            var splitResult = await _rfidImportService.CreateSplitTimesFromNormalizedReadingsAsync(encEventId, encTargetRaceId);
-            if (splitResult.Status == "Failed")
-                _logger.LogWarning("Target-race split rebuild failed after move of participant {ParticipantId} to Race {NewRace}: {Error}", sourceParticipantId, targetRaceId, splitResult.ErrorMessage);
-            var resultsResult = await _rfidImportService.CalculateRaceResultsAsync(encEventId, encTargetRaceId);
-            if (resultsResult.Status == "Failed")
-                _logger.LogWarning("Target-race results recalculation failed after move of participant {ParticipantId} to Race {NewRace}", sourceParticipantId, targetRaceId);
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var rfidService = scope.ServiceProvider.GetRequiredService<IRFIDImportService>();
+                var splitResult = await rfidService.CreateSplitTimesFromNormalizedReadingsAsync(encEventId, encTargetRaceId);
+                if (splitResult.Status == "Failed")
+                    _logger.LogWarning("Target-race split rebuild failed after move of participant {ParticipantId} to Race {NewRace}: {Error}", sourceParticipantId, targetRaceId, splitResult.ErrorMessage);
+                var resultsResult = await rfidService.CalculateRaceResultsAsync(encEventId, encTargetRaceId);
+                if (resultsResult.Status == "Failed")
+                    _logger.LogWarning("Target-race results recalculation failed after move of participant {ParticipantId} to Race {NewRace}", sourceParticipantId, targetRaceId);
+            }
 
             _logger.LogInformation("Participant {ParticipantId} reassigned from Race {OldRace} to Race {NewRace}; readings remapped, splits/results reprocessed for target race", sourceParticipantId, sourceRaceId, targetRaceId);
             return newParticipant;

@@ -64,6 +64,25 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-14 — BUG A (edit-participant 500: EF Results double-tracking on race-move) — Opus EXECUTE
+
+**Symptom:** `PUT /api/participants/{id}/edit-participant` → 500 when moving a runner to a different race category. Error: "The instance of entity type 'Results' cannot be tracked because another instance with the same key value for {'Id'} is already being tracked."
+
+**Root cause (research-confirmed):** `MigrateParticipantToRaceAsync` (`ParticipantImportService.cs:2287`) runs the post-commit reprocess (`CreateSplitTimesFromNormalizedReadingsAsync` + `CalculateRaceResultsAsync`) on the SAME request-scoped `DbContext` that still holds the migration's tracked `Results`/`ReadNormalized` rows. The reprocess re-materializes those rows → tracker collision.
+- ⚠️ **Disproven theory (do NOT implement):** the prior-session agent claimed `RecalculateRaceRanksAsync` (line 2504) re-query throws and suggested `.AsNoTracking()` there. That is WRONG — tracked re-queries return the same instance via identity resolution (no throw), and adding AsNoTracking there would load fresh instances that `UpdateRangeAsync` (2545) then attaches over the already-tracked R1 (from 2394) → would DETERMINISTICALLY CAUSE the exact error. The rank helpers read-then-write the same rows and MUST stay tracked.
+
+**Fix (approved — context isolation, mirrors `LiveReadingService` 2026-05-29):**
+- `ParticipantImportService` constructor: dropped direct `IRFIDImportService` injection, added `IServiceScopeFactory scopeFactory` (+ `using Microsoft.Extensions.DependencyInjection`).
+- `MigrateParticipantToRaceAsync` step 6 (~2490): the reprocess now resolves `IRFIDImportService` from a FRESH DI scope (`_scopeFactory.CreateScope()` → `GetRequiredService`), so it runs on its own `DbContext` with an empty change tracker. **Awaited (NOT fire-and-forget)** so the move reflects fresh splits/results before the request returns; HttpContext is intact on the request thread so the new scope's `IUserContextService` still resolves the current user/tenant.
+
+**Secondary guard (user-flagged, RFID service):** `CalculateRaceResultsAsync` (`RFIDImportService.cs:2540`) built `existingResults` via `ToDictionaryAsync(r => r.ParticipantId)` — a participant with 2 Results rows in the target race (e.g. a partially-failed prior move) would throw a duplicate-key `ArgumentException` (a DIFFERENT 500). Now loads to a list, logs a warning listing offending ParticipantIds, and dedupes keeping the highest Id (most recent) per participant. Degrades instead of failing. Minimal — not over-engineered.
+
+**Build:** `dotnet build` ✅ 0 errors. **Tests:** Services ✅ 19/19 (`DOTNET_ROLL_FORWARD=LatestMajor` for net8.0).
+**Files modified:** `Runnatics.Services/ParticipantImportService.cs`, `Runnatics.Services/RFIDImportService.cs`.
+**Prod verify (after deploy):** move a 7th GGHM participant to another race category via edit-participant → confirm no 500 and target-race splits/results/ranks populate. (BUG B — process-result 404 — is a UI-repo fix: point FE at `POST /api/Participants/{eventId}/{raceId}/{participantId}/process-result`.)
+
+---
+
 ### 2026-06-14 — Gender canonicalization (NormalizeGenderForWrite + filter + rank bugs) — Sonnet EXECUTE
 
 **Scope:** Three tightly-scoped fixes in `ParticipantImportService.cs` only.

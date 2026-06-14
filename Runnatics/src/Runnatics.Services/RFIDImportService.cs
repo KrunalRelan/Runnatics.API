@@ -2535,12 +2535,30 @@ namespace Runnatics.Services
                     finishedParticipantIds.Count, dnfParticipantIds.Count,
                     dnsParticipantIds.Count, allParticipants.Count);
 
-                // Get existing results to check for updates vs inserts
+                // Get existing results to check for updates vs inserts.
+                // Guard: a participant should have at most ONE Results row per race, but if a
+                // data anomaly leaves two (e.g. a partially-failed prior race-move), a plain
+                // ToDictionary(ParticipantId) throws a duplicate-key ArgumentException → 500.
+                // Dedupe defensively (keep the highest Id = most recent) and log, so result
+                // recalculation degrades instead of failing the whole request.
                 var resultsRepo = _repository.GetRepository<Results>();
-                var existingResults = await resultsRepo.GetQuery(r =>
+                var existingResultsList = await resultsRepo.GetQuery(r =>
                     r.EventId == decryptedEventId &&
                     r.RaceId == decryptedRaceId)
-                    .ToDictionaryAsync(r => r.ParticipantId, r => r);
+                    .ToListAsync();
+                var duplicateParticipantIds = existingResultsList
+                    .GroupBy(r => r.ParticipantId)
+                    .Where(g => g.Count() > 1)
+                    .Select(g => g.Key)
+                    .ToList();
+                if (duplicateParticipantIds.Count > 0)
+                    _logger.LogWarning(
+                        "Race {RaceId} has {Count} participant(s) with multiple Results rows: {Ids}. " +
+                        "Keeping the most recent row per participant for recalculation.",
+                        decryptedRaceId, duplicateParticipantIds.Count, string.Join(", ", duplicateParticipantIds));
+                var existingResults = existingResultsList
+                    .GroupBy(r => r.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(r => r.Id).First());
 
                 var resultsToAdd = new List<Results>();
                 var resultsToUpdate = new List<Results>();

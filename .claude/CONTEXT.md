@@ -64,22 +64,44 @@
 
 _Use this section to log what each agent built during the current session._
 
-### 2026-06-14 — BUG A (edit-participant 500: EF Results double-tracking on race-move) — Opus EXECUTE
+### 2026-06-14 — BUG B (process-result 404) — DONE (UI repo)
 
-**Symptom:** `PUT /api/participants/{id}/edit-participant` → 500 when moving a runner to a different race category. Error: "The instance of entity type 'Results' cannot be tracked because another instance with the same key value for {'Id'} is already being tracked."
+- **Symptom:** `POST /api/Results/{eventId}/{raceId}/participant/{participantId}/process-result` → 404 from the participant detail page.
+- **Root cause:** the endpoint lives on `ParticipantsController` (`api/Participants/{eventId}/{raceId}/{participantId}/process-result`, `ParticipantsController.cs:609`), NOT `ResultsController`. The FE URL had the wrong controller prefix (`Results`) AND an extra `participant/` path segment → no route match → 404. Backend endpoint + `ProcessParticipantResultAsync` were correct; no API change needed.
+- **Fix (UI repo `C:\Projects\Runnatics.UI\Runnatics.Ui`, commit `c1b0cc8`):** `src/main/src/models/ServiceUrls.ts:47` `processParticipantResult` → `` `participants/${eventId}/${raceId}/${participantId}/process-result` `` (matches the sibling `getParticipantDetections` pattern). `npm run build` (Vite) ✅.
 
-**Root cause (research-confirmed):** `MigrateParticipantToRaceAsync` (`ParticipantImportService.cs:2287`) runs the post-commit reprocess (`CreateSplitTimesFromNormalizedReadingsAsync` + `CalculateRaceResultsAsync`) on the SAME request-scoped `DbContext` that still holds the migration's tracked `Results`/`ReadNormalized` rows. The reprocess re-materializes those rows → tracker collision.
-- ⚠️ **Disproven theory (do NOT implement):** the prior-session agent claimed `RecalculateRaceRanksAsync` (line 2504) re-query throws and suggested `.AsNoTracking()` there. That is WRONG — tracked re-queries return the same instance via identity resolution (no throw), and adding AsNoTracking there would load fresh instances that `UpdateRangeAsync` (2545) then attaches over the already-tracked R1 (from 2394) → would DETERMINISTICALLY CAUSE the exact error. The rank helpers read-then-write the same rows and MUST stay tracked.
+### 🏛️ INVARIANT — global `QueryTrackingBehavior.NoTracking` (Program.cs:100)
 
-**Fix (approved — context isolation, mirrors `LiveReadingService` 2026-05-29):**
-- `ParticipantImportService` constructor: dropped direct `IRFIDImportService` injection, added `IServiceScopeFactory scopeFactory` (+ `using Microsoft.Extensions.DependencyInjection`).
-- `MigrateParticipantToRaceAsync` step 6 (~2490): the reprocess now resolves `IRFIDImportService` from a FRESH DI scope (`_scopeFactory.CreateScope()` → `GetRequiredService`), so it runs on its own `DbContext` with an empty change tracker. **Awaited (NOT fire-and-forget)** so the move reflects fresh splits/results before the request returns; HttpContext is intact on the request thread so the new scope's `IUserContextService` still resolves the current user/tenant.
+`AddDbContextPool<RaceSyncDbContext>` sets `options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`. **Consequence:** every `GetQuery` (raw `_dbSet`, no `.AsTracking()`) returns a **FRESH untracked instance with NO identity resolution**. Re-querying the same row in one unit of work yields a DIFFERENT object with the same key.
+- `UpdateAsync`/`UpdateRangeAsync` call `_dbSet.Update(...)` which **attaches**. If the SAME Id is loaded twice and both are attached, EF throws "another instance with the same key value for {'Id'} is already being tracked".
+- **Rule:** when two write paths can touch the same Id within one transaction, either (a) `SaveChangesAsync()` between them (flush so a later read sees the new state / no longer matches), or (b) use bulk ops (`BulkUpdateAsync` bypasses the tracker), or (c) dedupe by Id before attaching. Do NOT assume identity resolution protects you — it does NOT in this codebase. (Same family as the enum-vs-DB-string bugs: an assumption that's silently false here.)
 
-**Secondary guard (user-flagged, RFID service):** `CalculateRaceResultsAsync` (`RFIDImportService.cs:2540`) built `existingResults` via `ToDictionaryAsync(r => r.ParticipantId)` — a participant with 2 Results rows in the target race (e.g. a partially-failed prior move) would throw a duplicate-key `ArgumentException` (a DIFFERENT 500). Now loads to a list, logs a warning listing offending ParticipantIds, and dedupes keeping the highest Id (most recent) per participant. Degrades instead of failing. Minimal — not over-engineered.
+### 2026-06-14 — BUG A (edit-participant 500: EF Results double-attach on race-move) — Opus EXECUTE (CORRECTED root cause + real fix)
+
+**Symptom:** `PUT /api/participants/{id}/edit-participant` → 500 when moving a runner to a different race. Error: "The instance of entity type 'Results' cannot be tracked because another instance with the same key value for {'Id'} is already being tracked." **Deterministic, FINISHERS ONLY** (repro: bib 2148, a 21.1K finisher, → 5K).
+
+**REAL root cause (corrected — see NoTracking invariant above):** inside `MigrateParticipantToRaceAsync`'s transaction, the moved participant's `Results` row is attached TWICE:
+1. `:2394` `oldResults` loaded NoTracking (fresh instance, Id=N) → reassigned → `:2409` `UpdateRangeAsync` **attaches** Id=N.
+2. No SaveChanges yet → DB row still shows SOURCE race. `:2481` `RecalculateRaceRanksAsync(sourceRaceId)` re-queries the source race filtered `Status=="Finished"` (`:2504`, NoTracking → a SECOND fresh instance, same Id=N) → `:2545` `UpdateRangeAsync` tries to attach Id=N → **THROW**.
+- Finisher-only because the rank query filters `Status=="Finished"`; a DNF/DNS row isn't returned, so it's attached only once.
+
+**Why the earlier `afe3cbe` fresh-scope fix did NOT fix it:** the throw is INSIDE the migration transaction, BEFORE the post-commit reprocess that `afe3cbe` isolated. And that reprocess (`CalculateRaceResultsAsync`) writes only via `BulkInsert/BulkUpdate` which BYPASS the tracker — it was never the thrower. (The original research mis-assumed identity resolution; the global NoTracking default inverts that. `afe3cbe` is harmless/defensible isolation but targeted an already-safe path.)
+
+**FIX (approved):** added `await _repository.SaveChangesAsync();` after the reassignment block (after chip-assignment UpdateRange, `~2477`) and BEFORE `RecalculateRaceRanksAsync` (`~2481`), still INSIDE `ExecuteInTransactionAsync` (flush, not commit → atomicity preserved; precedent at `:2387`). Once `RaceId=target` is flushed, the source-race rank query no longer returns the row → no second instance. **Bonus correctness fix:** the moved finisher is no longer re-ranked back into the race it's leaving.
+- Did NOT add `AsNoTracking` anywhere (already the global default; the read-then-write paths rely on the attach).
+- **Source race** re-ranks WITHOUT the moved runner (gap closed). **Target race** is re-ranked by the awaited post-commit `CalculateRaceResultsAsync(targetRace)` (fresh scope, sets Overall/Gender/Category ranks) — no stale/missing rank after Save.
+
+**Duplicate-Results guard (already done in `afe3cbe`, confirmed present):** `RFIDImportService.CalculateRaceResultsAsync:2549-2561` dedupes `existingResults` by ParticipantId (keep highest Id + warn) instead of `ToDictionaryAsync` → no duplicate-key `ArgumentException` in the target-race reprocess.
 
 **Build:** `dotnet build` ✅ 0 errors. **Tests:** Services ✅ 19/19 (`DOTNET_ROLL_FORWARD=LatestMajor` for net8.0).
-**Files modified:** `Runnatics.Services/ParticipantImportService.cs`, `Runnatics.Services/RFIDImportService.cs`.
-**Prod verify (after deploy):** move a 7th GGHM participant to another race category via edit-participant → confirm no 500 and target-race splits/results/ranks populate. (BUG B — process-result 404 — is a UI-repo fix: point FE at `POST /api/Participants/{eventId}/{raceId}/{participantId}/process-result`.)
+**Files modified this pass:** `Runnatics.Services/ParticipantImportService.cs` (SaveChanges before source re-rank). (`afe3cbe` already shipped the fresh-scope isolation + dedupe guard.)
+**Prod verify (after deploy):** move bib 2148 (21.1K → 5K) via the **Race** dropdown → confirm no 500, source (21.1K) re-ranked without them, target (5K) ranks them in.
+
+**Problem 2 (UI, "process-then-save doesn't move runner") — NOT a backend bug; pending user network-tab check.** Payload showed `category:"18 to 30"` changed but `raceId` unchanged → admin likely changed the **Category** dropdown (relabels age bracket within the SAME race), not the **Race** dropdown (which triggers the move). `ParticipantDetail.tsx` race-move binding looks correct (`handleRaceIdChange → confirm → setEditRaceId → raceId:editRaceId`). User to confirm: change the **Race** dropdown specifically and verify the PUT `raceId` becomes the 5K id. No UI code until confirmed.
+
+**📌 BOOKED (separate session) — race-move/category-change consolidation refactor.** This path has now produced 5 distinct bugs. Target model: on **Save** = move registration + invalidate derived data; on **Process Result** = recompute splits/results + re-rank BOTH races; derived data always rebuilt, never carried across races. Settle first: is `ReadNormalized` keyed by RaceId or by EPC+Event (decides whether "move the readings" is real work or a reprocess no-op). Do NOT fold into a bugfix — dedicated pass.
+
+(BUG B — process-result 404 — ✅ DONE, UI repo `c1b0cc8`; see entry above.)
 
 ---
 

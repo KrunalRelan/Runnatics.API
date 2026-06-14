@@ -2476,7 +2476,22 @@ namespace Runnatics.Services
                 if (oldChipAssignments.Count > 0)
                     await chipAssignmentRepo.UpdateRangeAsync(oldChipAssignments);
 
-                // 5. Recalculate ranks for old race (participant removed). The TARGET race is
+                // 5. Flush the reassignment BEFORE re-ranking the source race.
+                //    The context default is QueryTrackingBehavior.NoTracking (Program.cs), so
+                //    every GetQuery returns a FRESH untracked instance with no identity
+                //    resolution. The moved participant's Results row was just attached above via
+                //    UpdateRangeAsync(oldResults). Without this flush, the row's DB RaceId is
+                //    still the SOURCE race, so RecalculateRaceRanksAsync's source-race query
+                //    (Status=="Finished") re-loads that same row as a SECOND instance with the
+                //    same Id and UpdateRange-attaches it → "another instance with the same key
+                //    value for {'Id'} is already being tracked" (500, finishers only).
+                //    Persisting RaceId=target first removes the row from the source-race query,
+                //    so no second instance is created. Still inside the transaction (flush, not
+                //    commit) → atomicity preserved. Bonus: the moved finisher is no longer
+                //    re-ranked back into the race it is leaving.
+                await _repository.SaveChangesAsync();
+
+                // 6. Recalculate ranks for old race (participant removed). The TARGET race is
                 //    fully reprocessed after this transaction commits (below).
                 await RecalculateRaceRanksAsync(eventId, sourceRaceId, userId);
             });

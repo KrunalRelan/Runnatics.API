@@ -64,6 +64,55 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-14 — Gender canonicalization (NormalizeGenderForWrite + filter + rank bugs) — Sonnet EXECUTE
+
+**Scope:** Three tightly-scoped fixes in `ParticipantImportService.cs` only.
+
+**PART 1 — `NormalizeGenderForWrite` helper + 4 write sites:**
+- Added private static `NormalizeGenderForWrite(string raw)` at line ~1445 (after `MapRaceStatusToDbString`).
+  Rule: trim+ToUpperInvariant → "M"/"MALE"→"M", "F"/"FEMALE"→"F", anything else → `raw.Trim()` (pass through).
+- Applied at all 4 write sites (lines 315, 773, 838, 1352); the `?? "Unknown"` fallback for null/whitespace is unchanged — only non-empty values are now normalized.
+- EF Core `GenderNormalizer` value converter (`ParticipantConfiguration.cs`) left untouched; it remains the safety-net for any path that bypasses these sites.
+
+**PART 2 — `MapGenderToDbString` helper + 2 filter sites:**
+- Added private static `MapGenderToDbString(Gender gender)` mirroring `MapRaceStatusToDbString` pattern.
+  `Gender.Male→"M"`, `Gender.Female→"F"`, `_→null`.
+- Applied at both filter sites:
+  - Line ~423: paginated search `if (request.Gender.HasValue)` block (guard `if (genderString != null)` added).
+  - Line ~1420: `BuildSearchExpression` predicate (direct substitution).
+- **Root cause was identical to BUG-2 status filter:** `Gender enum.ToString()` → `"Male"` ≠ DB `"M"` → filter never matched any rows.
+
+**PART 3 — Fix `RecalculateRaceRanksAsync` gender rank:**
+- Line ~2506: changed `new[]{"Male","Female","Others"}` to `new[]{"M","F"}` to match canonical DB values.
+- `ResultsService` (lines 1312, 1362) already used `"M"/"F"` correctly; this aligns the only remaining divergent site.
+
+**Pattern note (logged for future):** enum `.ToString()` vs canonical DB string has now bitten us in BUG-2 (status) and here (gender, 3 sites). Any future enum-backed string column comparison MUST use an explicit mapping helper, never `.ToString()`.
+
+**SQL for data cleanup (provide to user for manual run):**
+```sql
+-- INSPECT first — see what non-canonical values remain
+SELECT RaceId, Gender, COUNT(*) AS Cnt
+FROM Participants
+WHERE IsActive=1 AND IsDeleted=0
+  AND Gender NOT IN ('M','F','Unknown')
+  AND Gender IS NOT NULL
+GROUP BY RaceId, Gender;
+
+-- Fix casing/spelled-out only (Unknown left untouched)
+UPDATE Participants SET Gender='M'
+WHERE IsActive=1 AND IsDeleted=0
+  AND UPPER(LTRIM(RTRIM(Gender))) IN ('M','MALE');
+UPDATE Participants SET Gender='F'
+WHERE IsActive=1 AND IsDeleted=0
+  AND UPPER(LTRIM(RTRIM(Gender))) IN ('F','FEMALE');
+```
+
+**Build:** `dotnet build` ✅ 0 errors (pre-existing warnings only).
+**Tests:** .NET 8 runtime not installed on this machine (only .NET 10) — tests target net8.0 and cannot run. Set `$env:DOTNET_ROLL_FORWARD='LatestMajor'` or install .NET 8 runtime to run locally.
+**Files modified:** `Runnatics.Services/ParticipantImportService.cs` only.
+
+---
+
 ### 2026-06-13 — BUG-1 (gender reset on save) + BUG-2 (status filter broken) — admin participant screens — Sonnet EXECUTE
 
 - **BUG-1 — Gender lost on ParticipantDetail.tsx inline save:**

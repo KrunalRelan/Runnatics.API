@@ -312,7 +312,7 @@ namespace Runnatics.Services
                             FirstName = record.FirstName,
                             Email = record.Email,
                             Phone = record.Mobile,
-                            Gender = string.IsNullOrWhiteSpace(record.Gender) ? "Unknown" : record.Gender.Trim(),
+                            Gender = string.IsNullOrWhiteSpace(record.Gender) ? "Unknown" : NormalizeGenderForWrite(record.Gender),
                             AgeCategory = string.IsNullOrWhiteSpace(record.AgeCategory) ? "Unknown" : record.AgeCategory.Trim(),
                             ImportBatchId = decryptedImportBatchId,
                             Status = "Registered",
@@ -421,8 +421,9 @@ namespace Runnatics.Services
                 // Apply gender filter if provided
                 if (request.Gender.HasValue)
                 {
-                    var genderString = request.Gender.Value.ToString();
-                    participantQuery = participantQuery.Where(p => p.Gender == genderString);
+                    var genderString = MapGenderToDbString(request.Gender.Value);
+                    if (genderString != null)
+                        participantQuery = participantQuery.Where(p => p.Gender == genderString);
                 }
 
                 // Apply category filter if provided
@@ -770,7 +771,7 @@ namespace Runnatics.Services
                 participant.EventId = eventIdInt;
                 participant.RaceId = raceIdInt;
                 participant.TenantId = _userContext.TenantId;
-                participant.Gender = string.IsNullOrWhiteSpace(participant.Gender) ? "Unknown" : participant.Gender.Trim();
+                participant.Gender = string.IsNullOrWhiteSpace(participant.Gender) ? "Unknown" : NormalizeGenderForWrite(participant.Gender);
                 participant.AgeCategory = string.IsNullOrWhiteSpace(participant.AgeCategory) ? "Unknown" : participant.AgeCategory.Trim();
 
                 // Duplicate bib check: ensure no active participant exists with same bib in same tenant/event/race
@@ -835,7 +836,7 @@ namespace Runnatics.Services
                 }
 
                 _mapper.Map(editParticipant, existingParticipant);
-                existingParticipant.Gender = string.IsNullOrWhiteSpace(existingParticipant.Gender) ? "Unknown" : existingParticipant.Gender.Trim();
+                existingParticipant.Gender = string.IsNullOrWhiteSpace(existingParticipant.Gender) ? "Unknown" : NormalizeGenderForWrite(existingParticipant.Gender);
                 existingParticipant.AgeCategory = string.IsNullOrWhiteSpace(existingParticipant.AgeCategory) ? "Unknown" : existingParticipant.AgeCategory.Trim();
 
                 ///If existing race id is different than the new race id, then user is moving participant to another race.
@@ -1349,7 +1350,7 @@ namespace Runnatics.Services
 
             if (!string.IsNullOrWhiteSpace(record.Gender))
             {
-                participant.Gender = record.Gender.Trim();
+                participant.Gender = NormalizeGenderForWrite(record.Gender);
                 hasChanges = true;
             }
 
@@ -1417,7 +1418,7 @@ namespace Runnatics.Services
                 e.EventId == eventId &&
                 e.RaceId == raceId &&
                 (!request.Status.HasValue || e.Status == MapRaceStatusToDbString(request.Status.Value)) &&
-                (!request.Gender.HasValue || e.Gender == request.Gender.Value.ToString()) &&
+                (!request.Gender.HasValue || e.Gender == MapGenderToDbString(request.Gender.Value)) &&
                 (string.IsNullOrEmpty(request.Category) || e.AgeCategory == request.Category) &&
                 e.AuditProperties.IsActive &&
                 !e.AuditProperties.IsDeleted;
@@ -1430,6 +1431,22 @@ namespace Runnatics.Services
             3 => "DNF",
             4 => "DNS",
             _ => null
+        };
+
+        private static string? MapGenderToDbString(Gender gender) => gender switch
+        {
+            Gender.Male => "M",
+            Gender.Female => "F",
+            _ => null
+        };
+
+        // Normalizes human-entered gender strings to canonical "M"/"F".
+        // Unknown/blank/Other values are passed through unchanged (the EF converter is the safety net for reads).
+        private static string NormalizeGenderForWrite(string raw) => raw.Trim().ToUpperInvariant() switch
+        {
+            "M" or "MALE" => "M",
+            "F" or "FEMALE" => "F",
+            _ => raw.Trim()
         };
 
         /// <summary>
@@ -2503,7 +2520,7 @@ namespace Runnatics.Services
                 result.AuditProperties.UpdatedDate = DateTime.UtcNow;
             }
 
-            foreach (var gender in new[] { "Male", "Female", "Others" })
+            foreach (var gender in new[] { "M", "F" })
             {
                 var genderResults = results.Where(r => r.Participant.Gender == gender).ToList();
                 rank = 1;

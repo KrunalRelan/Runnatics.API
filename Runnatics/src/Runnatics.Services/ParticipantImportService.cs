@@ -2336,9 +2336,82 @@ namespace Runnatics.Services
                 participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 await participantRepo.UpdateAsync(participant);
 
-                // 2. HARD-DELETE this participant's derived + normalized rows — never carried
-                //    across races. Bulk delete (immediate SQL, tracker-bypassing) matches the
-                //    ClearProcessedDataAsync precedent. ReadRaw is retained as the audit trail.
+                // 2. Make THIS participant's physical reads re-eligible for the target race's
+                //    reprocess. The raw physical detections (RawRFIDReading) are RETAINED — they
+                //    are the source the target reprocess re-projects onto the target race's
+                //    checkpoints. (NOTE: ReadRaw is a dead table — nothing writes it; RawRFIDReading
+                //    is the live raw layer.) Scope every operation to THIS participant's reads via
+                //    their chip EPC(s): an EPC maps to exactly one participant per event
+                //    (ChipAssignment), and we start from this participant's ChipAssignment rows, so
+                //    no other participant's reads are touched.
+                var chipAssignmentRepo = _repository.GetRepository<ChipAssignment>();
+                var participantEpcs = await chipAssignmentRepo.GetQuery(ca =>
+                        ca.ParticipantId == participantId &&
+                        ca.EventId == eventId &&
+                        !ca.UnassignedAt.HasValue &&
+                        ca.AuditProperties.IsActive &&
+                        !ca.AuditProperties.IsDeleted)
+                    .Select(ca => ca.Chip.EPC)
+                    .ToListAsync();
+
+                if (participantEpcs.Count > 0)
+                {
+                    var batchRepo = _repository.GetRepository<UploadBatch>();
+                    var eventBatchIds = await batchRepo.GetQuery(b => b.EventId == eventId)
+                        .Select(b => b.Id)
+                        .ToListAsync();
+
+                    var rawReadingRepo = _repository.GetRepository<RawRFIDReading>();
+                    var participantReadings = await rawReadingRepo.GetQuery(r =>
+                            eventBatchIds.Contains(r.BatchId) &&
+                            participantEpcs.Contains(r.Epc) &&
+                            r.AuditProperties.IsActive &&
+                            !r.AuditProperties.IsDeleted)
+                        .ToListAsync();
+
+                    if (participantReadings.Count > 0)
+                    {
+                        // 2a. Reset reads to Pending so Phase 1 of the target reprocess RELOADS and
+                        //     re-assigns them to the target race's checkpoints. This is what makes a
+                        //     move into a SIMPLE linear target race produce a real result instead of
+                        //     a false DNS: Phase 1 loads ProcessResult=="Pending" only, and Phase 1.5
+                        //     (which works on already-"Success" reads) skips simple races entirely.
+                        //
+                        //     DEPENDENCY (must stay true): this works because EVENT-LEVEL uploads keep
+                        //     their batches perpetually "uploaded" (set at parse time, never marked
+                        //     "completed"), so Phase 1's batch gate always includes them and a
+                        //     per-reading Pending reset suffices — no batch flip needed. If a future
+                        //     event uses RACE-LEVEL uploads (those batches DO get marked "completed",
+                        //     and ClearProcessedData never resets event-level batches), this
+                        //     reset-to-Pending path must be revisited. See .claude/CONTEXT.md.
+                        foreach (var reading in participantReadings)
+                        {
+                            reading.ProcessResult = "Pending";
+                            reading.ProcessedAt = null;
+                            reading.AssignmentMethod = null;
+                            reading.Notes = null;
+                        }
+                        await rawReadingRepo.BulkUpdateAsync(participantReadings);
+
+                        // 2b. Hard-delete this participant's checkpoint assignments (gate c). Phase 1
+                        //     SKIPS any reading that already has an active assignment, so without this
+                        //     the reset reads would not be re-assigned; it also prevents Phase 2's
+                        //     ToDictionary(ReadingId) from colliding on a stale source-race assignment.
+                        //     Hard delete (BulkDelete) matches the ClearProcessedDataAsync precedent.
+                        var participantReadingIds = participantReadings.Select(r => r.Id).ToList();
+                        var assignmentRepo = _repository.GetRepository<ReadingCheckpointAssignment>();
+                        var oldAssignments = await assignmentRepo.GetQuery(a =>
+                                participantReadingIds.Contains(a.ReadingId))
+                            .ToListAsync();
+                        if (oldAssignments.Count > 0)
+                            await assignmentRepo.BulkDeleteAsync(oldAssignments);
+                    }
+                }
+
+                // 3. HARD-DELETE this participant's race-bound derived + normalized rows — never
+                //    carried across races; the target reprocess rebuilds them from the retained raw.
+                //    Bulk delete (immediate SQL, tracker-bypassing) matches the ClearProcessedDataAsync
+                //    precedent.
                 var resultsRepo = _repository.GetRepository<Models.Data.Entities.Results>();
                 var oldResults = await resultsRepo.GetQuery(r => r.ParticipantId == participantId).ToListAsync();
                 if (oldResults.Count > 0)
@@ -2350,23 +2423,23 @@ namespace Runnatics.Services
                     await splitTimesRepo.BulkDeleteAsync(oldSplits);
 
                 var normalizedRepo = _repository.GetRepository<ReadNormalized>();
-                var oldReadings = await normalizedRepo.GetQuery(rn => rn.ParticipantId == participantId).ToListAsync();
-                if (oldReadings.Count > 0)
-                    await normalizedRepo.BulkDeleteAsync(oldReadings);
+                var oldNormalized = await normalizedRepo.GetQuery(rn => rn.ParticipantId == participantId).ToListAsync();
+                if (oldNormalized.Count > 0)
+                    await normalizedRepo.BulkDeleteAsync(oldNormalized);
 
-                // 3. ChipAssignment stays with the participant (same row, physical chip) — no
+                // 4. ChipAssignment stays with the participant (same row, physical chip) — no
                 //    reassignment needed since the participant Id is unchanged.
 
-                // 4. Persist the registration move, then re-rank the SOURCE race. The
-                //    participant's Results were just deleted, so the source re-rank naturally
-                //    excludes them (the gap is closed). Re-rank writes via bulk update
-                //    (tracker-bypassing) — no Include/cascade, no NoTracking double-attach.
+                // 5. Persist the registration move, then re-rank the SOURCE race. The participant's
+                //    Results were just deleted, so the source re-rank naturally excludes them
+                //    (the gap is closed). Re-rank writes via bulk update (tracker-bypassing) — no
+                //    Include/cascade, no NoTracking double-attach.
                 await _repository.SaveChangesAsync();
                 await ReRankRaceAsync(eventId, sourceRaceId, userId);
             });
 
             _logger.LogInformation(
-                "Participant {ParticipantId} moved from Race {OldRace} to Race {NewRace}; derived timing (Results/SplitTimes/ReadNormalized) hard-deleted, raw detections retained, source race re-ranked. Target race ranks on Process Result.",
+                "Participant {ParticipantId} moved from Race {OldRace} to Race {NewRace}; raw reads reset to Pending + checkpoint assignments cleared, derived timing (Results/SplitTimes/ReadNormalized) hard-deleted, raw detections (RawRFIDReading) retained, source race re-ranked. Target race timing rebuilt + ranked on Process Result.",
                 participantId, sourceRaceId, targetRaceId);
             return participant;
         }

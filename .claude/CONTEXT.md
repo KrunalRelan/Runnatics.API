@@ -64,6 +64,31 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-14 — Race-move SHARED-COURSE correction: delete-to-DNS → re-project from raw (Opus EXECUTE; supersedes the consolidation refactor's DNS model)
+
+**Why:** the consolidation refactor (below) assumed a cross-distance move leaves the runner with "no target detections → DNS". WRONG for this **shared-course** event: all distances start together and run the same physical route to their split point, crossing the **same physical mats**. A physical crossing is stored **once** and is race-independent; which race it projects into is decided at processing time via EPC→Participant→**current** `RaceId`. So a 21.1K runner moved to the 5K HAS real crossings at the 5K's mats → must get a **real** result, never a forced DNS. Correct model: a move is **"re-register + reprocess from raw against the new race"**, reusing the proven pipeline — not a bespoke move-time mapper, and not delete-to-DNS.
+
+**Data-model facts CORRECTED (supersede the entry below):**
+- **`ReadRaw` is a DEAD table** — nothing writes it (only the config registration). The live raw layer is **`RawRFIDReading`** (`BatchId`,`DeviceId`,`Epc`,`TimestampMs`,`ReadTimeUtc`,`ProcessResult`). `ReadNormalized.RawReadId` is declared FK→`ReadRaw` but is populated with `RawRFIDReading.Id` (`RFIDImportService.cs:1959,2189`). The move must **retain `RawRFIDReading`** (the earlier "retain ReadRaw audit trail" gate checked the wrong table).
+- **Event-level uploads** (`UploadBatch.RaceId = NULL`, the confirmed mode here) are visible to every race's processing (`b.RaceId == target || b.RaceId == null`). Re-normalizing a moved runner against the target picks up their shared-mat reads automatically once `Participant.RaceId = target`.
+- **`ChipAssignment`** PK `(EventId,ParticipantId,ChipId)` — participant-scoped, no RaceId → EPC→Participant resolves unchanged after the move.
+
+**The three gates a cross-race move must clear (and why Process Result = the full workflow):**
+- (a) EPC→Participant by RaceId — auto once `Participant.RaceId=target`. ✅
+- (b) Phase 2 SKIPS already-normalized reads (`existingNormalizedReadIds`, event-wide) → must **hard-delete the participant's `ReadNormalized`** so their reads are re-eligible.
+- (c) Phase 1 SKIPS reads with an active `ReadingCheckpointAssignment` and Phase 2's `ToDictionary(ReadingId)` collides on a stale one → must **hard-delete the participant's `ReadingCheckpointAssignment`**.
+- **Simple-race trap:** Phase 1 loads `ProcessResult=="Pending"` only, and Phase 1.5 (shared-device assigner) **early-returns for simple linear races** (no device shared across ≥2 checkpoints). After a race is timed the reads are `"Success"`, so a move into a SIMPLE target race would re-assign **nothing** → false DNS. Fix: **reset the participant's `RawRFIDReading.ProcessResult = "Pending"`** at Save so Phase 1 reloads & re-assigns them.
+
+**⚠️ DEPENDENCY (make visible):** the reset-to-Pending works because **EVENT-LEVEL uploads keep their batches perpetually `"uploaded"`** (set at parse time `RFIDImportService.cs:763`; Phase 1 marks ONLY race-level batches `"completed"`, never event-level), so Phase 1's batch gate always includes them and a per-reading reset suffices (no batch flip). **If a future event uses RACE-LEVEL uploads** (those batches DO get `"completed"`, and `ClearProcessedData` never resets event-level batches), this reset-to-Pending path must be revisited.
+
+**Changes:**
+- **`ParticipantImportService.MoveParticipantToRaceAsync`** (Save, one transaction, all participant-scoped via EPC→event reads): (1) move registration on the same row; (2) **reset this participant's `RawRFIDReading`→Pending** (clear `ProcessedAt`/`AssignmentMethod`/`Notes`, `BulkUpdateAsync`); (2b) **hard-delete their `ReadingCheckpointAssignment`** (`BulkDeleteAsync`); (3) **hard-delete their `Results`/`SplitTimes`/`ReadNormalized`**; retain `RawRFIDReading`; (5) re-rank **source** via `ReRankRaceAsync` (bulk, no `Include`). EPC scope starts from this participant's `ChipAssignment` rows → no other participant's reads touched.
+- **`ResultsService.ProcessParticipantResultAsync`** now injects **`IRFIDImportService`** (cycle-free — RFID svc has no `IResultsService` dep) and runs **`ProcessCompleteWorkflowAsync(event, race)`** (Phase 1→1.5→2→2.5→3) before the per-participant status confirm. This rebuilds the moved runner's timing from raw; idempotent for everyone else (skip-guards leave still-`Success`/still-normalized runners untouched). Runs on a **fresh request scope** (process-result is a separate HTTP request from the edit/save), so no collision with the move transaction under the global NoTracking default. Workflow `Status=="Failed"` → `ErrorMessage` + return false (recoverable: admin re-hits Process Result; raw retained).
+
+**Outcomes (acceptance matrix — user walks in prod):** 21.1K→5K full-course → real 5K finish; 5K→21.1K ran-only-5K → DNF (missing later mandatory); 5K→21.1K actually-ran-21.1K → full finish; true no-show → DNS (natural); **SIMPLE linear target → real result, NOT DNS** (the reset-to-Pending case).
+
+**Build:** ✅ 0 errors (solution). **Tests:** Services ✅ 19/19. A move integration test was **not feasible** in the current harness (pure-algorithm tests only; `BulkUpdate/BulkDelete` need a real relational provider — EF in-memory can't exercise them). **Supersedes** the delete-to-DNS model and the "retain ReadRaw" gate in the entry directly below.
+
 ### 2026-06-14 — Race-move CONSOLIDATION REFACTOR (the real fix; replaces the 3-patch saga) — Opus EXECUTE
 
 **Why:** three patches to `MigrateParticipantToRaceAsync` each exposed the next layer (tracking 500 → SaveChanges flush → `DbUpdateConcurrencyException` "expected 1 row, affected 0"). Root model was wrong: the method **reassigned derived/normalized timing in place across races** (`UPDATE Results.RaceId`, `UPDATE ReadNormalized.CheckpointId+ParticipantId`, soft-delete SplitTimes). A 21.1K finisher's 9 detections / 8 splits live at 5/10/15/21 km mats that **don't exist on a 5K** — carrying them is garbage AND the phantom-PK 0-rows source. No concurrency token exists anywhere (verified), so 0-rows = PK-absent at write time, not a token mismatch. `BulkUpdate` would have HIDDEN the 0-rows and persisted corrupt data — explicitly rejected.

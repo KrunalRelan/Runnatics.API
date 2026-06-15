@@ -24,6 +24,7 @@ namespace Runnatics.Services
         private readonly IEncryptionService _encryptionService;
 
         private readonly IRaceNotificationService _raceNotificationService;
+        private readonly IRFIDImportService _rfidImportService;
 
         public ResultsService(
             IUnitOfWork<RaceSyncDbContext> repository,
@@ -31,7 +32,8 @@ namespace Runnatics.Services
             ILogger<ResultsService> logger,
             IUserContextService userContext,
             IEncryptionService encryptionService,
-            IRaceNotificationService raceNotificationService)
+            IRaceNotificationService raceNotificationService,
+            IRFIDImportService rfidImportService)
             : base(repository)
         {
             _mapper = mapper;
@@ -39,6 +41,7 @@ namespace Runnatics.Services
             _userContext = userContext;
             _encryptionService = encryptionService;
             _raceNotificationService = raceNotificationService;
+            _rfidImportService = rfidImportService;
         }
 
         public async Task<SplitTimeCalculationResponse> CalculateSplitTimesAsync(CalculateSplitTimesRequest request)
@@ -1887,6 +1890,24 @@ namespace Runnatics.Services
                     return false;
                 }
 
+                // Rebuild this race's timing from raw via the proven pipeline (Phase 1 → 1.5 → 2 →
+                // 2.5 → 3). This is what reconstructs a moved participant's results: the race-move
+                // deleted their derived rows and reset their reads to Pending, and this pipeline
+                // re-projects their retained RawRFIDReading crossings onto THIS race's checkpoints.
+                // Idempotent for everyone else — Phase 1/2 skip-guards leave already-processed
+                // (still-"Success", still-normalized) runners untouched, so only the participant
+                // whose data was cleared is rebuilt. Runs on this request's fresh context
+                // (process-result is a separate request from the edit/save that moved them), so it
+                // does not collide with the move transaction under the global NoTracking default.
+                var workflow = await _rfidImportService.ProcessCompleteWorkflowAsync(eventId, raceId);
+                if (workflow.Status == "Failed")
+                {
+                    ErrorMessage = workflow.Errors.FirstOrDefault() ?? "Failed to reprocess race timing.";
+                    return false;
+                }
+
+                // Confirm THIS participant's status from the freshly rebuilt ReadNormalized and
+                // re-rank. Single fresh-queried entity → no NoTracking double-attach.
                 await ReprocessParticipantInternalAsync(decryptedEventId, decryptedRaceId, decryptedParticipantId, userId);
                 return true;
             }

@@ -64,6 +64,23 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-14 — Auto-process on participant-edit Save (UI repo `Runnatics.Ui`, commit `3b13fcc`) — Opus EXECUTE
+
+**Why:** the race-move now rebuilds correctly on Process Result, so the manual "go to the other race and click Process" step is removed. The edit dialog (`EditParticipant.tsx`) detects what changed and chains the right follow-up sequentially after Save commits.
+
+**Case mapping (race change takes precedence — full process covers a category change too):**
+- **Race changed →** `POST participants/{eventId}/{targetRaceId}/{participantId}/process-result` = full `ProcessCompleteWorkflowAsync` rebuild on the TARGET race. Button "Save & Process Result".
+- **AgeCategory changed (same race) →** `PUT participants/{eventId}/{raceId}/{participantId}/race-category` = cheap whole-race re-rank (`ChangeParticipantCategoryAsync` → `CalculateResultRankingsAsync`; re-ranks EVERY category bucket, so the bucket left AND joined both correct; NO Phase 1/1.5/2, readings untouched). Button "Save & Re-rank". Also closes the latent stale-category-rank gap (edit-form same-race path never re-ranked before).
+- **Scalar only →** plain Save. Button "Update Participant".
+
+**Wiring:** strictly sequential (await Save commit → THEN follow-up; never parallel). Save fails → no follow-up, show save error. Save ok but follow-up fails → recoverable `warning` Alert + **Retry** (re-fires ONLY the follow-up; runner is saved + re-processable), not a red error. Dynamic button label + combined progress (Saving… → Processing…/Re-ranking…).
+
+**No API change** — `process-result` already runs the full workflow (commit `a11e94d`); the `race-category` endpoint already existed and re-ranks the whole race.
+
+**UI plumbing (same bug class as BUG-B):** `ServiceUrls.changeRaceCategory` had the WRONG route (`participants/${participantId}/race-category` — missing `eventId/raceId`); corrected to `participants/${eventId}/${raceId}/${participantId}/race-category` (verified against the `[HttpPut("{eventId}/{raceId}/{participantId}/race-category")]` attribute). Added `ParticipantService.changeRaceCategory(eventId, raceId, participantId, ageCategory)` (`PUT` body `{ ageCategory }`).
+
+**Build:** UI ✅ 0 errors (`vite build`), type-check clean. **Files:** `models/ServiceUrls.ts`, `services/ParticipantService.ts`, `pages/admin/participants/EditParticipant.tsx`.
+
 ### 2026-06-14 — Race-move SHARED-COURSE correction: delete-to-DNS → re-project from raw (Opus EXECUTE; supersedes the consolidation refactor's DNS model)
 
 **Why:** the consolidation refactor (below) assumed a cross-distance move leaves the runner with "no target detections → DNS". WRONG for this **shared-course** event: all distances start together and run the same physical route to their split point, crossing the **same physical mats**. A physical crossing is stored **once** and is race-independent; which race it projects into is decided at processing time via EPC→Participant→**current** `RaceId`. So a 21.1K runner moved to the 5K HAS real crossings at the 5K's mats → must get a **real** result, never a forced DNS. Correct model: a move is **"re-register + reprocess from raw against the new race"**, reusing the proven pipeline — not a bespoke move-time mapper, and not delete-to-DNS.

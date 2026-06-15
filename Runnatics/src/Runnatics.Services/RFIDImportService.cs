@@ -1504,7 +1504,10 @@ namespace Runnatics.Services
 
                 if (processAllResponse.Status == "Failed")
                 {
-                    response.Errors.Add("Phase 1 failed: " + processAllResponse.Message);
+                    var phase1Reason = !string.IsNullOrWhiteSpace(processAllResponse.Message)
+                        ? processAllResponse.Message
+                        : (string.IsNullOrWhiteSpace(ErrorMessage) ? "Processing error" : ErrorMessage);
+                    response.Errors.Add("Phase 1 failed: " + phase1Reason);
                     response.Status = "Failed";
                     return response;
                 }
@@ -1555,7 +1558,9 @@ namespace Runnatics.Services
 
                 if (dedupeResponse.Status == "Failed")
                 {
-                    response.Errors.Add("Phase 2 failed: Deduplication error");
+                    // Surface the captured reason (controlled validation fail OR caught exception)
+                    // instead of a generic string — e.g. a wrong Race.StartTime tells you exactly that.
+                    response.Errors.Add($"Phase 2 failed: {(string.IsNullOrWhiteSpace(ErrorMessage) ? "Deduplication error" : ErrorMessage)}");
                     response.Status = "Failed";
                     return response;
                 }
@@ -1582,7 +1587,7 @@ namespace Runnatics.Services
 
                 if (splitTimeResponse.Status == "Failed")
                 {
-                    response.Warnings.Add("Phase 2.5 failed: Split time creation error (non-critical)");
+                    response.Warnings.Add($"Phase 2.5 failed: {(string.IsNullOrWhiteSpace(ErrorMessage) ? "Split time creation error" : ErrorMessage)} (non-critical)");
                 }
 
                 _logger.LogInformation(
@@ -1606,7 +1611,7 @@ namespace Runnatics.Services
 
                 if (calcResponse.Status == "Failed")
                 {
-                    response.Errors.Add("Phase 3 failed: Results calculation error");
+                    response.Errors.Add($"Phase 3 failed: {(string.IsNullOrWhiteSpace(ErrorMessage) ? "Results calculation error" : ErrorMessage)}");
                     response.Status = "Failed";
                     return response;
                 }

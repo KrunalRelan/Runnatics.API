@@ -64,6 +64,22 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-14 — Process-result "Phase 2 failed: Deduplication error" — surfaced the real reason (Opus; diagnosis + wrapper hygiene)
+
+**Symptom:** `process-result` on the 5K (RaceId 49) for a moved runner (ParticipantId 25751 — bib 1173 is REUSED across 18 races, so key on ParticipantId, see [[project_bib_not_unique]]) returned 400 `"Phase 2 failed: Deduplication error"`.
+
+**Diagnosis (DB queries against 25751 + schema from EF configs — RawRFIDReadings has NO EventId/ParticipantId; link is `Epc → Chips.EPC → ChipAssignments.ChipId{ParticipantId}`):**
+- The move's Save step (commit `a11e94d`) **worked perfectly**: 7 reads reset to `Pending`, 0 checkpoint assignments, 0 leftover ReadNormalized. Vindicated.
+- Killed every code-line hypothesis: `:1898` ToDictionary collision = 0 **DB-GLOBAL** (the query must be global — `activeAssignments` at `:1888` has NO event/race filter); `Race.StartTime` not null; no leftover ReadNormalized.
+- `"Phase 2 failed: Deduplication error"` has ONE source — the wrapper `RFIDImportService.cs:1558`, fired on `dedupeResponse.Status=="Failed"` **regardless of exception**. The catch at `:2293` logs `"Error during deduplication and normalization"` (NOT `"Error during deduplication:"` — that string is only the un-logged `ErrorMessage` property; a search for it gives a false "no log").
+- `DeduplicateAndNormalizeAsync` controlled-fail branches: `:1764` race-null, `:1776` StartTime-null, `:1978` `daysDiff>1`, `:1988` `minutesDiff<-60`. Per data, **none fire**: Race 49 StartTime `2026-05-08 23:59`, earliest read `2026-05-09 23:56` → `daysDiff=0.9982` (misses `>1` by 2.6 min), `minutesDiff=+1437`. So it's a **real throw** (catch `:2293`) the wrong-string log search missed — OR a stale observation.
+
+**Real config bug found (fix outside code):** `Race 49.StartTime` is **a day early** (reads are ~1 day after) → produces ~24h GunTimes. The `:1978` guard was meant to catch exactly this but misses by 2.6 min. Correct the StartTime to the real gun (just before `2026-05-09 23:56`).
+
+**Change (`RFIDImportService.cs`, `ProcessCompleteWorkflowAsync`):** the 4 phase wrappers (`:1507` P1, `:1558` P2, `:1585` P2.5, `:1609` P3) now **surface the captured `ErrorMessage`** (old generic string as fallback) instead of hiding it. The 400 body now states the real reason (e.g. the actual exception, or `"Race.StartTime … is more than 1 hour AFTER the earliest reading"`). Build ✅ 0 errors, tests ✅ 19/19.
+
+**Next:** deploy + fix Race 49 StartTime + re-run process-result → it succeeds or the 400 now names the exact cause.
+
 ### 2026-06-14 — Auto-process on participant-edit Save (UI repo `Runnatics.Ui`, commit `3b13fcc`) — Opus EXECUTE
 
 **Why:** the race-move now rebuilds correctly on Process Result, so the manual "go to the other race and click Process" step is removed. The edit dialog (`EditParticipant.tsx`) detects what changed and chains the right follow-up sequentially after Save commits.

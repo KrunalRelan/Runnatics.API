@@ -64,6 +64,23 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-16 — Race 49 (5 Km) blank splits / rank #0 for moved runners — DIAGNOSIS (Opus; data-fix handoff, no code change)
+
+**Symptom:** moved/late-added runners in **RaceId 49** (event 30, title "5 Km") show blank Split Times + rank #0. Reported via encrypted participant `364YW9nVJ_mxs1DCS4bCFQ` (= **ParticipantId 25590, bib 1012, Deepika Dalal**) and encrypted race `dwNcr4cQCwLRDfTvAIWkYA` (= **RaceId 49**). UI "RFID Tag Readings: 17 total · 0 normalized · 14 unassigned".
+
+**ID note:** prod `Encryption:Key` (Azure env var) ≠ local user-secrets key, so prod encrypted IDs do NOT decrypt locally (AES-CBC, key=SHA256(key), iv=SHA256(key+"_iv")[..16], base64url, in `EncryptionService.cs`). Resolved the participant/race by DB fingerprint instead. DB read access: `sqlcmd` + connection string from user-secrets `add88346-…`.
+
+**Root cause = day-early `Races.StartTime` for RaceId 49** (`2026-05-08 23:59:00`; real gun was night of `2026-05-09`, earliest start-mat read `2026-05-09 23:58:50.798`). The Phase 2 guard `RFIDImportService.cs:1983` (`daysDiff = |StartTime − earliestReading| > 1` ⇒ abort whole Phase 2) is evaluated over the **post-exclusion `rawReadings`** set (excludes already-normalized via event-wide `existingNormalizedReadIds`, line 1862/1957). Original full run normalized 258/318 because the field's earliest read was 0.99988 d (10 s under). The **6** movers/late-adds processed in a later incremental run (bibs 2295,2283,1069,**1012 Deepika**,1173 Hansraj=prev mover,1256) have earliest remaining read `2026-05-09 23:59:57.806` = **1.00067 d — 58 s over** ⇒ guard aborts ⇒ 0 ReadNormalized ⇒ blank splits, Registered-only.
+
+**Ruled out:** (X) incomplete assignment — the 14 "unassigned" are correct: dedup losers (rapid repeats at one mat) + off-course-device reads (`809d`/`ebed` are NOT race-49 checkpoints; race 49 loops Start=Finish on mat `ebf3`, 2.5 Km on `ebeb`). The 3 reads on race-49 devices assigned correctly (Start 321, 2.5Km 322, Finish 324). (Contamination) — a `2026-01-25` read I surfaced was a **false alarm from my own query** that joined reads by EPC WITHOUT Phase 2's batch/event scope; the faithful reproduction (batch `EventId=30`, `RaceId=49|NULL`) shows 34 reads, 0 outside May. Phase 2 IS event/batch-scoped, so cross-event reused-chip reads never enter the set.
+
+**Fix (data + reprocess; handed to user for manual run — no repo code change):**
+1. `UPDATE Races SET StartTime='2026-05-09 23:59:00' WHERE Id=49 AND StartTime='2026-05-08 23:59:00';` (off-by-one-day correction; ≤a few min around 23:58 all work — pre-gun start crossings handled by BUG-27 clamp; negative-GunTime gate `:2470` only checks FINISH reads, so a ~10 s pre-gun start read is safe).
+2. Full force-reprocess: `POST /api/RFID/{encEvent30}/dwNcr4cQCwLRDfTvAIWkYA/process-all?forceReprocess=true` (Clear+rebuild) — rebuilds all 318 incl. the 258's currently ~24 h-inflated GunTimes (NetTimes were always correct — from each runner's own start-mat crossing).
+3. Verify: 6 runners (25555,25543,25647,25590,25751,26299) get NormCount>0 + ranked; Deepika finish GunTime ~5.55M ms (~1h32m) not ~92M ms (~25h).
+
+**⚠️ Latent (NOT fixed, user deferred):** the `daysDiff` guard is **order-dependent** — same data passes on a full run but fails on incremental reprocess of movers (10 s-under vs 58 s-over margins). Correcting StartTime resolves this incident; the fragility (guard comparing post-exclusion MIN, fires inconsistently when StartTime drifts within a day) remains for any future race. Same wafer-thin margin flagged in the 2026-06-14 entry below. Consider comparing against the race's overall earliest reading or a non-fatal per-participant clamp — separate pass.
+
 ### 2026-06-14 — Process-result "Phase 2 failed: Deduplication error" — surfaced the real reason (Opus; diagnosis + wrapper hygiene)
 
 **Symptom:** `process-result` on the 5K (RaceId 49) for a moved runner (ParticipantId 25751 — bib 1173 is REUSED across 18 races, so key on ParticipantId, see [[project_bib_not_unique]]) returned 400 `"Phase 2 failed: Deduplication error"`.

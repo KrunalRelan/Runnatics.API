@@ -44,7 +44,12 @@
       "PowerShell(dotnet build *)",
       "PowerShell(dotnet test *)",
       "PowerShell(git *)",
-      "PowerShell($ErrorActionPreference='Continue'; & npx --prefix C:\\\\Projects\\\\Runnatics.UI\\\\Runnatics.Ui tsc -p C:\\\\Projects\\\\Runnatics.UI\\\\Runnatics.Ui\\\\tsconfig.app.json --noEmit; Write-Output \"EXIT=$LASTEXITCODE\")"
+      "PowerShell($ErrorActionPreference='Continue'; & npx --prefix C:\\\\Projects\\\\Runnatics.UI\\\\Runnatics.Ui tsc -p C:\\\\Projects\\\\Runnatics.UI\\\\Runnatics.Ui\\\\tsconfig.app.json --noEmit; Write-Output \"EXIT=$LASTEXITCODE\")",
+      "PowerShell($file = \"C:\\\\Projects\\\\Runnatics.API\\\\Runnatics\\\\src\\\\Runnatics.Services\\\\RFIDImportService.cs\"; if \\(Test-Path $file\\) { \\(Get-Item $file\\).Length } else { \"not found\" })",
+      "Bash(env)",
+      "Bash(sqlcmd -S \"runnatics-sqlserver.database.windows.net\" -d \"RunnaticsDb\" -U runnatics -P \"Admin@123456\" -N -C -l 30 -Q \"SELECT COUNT\\(*\\) AS RawReadCount FROM RawRFIDReadings;\" -h -1 -W)",
+      "Bash(sqlcmd -S runnatics-sqlserver.database.windows.net -d RunnaticsDb -U runnatics -P Admin@123456 -N -C -l 30 -W -Y 40 -Q ' *)",
+      "Bash(sqlcmd -S runnatics-sqlserver.database.windows.net -d RunnaticsDb -U runnatics -P Admin@123456 -N -C -l 30 -W -Q ' *)"
     ]
   }
 }

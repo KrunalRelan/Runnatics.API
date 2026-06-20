@@ -2,6 +2,7 @@ using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Requests.Results;
 using Runnatics.Models.Client.Responses.Participants;
@@ -945,9 +946,15 @@ namespace Runnatics.Services
             var checkpointTimeInfos = new List<CheckpointTimeInfo>();
 
             var checkpointRepo = _repository.GetRepository<Checkpoint>();
+            // Display-only: show PARENT/primary checkpoints only. A child (paired-reader) checkpoint
+            // has ParentDeviceId set (> 0) and no Name; its reads are merged into the parent during
+            // normalization (RFIDImportService.cs:1824/2358), so it carries no distinct timing for the
+            // table and would render as a blank "-" duplicate row at the same distance. This filters the
+            // RESULTS DISPLAY only — it does NOT affect timing/normalization/ranking.
             var checkpoints = await checkpointRepo.GetQuery(c =>
                 c.RaceId == raceId &&
                 c.EventId == eventId &&
+                (c.ParentDeviceId == null || c.ParentDeviceId == 0) &&
                 c.AuditProperties.IsActive &&
                 !c.AuditProperties.IsDeleted)
                 .OrderBy(c => c.DistanceFromStart)
@@ -1406,8 +1413,9 @@ namespace Runnatics.Services
             string eventId,
             string raceId,
             string participantId,
-            long finishTimeMs,
-            string checkpointId)
+            long? finishTimeMs,
+            string checkpointId,
+            string? crossingLocalDateTime = null)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
@@ -1483,27 +1491,68 @@ namespace Runnatics.Services
                 var editedCheckpoint = raceCheckpoints[editedIndex];
                 var isFinish = editedIndex == raceCheckpoints.Count - 1;
 
-                // finishTimeMs = elapsed chip time in ms from race gun start
-                // For backwards compatibility with IST-based clients, we accept either:
-                //   - elapsed ms from race start (when finishTimeMs < 24h = 86_400_000)
-                //   - ms-from-midnight in IST (legacy; detected when close to wall-clock time)
                 var raceStartUtc = race.StartTime.Value;
-                long chipTimeMs;
 
-                if (finishTimeMs > 0 && finishTimeMs < 86_400_000)
+                // Resolve the event's local timezone — the SAME source the display path
+                // (LoadCheckpointTimesAsync) and automatic reads (RFIDImportService.ParseSqliteFileAsync)
+                // use — so manual entry round-trips identically. Fall back to IST if the id is unknown.
+                var eventTimeZoneId = await _repository.GetRepository<Models.Data.Entities.Event>()
+                    .GetQuery(e => e.Id == decryptedEventId)
+                    .Select(e => e.TimeZone)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                TimeZoneInfo eventTz;
+                try
                 {
-                    // Treat as elapsed ms from race start (new convention)
-                    chipTimeMs = finishTimeMs;
+                    eventTz = TimeZoneInfo.FindSystemTimeZoneById(eventTimeZoneId ?? "India Standard Time");
+                }
+                catch (TimeZoneNotFoundException)
+                {
+                    eventTz = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                }
+
+                // crossingUtc is the absolute UTC instant of the crossing (stored on ReadNormalized.ChipTime,
+                // exactly like an automatic read's ReadTimeUtc); chipTimeMs is elapsed-from-gun (Gun/Net/Split).
+                long chipTimeMs;
+                DateTime crossingUtc;
+
+                if (!string.IsNullOrWhiteSpace(crossingLocalDateTime))
+                {
+                    // Preferred: a wall-clock crossing date+time in the event-local zone (no offset).
+                    // Convert local -> UTC via Event.TimeZone, then derive elapsed-from-gun. Carries the
+                    // calendar date so midnight-crossing reads are unambiguous.
+                    if (!DateTime.TryParse(crossingLocalDateTime, CultureInfo.InvariantCulture,
+                            DateTimeStyles.None, out var localDt))
+                    {
+                        ErrorMessage = $"Could not parse CrossingLocalDateTime '{crossingLocalDateTime}'. Expected a local date+time like '2026-05-10T08:39:15'.";
+                        return null;
+                    }
+
+                    crossingUtc = TimeZoneInfo.ConvertTimeToUtc(
+                        DateTime.SpecifyKind(localDt, DateTimeKind.Unspecified), eventTz);
+                    chipTimeMs = (long)(crossingUtc - raceStartUtc).TotalMilliseconds;
+                }
+                else if (finishTimeMs.HasValue && finishTimeMs.Value > 0 && finishTimeMs.Value < 86_400_000)
+                {
+                    // Legacy fallback: elapsed ms from race start (no date supplied).
+                    chipTimeMs = finishTimeMs.Value;
+                    crossingUtc = raceStartUtc.AddMilliseconds(chipTimeMs);
+                }
+                else if (finishTimeMs.HasValue)
+                {
+                    // Legacy fallback: ms-from-midnight in the event-local zone (now uses Event.TimeZone
+                    // instead of a hardcoded IST zone).
+                    var raceStartLocal = TimeZoneInfo.ConvertTimeFromUtc(raceStartUtc, eventTz);
+                    var finishLocal = raceStartLocal.Date.AddMilliseconds(finishTimeMs.Value);
+                    crossingUtc = TimeZoneInfo.ConvertTimeToUtc(
+                        DateTime.SpecifyKind(finishLocal, DateTimeKind.Unspecified), eventTz);
+                    chipTimeMs = (long)(crossingUtc - raceStartUtc).TotalMilliseconds;
                 }
                 else
                 {
-                    // Legacy: ms-from-midnight in IST
-                    var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
-                    var raceStartIst = TimeZoneInfo.ConvertTimeFromUtc(raceStartUtc, istZone);
-                    var finishIst = raceStartIst.Date.AddMilliseconds(finishTimeMs);
-                    var finishUtc = TimeZoneInfo.ConvertTimeToUtc(
-                        DateTime.SpecifyKind(finishIst, DateTimeKind.Unspecified), istZone);
-                    chipTimeMs = (long)(finishUtc - raceStartUtc).TotalMilliseconds;
+                    ErrorMessage = "Provide CrossingLocalDateTime (preferred) or FinishTimeMs to record a manual time.";
+                    return null;
                 }
 
                 if (chipTimeMs <= 0 || chipTimeMs > 86_400_000)
@@ -1605,7 +1654,7 @@ namespace Runnatics.Services
                     {
                         existingRn.GunTime = chipTimeMs;
                         existingRn.NetTime = chipTimeMs;
-                        existingRn.ChipTime = DateTime.UtcNow;
+                        existingRn.ChipTime = crossingUtc;
                         existingRn.AuditProperties.UpdatedDate = DateTime.UtcNow;
                         existingRn.AuditProperties.UpdatedBy = userId;
                         await rnRepo.UpdateAsync(existingRn);
@@ -1617,7 +1666,7 @@ namespace Runnatics.Services
                             EventId = decryptedEventId,
                             ParticipantId = decryptedParticipantId,
                             CheckpointId = decryptedCheckpointId,
-                            ChipTime = DateTime.UtcNow,
+                            ChipTime = crossingUtc,
                             GunTime = chipTimeMs,
                             NetTime = chipTimeMs,
                             IsManualEntry = true,
@@ -1730,13 +1779,22 @@ namespace Runnatics.Services
 
                     // STEP D — Recalculate the next checkpoint's SegmentTime
                     // The next segment starts at the checkpoint we just edited, so its delta changes
+                    // NoTracking invariant (CONTEXT.md): the edited checkpoint's OWN split row can
+                    // also match FromCheckpointId == decryptedCheckpointId — the start row is created
+                    // with FromCheckpointId == CheckpointId (RFIDImportService.cs:4724), and any row
+                    // satisfies CheckpointId == ToCheckpointId. Without excluding the edited checkpoint
+                    // this query re-returns the row STEP C already loaded+attached (:1705) as a SECOND
+                    // untracked instance with the same Id, and UpdateAsync below throws the duplicate-key
+                    // tracking error. A genuine "next" segment ends at a LATER checkpoint, so its
+                    // CheckpointId is never the edited one.
                     var nextSplit = await splitRepo.GetQuery(s =>
                         s.ParticipantId == decryptedParticipantId &&
                         s.FromCheckpointId == decryptedCheckpointId &&
+                        s.CheckpointId != decryptedCheckpointId &&
                         !s.AuditProperties.IsDeleted)
                         .FirstOrDefaultAsync();
 
-                    if (nextSplit?.SplitTimeMs.HasValue == true)
+                    if (nextSplit?.SplitTimeMs.HasValue == true && nextSplit.Id != existingSplit?.Id)
                     {
                         nextSplit.SegmentTime = nextSplit.SplitTimeMs.Value - chipTimeMs;
                         nextSplit.AuditProperties.UpdatedDate = DateTime.UtcNow;

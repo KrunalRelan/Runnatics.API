@@ -46,8 +46,9 @@ namespace Runnatics.Services.Interface
             string eventId,
             string raceId,
             string participantId,
-            long finishTimeMs,
-            string checkpointId);
+            long? finishTimeMs,
+            string checkpointId,
+            string? crossingLocalDateTime = null);
 
         /// <summary>
         /// Updates a participant's age category and recalculates category rankings for the race.

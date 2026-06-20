@@ -420,7 +420,7 @@ namespace Runnatics.Api.Controller
             }
 
             var response = new ResponseBase<ManualTimeResponse>();
-            var result = await _resultsService.RecordManualTimeAsync(eventId, raceId, participantId, request.FinishTimeMs, request.CheckpointId);
+            var result = await _resultsService.RecordManualTimeAsync(eventId, raceId, participantId, request.FinishTimeMs, request.CheckpointId, request.CrossingLocalDateTime);
 
             if (_resultsService.HasError || result == null)
             {

@@ -28,6 +28,14 @@ namespace Runnatics.Models.Client.Responses.Participants
         public string? Time { get; set; }
 
         /// <summary>
+        /// Full crossing date+time in the event's local timezone ("yyyy-MM-ddTHH:mm:ss"), or null
+        /// if not crossed. The manual-time editor pre-fills DATE and time from this so a near-midnight
+        /// gun (crossings on the next calendar day) defaults to the actual crossing date, not the
+        /// race start date.
+        /// </summary>
+        public string? LocalDateTime { get; set; }
+
+        /// <summary>
         /// Overall rank at this checkpoint
         /// </summary>
         public int? OverallRank { get; set; }

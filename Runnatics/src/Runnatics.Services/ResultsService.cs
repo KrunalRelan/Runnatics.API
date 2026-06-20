@@ -1017,6 +1017,9 @@ namespace Runnatics.Services
                     {
                         var localTime = TimeZoneInfo.ConvertTimeFromUtc(participantReading.ChipTime, timeZone);
                         info.Time = localTime.ToString("HH:mm:ss");
+                        // Full event-local crossing datetime so the manual-time editor defaults to the
+                        // ACTUAL crossing date (e.g. the next day for a near-midnight gun), not the race start.
+                        info.LocalDateTime = localTime.ToString("yyyy-MM-ddTHH:mm:ss");
 
                         info.OverallRank = sortedReadings
                             .Select((r, idx) => new { r.ParticipantId, Rank = idx + 1 })

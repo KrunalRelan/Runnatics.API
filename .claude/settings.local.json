@@ -54,7 +54,9 @@
       "Bash(SQLCMDPASSWORD=Admin@123456 sqlcmd -S runnatics-sqlserver.database.windows.net -d RunnaticsDb -U runnatics -N -C -h -1 -W -s '|' -Q ' *)",
       "Bash(SQLCMDPASSWORD='Admin@123456' sqlcmd -S tcp:runnatics-sqlserver.database.windows.net,1433 -d RunnaticsDb -U runnatics -N -C -l 60 -h -1 -W -s \"|\" -Q \"SELECT TOP 1 GETDATE\\(\\);\")",
       "Bash(SQLCMDPASSWORD=Admin@123456 sqlcmd -S tcp:runnatics-sqlserver.database.windows.net,1433 -d RunnaticsDb -U runnatics -N -C -l 60 -h -1 -W -s '|' -Q ' *)",
-      "Bash(DOTNET_ROLL_FORWARD=LatestMajor dotnet test Runnatics/tests/Runnatics.Services.Tests/Runnatics.Services.Tests.csproj -v q -nologo)"
+      "Bash(DOTNET_ROLL_FORWARD=LatestMajor dotnet test Runnatics/tests/Runnatics.Services.Tests/Runnatics.Services.Tests.csproj -v q -nologo)",
+      "Bash(awk 'NR==FNR{next} /^## Session Log/{f=1} !f{print}' CONTEXT.md CONTEXT.md)",
+      "Bash(awk '/^## Session Log/{f=1} f{print}' CONTEXT.md)"
     ]
   }
 }

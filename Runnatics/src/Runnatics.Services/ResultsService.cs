@@ -1810,8 +1810,12 @@ namespace Runnatics.Services
 
                     await _repository.SaveChangesAsync();
 
-                    if (computedStatus == ResultStatus.Finished)
-                        await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+                    // Re-rank the WHOLE race unconditionally. A manual time can flip THIS runner
+                    // Finished<->DNF, which shifts everyone they pass / are passed by — so re-ranking
+                    // only when this entry is Finished would leave stale ranks on a demotion. The ranker
+                    // re-ranks just the Finished set (overall/gender/category by finish time) via
+                    // BulkUpdate (tracker-bypass), so it is correct and cheap whatever this entry's status.
+                    await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                 });
 
                 int? overallRank = null, genderRank = null, categoryRank = null, totalFinishers = null;

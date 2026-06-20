@@ -1576,6 +1576,14 @@ namespace Runnatics.Services
                     dedupeResponse.NormalizedReadings,
                     dedupeResponse.DuplicatesRemoved);
 
+                // ========== PHASE 2.4: Apply durable manual overrides ==========
+                // Manual overrides are a durable INPUT layer (their own table; untouched by clear).
+                // Re-apply them onto ReadNormalized HERE — after normalization, before splits/results —
+                // so EVERY rebuild path (reprocess, clear+reprocess, race move) honors the corrected
+                // crossing and it flows into splits (P2.5) and results (P3). See context/manual-overrides.md.
+                var overridesApplied = await ApplyManualOverridesAsync(eventId, raceId);
+                _logger.LogInformation("Phase 2.4 completed. Manual overrides applied: {Count}", overridesApplied);
+
                 // ========== PHASE 2.5: Create Split Times ==========
                 var phase25Start = DateTime.UtcNow;
                 _logger.LogInformation("Phase 2.5: Creating split times...");
@@ -2298,6 +2306,170 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error during deduplication and normalization");
                 response.Status = "Failed";
                 return response;
+            }
+        }
+
+        /// <summary>
+        /// PHASE 2.4 — Re-apply durable manual overrides onto ReadNormalized after normalization
+        /// (Phase 2) and before split/result calc (Phase 2.5/3). Manual overrides live in their own
+        /// table (untouched by ClearProcessedData), so this is what makes a manual correction PERSIST
+        /// across reprocess / clear+reprocess / race move: the override is the authoritative INPUT,
+        /// preferred over the automatic/raw read for that checkpoint. Removed only by explicit revert
+        /// (soft-delete) or race move (move-invalidation soft-deletes the row).
+        /// NoTracking invariant: Phase 2 persisted via BulkInsert (tracker-bypassed), so the rows are
+        /// committed and untracked; this method loads each affected row ONCE and updates/adds it — no
+        /// AsNoTracking on the read-then-write set, no row loaded twice, so no double-attach.
+        /// </summary>
+        private async Task<int> ApplyManualOverridesAsync(string eventId, string raceId)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+            try
+            {
+                var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
+                var overrides = await overrideRepo.GetQuery(o =>
+                        o.EventId == decryptedEventId &&
+                        o.RaceId == decryptedRaceId &&
+                        o.AuditProperties.IsActive &&
+                        !o.AuditProperties.IsDeleted &&
+                        o.Participant.RaceId == decryptedRaceId &&
+                        !o.Participant.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                if (overrides.Count == 0)
+                    return 0;
+
+                // Race gun start (UTC) — basis for GunTime, exactly like Phase 2.
+                var raceRepo = _repository.GetRepository<Race>();
+                var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId && r.EventId == decryptedEventId)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                if (race?.StartTime == null)
+                {
+                    _logger.LogWarning(
+                        "Phase 2.4: race {RaceId} has no StartTime; skipping {Count} manual override(s)",
+                        decryptedRaceId, overrides.Count);
+                    return 0;
+                }
+                var raceStartUtc = race.StartTime.Value;
+
+                // Start checkpoint = lowest DistanceFromStart (NetTime == GunTime there, mirroring Phase 2).
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var raceCheckpoints = await checkpointRepo.GetQuery(c =>
+                        c.RaceId == decryptedRaceId &&
+                        c.EventId == decryptedEventId &&
+                        c.AuditProperties.IsActive &&
+                        !c.AuditProperties.IsDeleted)
+                    .OrderBy(c => c.DistanceFromStart)
+                    .AsNoTracking()
+                    .ToListAsync();
+                var startCheckpointId = raceCheckpoints.Count > 0 ? raceCheckpoints[0].Id : 0;
+
+                var participantIds = overrides.Select(o => o.ParticipantId).Distinct().ToList();
+
+                var rnRepo = _repository.GetRepository<ReadNormalized>();
+                // Current (post-Phase-2) normalized rows for the affected participants. Loaded ONCE,
+                // keyed by (participant, checkpoint) so each is updated at most once.
+                var existingRns = await rnRepo.GetQuery(rn =>
+                        participantIds.Contains(rn.ParticipantId) &&
+                        rn.EventId == decryptedEventId &&
+                        !rn.AuditProperties.IsDeleted)
+                    .ToListAsync();
+
+                // Participant start crossing (UTC), from the start-checkpoint normalized row, for NetTime.
+                var startChipTimeByParticipant = existingRns
+                    .Where(rn => rn.CheckpointId == startCheckpointId)
+                    .GroupBy(rn => rn.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).First().ChipTime);
+
+                var rnByKey = existingRns
+                    .GroupBy(rn => (rn.ParticipantId, rn.CheckpointId))
+                    .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).First());
+
+                var toUpdate = new List<ReadNormalized>();
+                var toAdd = new List<ReadNormalized>();
+
+                foreach (var ov in overrides)
+                {
+                    var crossingUtc = ov.ManualCrossingUtc;
+                    var gunTime = (long)(crossingUtc - raceStartUtc).TotalMilliseconds;
+
+                    long? netTime;
+                    if (ov.CheckpointId == startCheckpointId)
+                    {
+                        netTime = gunTime;
+                    }
+                    else if (startChipTimeByParticipant.TryGetValue(ov.ParticipantId, out var startUtc))
+                    {
+                        var nt = (long)(crossingUtc - startUtc).TotalMilliseconds;
+                        netTime = nt >= 0 ? nt : (long?)null;
+                    }
+                    else
+                    {
+                        netTime = null;
+                    }
+
+                    if (rnByKey.TryGetValue((ov.ParticipantId, ov.CheckpointId), out var rn))
+                    {
+                        rn.ChipTime = crossingUtc;
+                        rn.GunTime = gunTime;
+                        rn.NetTime = netTime;
+                        rn.IsManualEntry = true;
+                        rn.ManualEntryReason = ov.Reason ?? "Manual time entry";
+                        rn.CreatedByUserId = ov.CreatedByUserId ?? rn.CreatedByUserId;
+                        rn.AuditProperties.UpdatedBy = userId;
+                        rn.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        toUpdate.Add(rn);
+                    }
+                    else
+                    {
+                        toAdd.Add(new ReadNormalized
+                        {
+                            EventId = decryptedEventId,
+                            ParticipantId = ov.ParticipantId,
+                            CheckpointId = ov.CheckpointId,
+                            ChipTime = crossingUtc,
+                            GunTime = gunTime,
+                            NetTime = netTime,
+                            IsManualEntry = true,
+                            ManualEntryReason = ov.Reason ?? "Manual time entry",
+                            CreatedByUserId = ov.CreatedByUserId,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        });
+                    }
+                }
+
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    if (toUpdate.Count > 0)
+                        await rnRepo.UpdateRangeAsync(toUpdate);
+                    if (toAdd.Count > 0)
+                        await rnRepo.BulkInsertAsync(toAdd);
+                    await _repository.SaveChangesAsync();
+                });
+
+                _logger.LogInformation(
+                    "Phase 2.4: applied {Total} manual override(s) — {Updated} updated, {Added} inserted",
+                    overrides.Count, toUpdate.Count, toAdd.Count);
+
+                return toUpdate.Count + toAdd.Count;
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal to the overall rebuild, but log loudly: a swallowed override loss is exactly
+                // the failure this feature exists to prevent.
+                _logger.LogError(ex, "Phase 2.4: error applying manual overrides for race {RaceId}", decryptedRaceId);
+                return 0;
             }
         }
 

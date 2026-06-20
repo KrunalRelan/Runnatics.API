@@ -1007,3 +1007,22 @@ Branch: `bugfix/testing-round-1`.
 - Cache evicted with `IOutputCacheStore.EvictByTagAsync("public-results")` in `EventsController.Update` when `request.EventSettings.Published == true`
 
 **Build**: 0 errors, pre-existing warnings only.
+
+---
+
+## 2026-06-20 — Durable manual-time overrides (raw / override / derived three-layer model)
+
+**Problem:** Manual time edits only lived in `ReadNormalized`, which `ClearProcessedDataAsync` always deletes → every manual correction was wiped by clear+reprocess.
+
+**Fix (all-in-one, API):**
+- **New table `ManualTimeOverrides`** (`db/scripts/Add_ManualTimeOverride_20260620.sql`, idempotent, run manually) — durable authoritative input; no clear query touches it. Filtered unique index `(ParticipantId, CheckpointId) WHERE IsDeleted=0`.
+- **Entity + config** `ManualTimeOverride` / `ManualTimeOverrideConfiguration`; registered in `RaceSyncDbContext`.
+- **Write path** `ResultsService.RecordManualTimeAsync` STEP A-1: upsert the durable override (the single active row) alongside the existing `ReadNormalized` display write. `ManualCrossingUtc` = IST→UTC via `Event.TimeZone`.
+- **Phase 2.4** `RFIDImportService.ApplyManualOverridesAsync` — runs in `ProcessCompleteWorkflowAsync` after Phase 2 (normalize), before Phase 2.5 (splits). Upserts `ReadNormalized` for each active override (ChipTime/GunTime/NetTime, IsManualEntry=true). Covers reprocess + clear+reprocess + race move (all funnel through this workflow). NoTracking-safe: load-once + UpdateRange/BulkInsert.
+- **Revert** `ResultsService.RemoveManualTimeAsync` + `DELETE .../participant/{id}/manual-time?checkpointId=` on RFIDController — soft-deletes override + manual ReadNormalized/SplitTimes, recomputes status (mandatory per-distance gates), re-ranks. Releases the filtered unique slot so re-override works. May flip Finished→DNF if manual-only.
+- **Move-invalidation** `ParticipantImportService.MoveParticipantToRaceAsync` step 3b — soft-deletes the participant's overrides (source-race CheckpointId is meaningless in the target).
+- **Docs** `context/manual-overrides.md` (three-layer invariant) + CONTEXT.md router line.
+
+**Staged UI (blocked on auth):** "Remove manual time" button must warn when the checkpoint has no underlying raw read (runner may become DNF). Endpoint doesn't block; UI warns.
+
+**Build**: 0 errors, pre-existing warnings only. SQL to be run manually by Kunal; test matrix on race 47 (set → reprocess persists; clear+reprocess survives; revert; re-override after revert; move invalidates).

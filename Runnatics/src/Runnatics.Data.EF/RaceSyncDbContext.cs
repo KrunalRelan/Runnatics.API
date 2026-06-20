@@ -46,6 +46,7 @@ namespace Runnatics.Data.EF
         public DbSet<UploadBatch> UploadBatches { get; set; }
         public DbSet<RawRFIDReading> RawRFIDReadings { get; set; }
         public DbSet<ReadingCheckpointAssignment> ReadingCheckpointAssignments { get; set; }
+        public DbSet<ManualTimeOverride> ManualTimeOverrides { get; set; }
 
         // Notification Logs (race SMS/Email — separate from in-app Notifications)
         public DbSet<NotificationLog> NotificationLogs { get; set; }
@@ -92,6 +93,7 @@ namespace Runnatics.Data.EF
             modelBuilder.ApplyConfiguration(new UploadBatchConfiguration());
             modelBuilder.ApplyConfiguration(new RawRFIDReadingConfiguration());
             modelBuilder.ApplyConfiguration(new ReadingCheckpointAssignmentConfiguration());
+            modelBuilder.ApplyConfiguration(new ManualTimeOverrideConfiguration());
 
             // Notification Log
             modelBuilder.ApplyConfiguration(new NotificationLogConfiguration());

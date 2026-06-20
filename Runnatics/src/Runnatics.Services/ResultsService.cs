@@ -1570,6 +1570,7 @@ namespace Runnatics.Services
                 var resultsRepo = _repository.GetRepository<Results>();
                 var splitRepo = _repository.GetRepository<SplitTimes>();
                 var rnRepo = _repository.GetRepository<ReadNormalized>();
+                var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
 
                 // BUG-26: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two devices
                 // at the same DistanceFromStart are ONE logical gate — a detection at ANY checkpoint
@@ -1648,6 +1649,51 @@ namespace Runnatics.Services
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
+                    // STEP A-1 — Upsert the DURABLE manual override. This is the authoritative INPUT
+                    // that survives ClearProcessedData / reprocess (it lives in its own table, untouched
+                    // by clear) and is re-applied onto ReadNormalized by Phase 2.4 on every rebuild. The
+                    // ReadNormalized write in STEP A0 below is the live-display twin (so the grid reflects
+                    // immediately); this override row is the source of truth for future reprocesses.
+                    // Upsert the single ACTIVE row (filtered unique index: one active per participant+checkpoint).
+                    var existingOverride = await overrideRepo.GetQuery(o =>
+                        o.ParticipantId == decryptedParticipantId &&
+                        o.CheckpointId == decryptedCheckpointId &&
+                        !o.AuditProperties.IsDeleted)
+                        .FirstOrDefaultAsync();
+
+                    if (existingOverride != null)
+                    {
+                        existingOverride.EventId = decryptedEventId;
+                        existingOverride.RaceId = decryptedRaceId;
+                        existingOverride.ManualCrossingUtc = crossingUtc;
+                        existingOverride.Reason = "Manual time entry";
+                        existingOverride.AuditProperties.IsActive = true;
+                        existingOverride.AuditProperties.IsDeleted = false;
+                        existingOverride.AuditProperties.UpdatedBy = userId;
+                        existingOverride.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await overrideRepo.UpdateAsync(existingOverride);
+                    }
+                    else
+                    {
+                        await overrideRepo.AddAsync(new ManualTimeOverride
+                        {
+                            EventId = decryptedEventId,
+                            RaceId = decryptedRaceId,
+                            ParticipantId = decryptedParticipantId,
+                            CheckpointId = decryptedCheckpointId,
+                            ManualCrossingUtc = crossingUtc,
+                            Reason = "Manual time entry",
+                            CreatedByUserId = userId,
+                            AuditProperties = new Models.Data.Common.AuditProperties
+                            {
+                                CreatedBy = userId,
+                                CreatedDate = DateTime.UtcNow,
+                                IsActive = true,
+                                IsDeleted = false
+                            }
+                        });
+                    }
+
                     // STEP A0 — Upsert ReadNormalized so this manual detection is the source of truth for status
                     var existingRn = await rnRepo.GetQuery(rn =>
                         rn.ParticipantId == decryptedParticipantId &&
@@ -1897,6 +1943,208 @@ namespace Runnatics.Services
                 ErrorMessage = $"Error recording manual time: {ex.Message}";
                 _logger.LogError(ex, "Error recording manual time for participant {ParticipantId}", participantId);
                 return null;
+            }
+        }
+
+        public async Task<bool> RemoveManualTimeAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            string checkpointId,
+            CancellationToken ct)
+        {
+            var userId = _userContext.UserId;
+            var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+            var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+            var decryptedCheckpointId = Convert.ToInt32(_encryptionService.Decrypt(checkpointId));
+
+            try
+            {
+                var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
+                var existingOverride = await overrideRepo.GetQuery(o =>
+                    o.ParticipantId == decryptedParticipantId &&
+                    o.CheckpointId == decryptedCheckpointId &&
+                    !o.AuditProperties.IsDeleted)
+                    .FirstOrDefaultAsync(ct);
+
+                if (existingOverride == null)
+                {
+                    ErrorMessage = "No manual override found for this checkpoint.";
+                    return false;
+                }
+
+                // Race checkpoints for the per-DISTANCE mandatory-gate status recompute (mirrors
+                // RecordManualTimeAsync / CalculateRaceResultsAsync).
+                var checkpointRepo = _repository.GetRepository<Checkpoint>();
+                var raceCheckpoints = await checkpointRepo.GetQuery(c =>
+                    c.RaceId == decryptedRaceId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                    .OrderBy(c => c.DistanceFromStart)
+                    .AsNoTracking()
+                    .ToListAsync(ct);
+
+                var isFinishCheckpoint = raceCheckpoints.Count > 0
+                    && raceCheckpoints[raceCheckpoints.Count - 1].Id == decryptedCheckpointId;
+
+                var mandatoryDistances = raceCheckpoints.Any(c => c.IsMandatory)
+                    ? raceCheckpoints.Where(c => c.IsMandatory).Select(c => c.DistanceFromStart).Distinct().ToList()
+                    : new List<decimal> { raceCheckpoints.Max(c => c.DistanceFromStart) };
+
+                var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
+                    d => d,
+                    d => raceCheckpoints.Where(c => c.DistanceFromStart == d).Select(c => c.Id).ToHashSet());
+                var mandatoryGateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
+
+                var rnRepo = _repository.GetRepository<ReadNormalized>();
+                var splitRepo = _repository.GetRepository<SplitTimes>();
+                var resultsRepo = _repository.GetRepository<Results>();
+
+                await _repository.ExecuteInTransactionAsync(async () =>
+                {
+                    // 1. Soft-delete the durable override. This releases the filtered unique slot
+                    //    (WHERE IsDeleted=0), so a later re-override of the same checkpoint inserts cleanly.
+                    existingOverride.AuditProperties.IsDeleted = true;
+                    existingOverride.AuditProperties.IsActive = false;
+                    existingOverride.AuditProperties.UpdatedBy = userId;
+                    existingOverride.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    await overrideRepo.UpdateAsync(existingOverride);
+
+                    // 2. Soft-delete the manual ReadNormalized row(s) at this checkpoint.
+                    var manualRns = await rnRepo.GetQuery(rn =>
+                        rn.ParticipantId == decryptedParticipantId &&
+                        rn.CheckpointId == decryptedCheckpointId &&
+                        rn.IsManualEntry &&
+                        !rn.AuditProperties.IsDeleted)
+                        .ToListAsync();
+                    foreach (var rn in manualRns)
+                    {
+                        rn.AuditProperties.IsDeleted = true;
+                        rn.AuditProperties.IsActive = false;
+                        rn.AuditProperties.UpdatedBy = userId;
+                        rn.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    }
+                    if (manualRns.Count > 0)
+                        await rnRepo.UpdateRangeAsync(manualRns);
+
+                    // 3. Soft-delete the manual SplitTimes row(s) at this checkpoint.
+                    var manualSplits = await splitRepo.GetQuery(s =>
+                        s.ParticipantId == decryptedParticipantId &&
+                        s.CheckpointId == decryptedCheckpointId &&
+                        s.IsManual &&
+                        !s.AuditProperties.IsDeleted)
+                        .ToListAsync();
+                    foreach (var s in manualSplits)
+                    {
+                        s.AuditProperties.IsDeleted = true;
+                        s.AuditProperties.IsActive = false;
+                        s.AuditProperties.UpdatedBy = userId;
+                        s.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    }
+                    if (manualSplits.Count > 0)
+                        await splitRepo.UpdateRangeAsync(manualSplits);
+
+                    await _repository.SaveChangesAsync();
+
+                    // 4. Recompute status from the REMAINING (non-deleted) detections at the mandatory gates.
+                    var remainingDetectedIds = await rnRepo.GetQuery(rn =>
+                        rn.ParticipantId == decryptedParticipantId &&
+                        mandatoryGateIds.Contains(rn.CheckpointId) &&
+                        !rn.AuditProperties.IsDeleted)
+                        .Select(rn => rn.CheckpointId)
+                        .Distinct()
+                        .ToListAsync();
+                    var coveredCheckpointIds = remainingDetectedIds.ToHashSet();
+
+                    var computedStatus = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(coveredCheckpointIds))
+                        ? ResultStatus.Finished
+                        : ResultStatus.DNF;
+
+                    var existingResult = await resultsRepo.GetQuery(r =>
+                        r.ParticipantId == decryptedParticipantId &&
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId)
+                        .FirstOrDefaultAsync();
+
+                    if (existingResult != null)
+                    {
+                        existingResult.Status = computedStatus;
+
+                        if (isFinishCheckpoint)
+                        {
+                            // Finish reverted: pull the finish time from the remaining AUTO read at the
+                            // finish checkpoint (if any) — else clear (truly empty → DNF). Next full
+                            // reprocess re-derives everything else from raw.
+                            var autoFinish = await rnRepo.GetQuery(rn =>
+                                rn.ParticipantId == decryptedParticipantId &&
+                                rn.CheckpointId == decryptedCheckpointId &&
+                                !rn.AuditProperties.IsDeleted)
+                                .OrderBy(rn => rn.ChipTime)
+                                .FirstOrDefaultAsync();
+
+                            if (autoFinish != null && computedStatus == ResultStatus.Finished)
+                            {
+                                existingResult.FinishTime = autoFinish.GunTime;
+                                existingResult.GunTime = autoFinish.GunTime;
+                                existingResult.NetTime = autoFinish.NetTime;
+                                existingResult.ManualFinishTimeMs = null;
+                            }
+                            else
+                            {
+                                existingResult.FinishTime = null;
+                                existingResult.GunTime = null;
+                                existingResult.NetTime = null;
+                                existingResult.ManualFinishTimeMs = null;
+                            }
+                        }
+                        // Intermediate checkpoint revert: finish fields unchanged; status may still flip via gates.
+
+                        // IsManual reflects whether ANY active override remains for this participant.
+                        existingResult.IsManual = await overrideRepo.GetQuery(o =>
+                            o.ParticipantId == decryptedParticipantId &&
+                            !o.AuditProperties.IsDeleted)
+                            .AnyAsync();
+                        existingResult.AuditProperties.UpdatedBy = userId;
+                        existingResult.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await resultsRepo.UpdateAsync(existingResult);
+                        await _repository.SaveChangesAsync();
+                    }
+
+                    // 5. Re-rank the whole race (cheap; BulkUpdate over the Finished set, tracker-bypass).
+                    await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
+                });
+
+                // Clear the participant's manual-timing flag if no active overrides remain.
+                var hasRemainingOverrides = await overrideRepo.GetQuery(o =>
+                    o.ParticipantId == decryptedParticipantId &&
+                    !o.AuditProperties.IsDeleted)
+                    .AnyAsync(ct);
+                if (!hasRemainingOverrides)
+                {
+                    var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                    var participant = await participantRepo.GetQuery(p => p.Id == decryptedParticipantId)
+                        .FirstOrDefaultAsync(ct);
+                    if (participant != null && participant.IsManualTiming)
+                    {
+                        participant.IsManualTiming = false;
+                        participant.AuditProperties.UpdatedBy = userId;
+                        participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await participantRepo.UpdateAsync(participant);
+                        await _repository.SaveChangesAsync();
+                    }
+                }
+
+                _logger.LogInformation(
+                    "Manual time override removed for participant {ParticipantId} at checkpoint {CheckpointId}",
+                    decryptedParticipantId, decryptedCheckpointId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error removing manual time: {ex.Message}";
+                _logger.LogError(ex, "Error removing manual time for participant {ParticipantId}", participantId);
+                return false;
             }
         }
 

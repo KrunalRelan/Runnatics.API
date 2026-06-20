@@ -2427,6 +2427,28 @@ namespace Runnatics.Services
                 if (oldNormalized.Count > 0)
                     await normalizedRepo.BulkDeleteAsync(oldNormalized);
 
+                // 3b. Soft-delete this participant's manual overrides. A ManualTimeOverride is keyed to a
+                //     SOURCE-race CheckpointId, which is meaningless in the target race — left active, the
+                //     target reprocess (Phase 2.4) would re-inject a stale-checkpoint override and corrupt
+                //     the result. Soft-delete (not hard) to keep the audit trail; the runner re-times in
+                //     the target race from raw. Bulk update matches the surrounding bulk operations.
+                var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
+                var oldOverrides = await overrideRepo.GetQuery(o =>
+                        o.ParticipantId == participantId &&
+                        !o.AuditProperties.IsDeleted)
+                    .ToListAsync();
+                if (oldOverrides.Count > 0)
+                {
+                    foreach (var ov in oldOverrides)
+                    {
+                        ov.AuditProperties.IsDeleted = true;
+                        ov.AuditProperties.IsActive = false;
+                        ov.AuditProperties.UpdatedBy = userId;
+                        ov.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    }
+                    await overrideRepo.BulkUpdateAsync(oldOverrides);
+                }
+
                 // 4. ChipAssignment stays with the participant (same row, physical chip) — no
                 //    reassignment needed since the participant Id is unchanged.
 

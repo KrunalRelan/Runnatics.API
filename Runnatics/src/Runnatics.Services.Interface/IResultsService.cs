@@ -51,6 +51,20 @@ namespace Runnatics.Services.Interface
             string? crossingLocalDateTime = null);
 
         /// <summary>
+        /// Removes a manual-time override for a participant+checkpoint: soft-deletes the durable
+        /// override row and its manual ReadNormalized/SplitTimes rows, then recomputes the
+        /// participant's status and re-ranks the race. The checkpoint reverts to its automatic read
+        /// on the next reprocess (or goes empty — possibly flipping Finished→DNF — if it was manual-only).
+        /// This is the ONLY way an override disappears; clear/reprocess never silently drop it.
+        /// </summary>
+        Task<bool> RemoveManualTimeAsync(
+            string eventId,
+            string raceId,
+            string participantId,
+            string checkpointId,
+            CancellationToken ct);
+
+        /// <summary>
         /// Updates a participant's age category and recalculates category rankings for the race.
         /// </summary>
         Task<bool> ChangeParticipantCategoryAsync(

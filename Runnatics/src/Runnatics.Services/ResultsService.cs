@@ -1,5 +1,6 @@
 using AutoMapper;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
@@ -24,8 +25,10 @@ namespace Runnatics.Services
         private readonly IUserContextService _userContext;
         private readonly IEncryptionService _encryptionService;
 
-        private readonly IRaceNotificationService _raceNotificationService;
         private readonly IRFIDImportService _rfidImportService;
+        // Resolve IRaceNotificationService from a fresh scope per call (see RecordManualTimeAsync) —
+        // it shares the request DbContext, so it must never run on a background thread against it.
+        private readonly IServiceScopeFactory _scopeFactory;
 
         public ResultsService(
             IUnitOfWork<RaceSyncDbContext> repository,
@@ -33,16 +36,16 @@ namespace Runnatics.Services
             ILogger<ResultsService> logger,
             IUserContextService userContext,
             IEncryptionService encryptionService,
-            IRaceNotificationService raceNotificationService,
-            IRFIDImportService rfidImportService)
+            IRFIDImportService rfidImportService,
+            IServiceScopeFactory scopeFactory)
             : base(repository)
         {
             _mapper = mapper;
             _logger = logger;
             _userContext = userContext;
             _encryptionService = encryptionService;
-            _raceNotificationService = raceNotificationService;
             _rfidImportService = rfidImportService;
+            _scopeFactory = scopeFactory;
         }
 
         public async Task<SplitTimeCalculationResponse> CalculateSplitTimesAsync(CalculateSplitTimesRequest request)
@@ -1812,8 +1815,28 @@ namespace Runnatics.Services
 
                 if (computedStatus == ResultStatus.Finished)
                 {
-                    _ = Task.Run(() => _raceNotificationService.NotifyRaceCompletionAsync(
-                        decryptedParticipantId, decryptedRaceId));
+                    // Fire-and-forget completion notification. MUST run on its OWN DI scope: the
+                    // injected _raceNotificationService shares THIS request's scoped DbContext, so calling
+                    // it on a background thread races the awaited reads below (updatedResult/count) on the
+                    // same context ("A second operation was started on this context"). A fresh scope also
+                    // avoids using the request context after it is disposed at end-of-request.
+                    var notifyParticipantId = decryptedParticipantId;
+                    var notifyRaceId = decryptedRaceId;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            using var scope = _scopeFactory.CreateScope();
+                            var notifier = scope.ServiceProvider.GetRequiredService<IRaceNotificationService>();
+                            await notifier.NotifyRaceCompletionAsync(notifyParticipantId, notifyRaceId);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Background race-completion notification failed for participant {ParticipantId}",
+                                notifyParticipantId);
+                        }
+                    });
 
                     var updatedResult = await resultsRepo.GetQuery(r =>
                         r.ParticipantId == decryptedParticipantId &&

@@ -1581,8 +1581,10 @@ namespace Runnatics.Services
                 // Re-apply them onto ReadNormalized HERE — after normalization, before splits/results —
                 // so EVERY rebuild path (reprocess, clear+reprocess, race move) honors the corrected
                 // crossing and it flows into splits (P2.5) and results (P3). See context/manual-overrides.md.
-                var overridesApplied = await ApplyManualOverridesAsync(eventId, raceId);
-                _logger.LogInformation("Phase 2.4 completed. Manual overrides applied: {Count}", overridesApplied);
+                var overrideResult = await ApplyManualOverridesAsync(eventId, raceId);
+                _logger.LogInformation("Phase 2.4 completed. Manual overrides applied: {Count}", overrideResult.Applied);
+                if (overrideResult.Warnings.Count > 0)
+                    response.Warnings.AddRange(overrideResult.Warnings);
 
                 // ========== PHASE 2.5: Create Split Times ==========
                 var phase25Start = DateTime.UtcNow;
@@ -2320,16 +2322,18 @@ namespace Runnatics.Services
         /// committed and untracked; this method loads each affected row ONCE and updates/adds it — no
         /// AsNoTracking on the read-then-write set, no row loaded twice, so no double-attach.
         /// </summary>
-        private async Task<int> ApplyManualOverridesAsync(string eventId, string raceId)
+        private async Task<(int Applied, List<string> Warnings)> ApplyManualOverridesAsync(string eventId, string raceId)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
             var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+            var warnings = new List<string>();
+            List<ManualTimeOverride> overrides = new();
 
             try
             {
                 var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
-                var overrides = await overrideRepo.GetQuery(o =>
+                overrides = await overrideRepo.GetQuery(o =>
                         o.EventId == decryptedEventId &&
                         o.RaceId == decryptedRaceId &&
                         o.AuditProperties.IsActive &&
@@ -2340,7 +2344,7 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 if (overrides.Count == 0)
-                    return 0;
+                    return (0, warnings);
 
                 // Race gun start (UTC) — basis for GunTime, exactly like Phase 2.
                 var raceRepo = _repository.GetRepository<Race>();
@@ -2353,7 +2357,8 @@ namespace Runnatics.Services
                     _logger.LogWarning(
                         "Phase 2.4: race {RaceId} has no StartTime; skipping {Count} manual override(s)",
                         decryptedRaceId, overrides.Count);
-                    return 0;
+                    warnings.Add($"Phase 2.4: race has no StartTime — {overrides.Count} manual override(s) were NOT applied to ReadNormalized.");
+                    return (0, warnings);
                 }
                 var raceStartUtc = race.StartTime.Value;
 
@@ -2451,10 +2456,15 @@ namespace Runnatics.Services
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
+                    // Use change-tracked AddRange/UpdateRange + one SaveChanges (the proven STEP A0
+                    // pattern), NOT BulkInsert: EFCore.BulkExtensions runs its own SqlBulkCopy which
+                    // does not compose with the deferred UpdateRange inside this execution-strategy
+                    // transaction — that combination threw and was swallowed, leaving the override
+                    // row written but the ReadNormalized display/calc row missing after a rebuild.
                     if (toUpdate.Count > 0)
                         await rnRepo.UpdateRangeAsync(toUpdate);
                     if (toAdd.Count > 0)
-                        await rnRepo.BulkInsertAsync(toAdd);
+                        await rnRepo.AddRangeAsync(toAdd);
                     await _repository.SaveChangesAsync();
                 });
 
@@ -2462,14 +2472,21 @@ namespace Runnatics.Services
                     "Phase 2.4: applied {Total} manual override(s) — {Updated} updated, {Added} inserted",
                     overrides.Count, toUpdate.Count, toAdd.Count);
 
-                return toUpdate.Count + toAdd.Count;
+                return (toUpdate.Count + toAdd.Count, warnings);
             }
             catch (Exception ex)
             {
-                // Non-fatal to the overall rebuild, but log loudly: a swallowed override loss is exactly
-                // the failure this feature exists to prevent.
+                // Non-fatal to the overall rebuild (a bad override must not nuke the whole reprocess),
+                // but NEVER silent: surface the failure as a workflow warning. A swallowed override loss
+                // — silent success that dropped a timing correction — is exactly what this feature exists
+                // to prevent.
                 _logger.LogError(ex, "Phase 2.4: error applying manual overrides for race {RaceId}", decryptedRaceId);
-                return 0;
+                var affected = overrides.Count > 0
+                    ? " Affected: " + string.Join(", ", overrides.Select(o => $"participant {o.ParticipantId}/checkpoint {o.CheckpointId}"))
+                    : string.Empty;
+                warnings.Add(
+                    $"Phase 2.4: {overrides.Count} manual override(s) could NOT be applied to ReadNormalized and are not reflected ({ex.Message})." + affected);
+                return (0, warnings);
             }
         }
 

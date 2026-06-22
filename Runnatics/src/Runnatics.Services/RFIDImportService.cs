@@ -2425,6 +2425,32 @@ namespace Runnatics.Services
                     .GroupBy(rn => (rn.ParticipantId, rn.CheckpointId))
                     .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).ToList());
 
+                // Chosen-read resolution: an override with ChosenRawReadId is a real hardware read the
+                // operator SELECTED. If that raw read still exists, we keep the link (RawReadId = it,
+                // IsManualEntry = false) so it highlights as normalized. If it was hard-deleted (a
+                // clear-with-keepUploads=false), we DEGRADE to a typed-style row (RawReadId = null,
+                // IsManualEntry = true) — timing is still correct because crossingUtc comes from the
+                // durable ManualCrossingUtc (captured = the chosen read's time at write). Only the
+                // read-highlight is lost. This keys off the live raw read, never off a flag.
+                var chosenIds = overrides
+                    .Where(o => o.ChosenRawReadId.HasValue)
+                    .Select(o => o.ChosenRawReadId!.Value)
+                    .Distinct()
+                    .ToList();
+                var liveChosenReadIds = new HashSet<long>();
+                if (chosenIds.Count > 0)
+                {
+                    var rawReadRepo = _repository.GetRepository<RawRFIDReading>();
+                    liveChosenReadIds = (await rawReadRepo.GetQuery(r =>
+                            chosenIds.Contains(r.Id) &&
+                            r.AuditProperties.IsActive &&
+                            !r.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .Select(r => r.Id)
+                        .ToListAsync())
+                        .ToHashSet();
+                }
+
                 var toUpdate = new List<ReadNormalized>();
                 var toAdd = new List<ReadNormalized>();
 
@@ -2432,6 +2458,12 @@ namespace Runnatics.Services
                 {
                     var crossingUtc = ov.ManualCrossingUtc;
                     var gunTime = (long)(crossingUtc - raceStartUtc).TotalMilliseconds;
+
+                    // Resolve the chosen read (if any) to decide the read-link + manual flag.
+                    long? resolvedReadId = ov.ChosenRawReadId.HasValue && liveChosenReadIds.Contains(ov.ChosenRawReadId.Value)
+                        ? ov.ChosenRawReadId
+                        : (long?)null;
+                    var isManualEntry = !resolvedReadId.HasValue;
 
                     long? netTime;
                     if (ov.CheckpointId == startCheckpointId)
@@ -2457,9 +2489,9 @@ namespace Runnatics.Services
                         keep.ChipTime = crossingUtc;
                         keep.GunTime = gunTime;
                         keep.NetTime = netTime;
-                        keep.IsManualEntry = true;
+                        keep.IsManualEntry = isManualEntry;
                         keep.ManualEntryReason = ov.Reason ?? "Manual time entry";
-                        keep.RawReadId = null;
+                        keep.RawReadId = resolvedReadId; // chosen-read keeps the link; typed/degraded = null
                         keep.CreatedByUserId = ov.CreatedByUserId ?? keep.CreatedByUserId;
                         keep.AuditProperties.IsActive = true;
                         keep.AuditProperties.IsDeleted = false;
@@ -2487,8 +2519,9 @@ namespace Runnatics.Services
                             ChipTime = crossingUtc,
                             GunTime = gunTime,
                             NetTime = netTime,
-                            IsManualEntry = true,
+                            IsManualEntry = isManualEntry,
                             ManualEntryReason = ov.Reason ?? "Manual time entry",
+                            RawReadId = resolvedReadId, // chosen-read keeps the link; typed/degraded = null
                             CreatedByUserId = ov.CreatedByUserId,
                             AuditProperties = new Models.Data.Common.AuditProperties
                             {

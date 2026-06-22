@@ -420,7 +420,7 @@ namespace Runnatics.Api.Controller
             }
 
             var response = new ResponseBase<ManualTimeResponse>();
-            var result = await _resultsService.RecordManualTimeAsync(eventId, raceId, participantId, request.FinishTimeMs, request.CheckpointId, request.CrossingLocalDateTime);
+            var result = await _resultsService.RecordManualTimeAsync(eventId, raceId, participantId, request.FinishTimeMs, request.CheckpointId, request.CrossingLocalDateTime, request.ChosenRawReadId);
 
             if (_resultsService.HasError || result == null)
             {
@@ -429,12 +429,15 @@ namespace Runnatics.Api.Controller
                     Message = _resultsService.ErrorMessage ?? "Failed to record manual time."
                 };
 
-                if (_resultsService.ErrorMessage?.Contains("not found") == true)
+                if (_resultsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true)
                     return NotFound(response);
 
-                if (_resultsService.ErrorMessage?.Contains("invalid") == true ||
-                    _resultsService.ErrorMessage?.Contains("after race start") == true ||
-                    _resultsService.ErrorMessage?.Contains("EPC") == true)
+                // Validation rejections — chosen-read checks (bad id, wrong checkpoint, wrong participant)
+                // and the typed-time checks — are all client errors → clean 400, never a 500.
+                if (_resultsService.ErrorMessage?.Contains("invalid", StringComparison.OrdinalIgnoreCase) == true ||
+                    _resultsService.ErrorMessage?.Contains("after race start", StringComparison.OrdinalIgnoreCase) == true ||
+                    _resultsService.ErrorMessage?.Contains("EPC", StringComparison.OrdinalIgnoreCase) == true ||
+                    _resultsService.ErrorMessage?.Contains("Selected read", StringComparison.OrdinalIgnoreCase) == true)
                     return BadRequest(response);
 
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);

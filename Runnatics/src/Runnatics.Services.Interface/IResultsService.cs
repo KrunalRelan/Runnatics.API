@@ -48,7 +48,8 @@ namespace Runnatics.Services.Interface
             string participantId,
             long? finishTimeMs,
             string checkpointId,
-            string? crossingLocalDateTime = null);
+            string? crossingLocalDateTime = null,
+            string? chosenRawReadId = null);
 
         /// <summary>
         /// Removes a manual-time override for a participant+checkpoint: soft-deletes the durable

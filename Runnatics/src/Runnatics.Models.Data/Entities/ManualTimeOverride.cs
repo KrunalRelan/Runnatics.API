@@ -27,6 +27,17 @@ namespace Runnatics.Models.Data.Entities
         /// <summary>The corrected crossing instant, in UTC (same basis as ReadNormalized.ChipTime).</summary>
         public DateTime ManualCrossingUtc { get; set; }
 
+        /// <summary>
+        /// When set, the override is a "chosen read" (the operator picked an existing hardware read
+        /// at this checkpoint, rather than typing a time). The id of that <see cref="RawRFIDReading"/>.
+        /// Phase 2.4 then sets ReadNormalized.RawReadId = this value and IsManualEntry = false, so the
+        /// chosen read highlights as normalized. NULL = typed manual time (legacy behaviour).
+        /// Deliberately NOT a FK: raw reads can be hard-deleted on clear-with-keepUploads=false, and the
+        /// override must survive that — apply then degrades to ManualCrossingUtc (timing stays correct,
+        /// only the read-highlight is lost).
+        /// </summary>
+        public long? ChosenRawReadId { get; set; }
+
         public string? Reason { get; set; }
 
         public int? CreatedByUserId { get; set; }

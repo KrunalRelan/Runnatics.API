@@ -22,6 +22,10 @@ namespace Runnatics.Data.EF.Config
 
             builder.Property(e => e.ManualCrossingUtc).IsRequired();
 
+            // Chosen-read selection. Plain nullable scalar — NO FK: the override must survive a
+            // clear-with-keepUploads=false that hard-deletes raw reads (apply degrades gracefully).
+            builder.Property(e => e.ChosenRawReadId);
+
             builder.Property(e => e.Reason).HasMaxLength(500);
 
             builder.Property(e => e.CreatedByUserId);

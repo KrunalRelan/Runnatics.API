@@ -1131,6 +1131,19 @@ namespace Runnatics.Services
                 .GroupBy(n => n.RawReadId!.Value)
                 .ToDictionary(g => g.Key, g => g.First());
 
+            // Checkpoints (for this participant) that currently have an ACTIVE manual override. Keyed
+            // off the override ROW — the single source of truth — so the "is the current pick an
+            // override or the dedup default?" signal never depends on IsManualEntry.
+            var overrideCheckpointIds = (await _repository.GetRepository<ManualTimeOverride>()
+                .GetQuery(o =>
+                    o.ParticipantId == participantId &&
+                    o.AuditProperties.IsActive &&
+                    !o.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .Select(o => o.CheckpointId)
+                .ToListAsync())
+                .ToHashSet();
+
             // Build DistanceFromStart → name lookup for parent (named) checkpoints.
             // Child checkpoints share the same distance as their parent but have empty names.
             var checkpointRepo = _repository.GetRepository<Checkpoint>();
@@ -1183,6 +1196,11 @@ namespace Runnatics.Services
                     LocalTime = localTime.ToString("HH:mm:ss"),
                     Date = localTime.ToString("yyyy-MM-dd"),
                     Checkpoint = checkpointDisplay,
+                    CheckpointId = assignment?.Checkpoint != null
+                        ? _encryptionService.Encrypt(assignment.Checkpoint.Id.ToString())
+                        : null,
+                    HasActiveOverride = assignment?.Checkpoint != null
+                        && overrideCheckpointIds.Contains(assignment.Checkpoint.Id),
                     CheckpointDistance = assignment?.Checkpoint?.DistanceFromStart,
                     Device = r.UploadBatch?.ReaderDevice?.Name ?? r.DeviceId,
                     DeviceId = r.DeviceId,
@@ -1421,7 +1439,8 @@ namespace Runnatics.Services
             string participantId,
             long? finishTimeMs,
             string checkpointId,
-            string? crossingLocalDateTime = null)
+            string? crossingLocalDateTime = null,
+            string? chosenRawReadId = null)
         {
             var userId = _userContext.UserId;
             var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
@@ -1523,7 +1542,65 @@ namespace Runnatics.Services
                 long chipTimeMs;
                 DateTime crossingUtc;
 
-                if (!string.IsNullOrWhiteSpace(crossingLocalDateTime))
+                // chosenReadId is set only on the CHOSEN-READ path (operator picked an existing
+                // hardware read). It flows through to STEP A-1 (override.ChosenRawReadId) and STEP A0
+                // (ReadNormalized.RawReadId + IsManualEntry=false). NULL ⇒ typed manual time.
+                long? chosenReadId = null;
+
+                if (!string.IsNullOrWhiteSpace(chosenRawReadId))
+                {
+                    // CHOSEN READ: the crossing IS an existing raw read's time. Validate server-side —
+                    // never trust the client. The read must (a) exist & be live, (b) be assigned to THIS
+                    // checkpoint (enforces "same checkpoint only"), and (c) belong to this participant's chip.
+                    if (!long.TryParse(chosenRawReadId, out var parsedReadId))
+                    {
+                        ErrorMessage = $"Invalid ChosenRawReadId '{chosenRawReadId}'.";
+                        return null;
+                    }
+
+                    var rawReadRepo = _repository.GetRepository<RawRFIDReading>();
+                    var chosenRead = await rawReadRepo.GetQuery(r =>
+                        r.Id == parsedReadId &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .Include(r => r.ReadingCheckpointAssignments)
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+
+                    if (chosenRead == null)
+                    {
+                        ErrorMessage = "Selected read not found.";
+                        return null;
+                    }
+
+                    var assignedToCheckpoint = chosenRead.ReadingCheckpointAssignments.Any(a =>
+                        a.CheckpointId == decryptedCheckpointId &&
+                        a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted);
+                    if (!assignedToCheckpoint)
+                    {
+                        ErrorMessage = "Selected read is not assigned to this checkpoint. A read can only be chosen for its own checkpoint.";
+                        return null;
+                    }
+
+                    var participantEpcs = await _repository.GetRepository<ChipAssignment>()
+                        .GetQuery(ca =>
+                            ca.ParticipantId == decryptedParticipantId &&
+                            ca.UnassignedAt == null &&
+                            ca.AuditProperties.IsActive && !ca.AuditProperties.IsDeleted)
+                        .Select(ca => ca.Chip.EPC)
+                        .AsNoTracking()
+                        .ToListAsync();
+                    if (!participantEpcs.Contains(chosenRead.Epc))
+                    {
+                        ErrorMessage = "Selected read does not belong to this participant.";
+                        return null;
+                    }
+
+                    chosenReadId = parsedReadId;
+                    crossingUtc = chosenRead.ReadTimeUtc;
+                    chipTimeMs = (long)(crossingUtc - raceStartUtc).TotalMilliseconds;
+                }
+                else if (!string.IsNullOrWhiteSpace(crossingLocalDateTime))
                 {
                     // Preferred: a wall-clock crossing date+time in the event-local zone (no offset).
                     // Convert local -> UTC via Event.TimeZone, then derive elapsed-from-gun. Carries the
@@ -1647,6 +1724,13 @@ namespace Runnatics.Services
                 if (splitTimeSpan.TotalHours >= 24)
                     splitTimeSpan = new TimeSpan(23, 59, 59);
 
+                // CHOSEN READ vs TYPED time. A chosen read is real hardware data the operator SELECTED:
+                // the derived ReadNormalized keeps RawReadId = the chosen read and IsManualEntry = false
+                // (so the read highlights as normalized, and no typed-"Manual" badge shows). A typed time
+                // has no underlying read: RawReadId = null, IsManualEntry = true (legacy behaviour).
+                var isChosenRead = chosenReadId.HasValue;
+                var manualReason = isChosenRead ? "Manually selected read" : "Manual time entry";
+
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     // STEP A-1 — Upsert the DURABLE manual override. This is the authoritative INPUT
@@ -1666,7 +1750,10 @@ namespace Runnatics.Services
                         existingOverride.EventId = decryptedEventId;
                         existingOverride.RaceId = decryptedRaceId;
                         existingOverride.ManualCrossingUtc = crossingUtc;
-                        existingOverride.Reason = "Manual time entry";
+                        // Set on chosen-read, CLEAR on typed — a later typed edit on the same checkpoint
+                        // flips this row back to a typed override (latest write wins on the single active row).
+                        existingOverride.ChosenRawReadId = chosenReadId;
+                        existingOverride.Reason = manualReason;
                         existingOverride.AuditProperties.IsActive = true;
                         existingOverride.AuditProperties.IsDeleted = false;
                         existingOverride.AuditProperties.UpdatedBy = userId;
@@ -1682,7 +1769,8 @@ namespace Runnatics.Services
                             ParticipantId = decryptedParticipantId,
                             CheckpointId = decryptedCheckpointId,
                             ManualCrossingUtc = crossingUtc,
-                            Reason = "Manual time entry",
+                            ChosenRawReadId = chosenReadId,
+                            Reason = manualReason,
                             CreatedByUserId = userId,
                             AuditProperties = new Models.Data.Common.AuditProperties
                             {
@@ -1713,9 +1801,11 @@ namespace Runnatics.Services
                         keep.ChipTime = crossingUtc;
                         keep.GunTime = chipTimeMs;
                         keep.NetTime = chipTimeMs;
-                        keep.IsManualEntry = true;
-                        keep.ManualEntryReason = "Manual time entry";
-                        keep.RawReadId = null; // now a manual crossing, no longer sourced from a raw read
+                        keep.IsManualEntry = !isChosenRead;
+                        keep.ManualEntryReason = manualReason;
+                        // Chosen read keeps the link to its raw read (so it highlights as normalized);
+                        // a typed time has no raw read.
+                        keep.RawReadId = chosenReadId;
                         keep.CreatedByUserId = userId;
                         keep.AuditProperties.IsActive = true;
                         keep.AuditProperties.IsDeleted = false;
@@ -1744,8 +1834,9 @@ namespace Runnatics.Services
                             ChipTime = crossingUtc,
                             GunTime = chipTimeMs,
                             NetTime = chipTimeMs,
-                            IsManualEntry = true,
-                            ManualEntryReason = "Manual time entry",
+                            IsManualEntry = !isChosenRead,
+                            ManualEntryReason = manualReason,
+                            RawReadId = chosenReadId, // chosen-read keeps the link; typed = null
                             CreatedByUserId = userId,
                             AuditProperties = new Models.Data.Common.AuditProperties
                             {
@@ -1823,7 +1914,7 @@ namespace Runnatics.Services
                         existingSplit.SegmentTime = segmentTimeMs;
                         existingSplit.SplitTime = splitTimeSpan;
                         existingSplit.ReadNormalizedId = null;
-                        existingSplit.IsManual = true;
+                        existingSplit.IsManual = !isChosenRead; // chosen read = real hardware, no manual badge
                         existingSplit.AuditProperties.UpdatedDate = DateTime.UtcNow;
                         existingSplit.AuditProperties.UpdatedBy = userId;
                         await splitRepo.UpdateAsync(existingSplit);
@@ -1840,7 +1931,7 @@ namespace Runnatics.Services
                             SplitTimeMs = chipTimeMs,
                             SegmentTime = segmentTimeMs,
                             SplitTime = splitTimeSpan,
-                            IsManual = true,
+                            IsManual = !isChosenRead, // chosen read = real hardware, no manual badge
                             AuditProperties = new Models.Data.Common.AuditProperties
                             {
                                 CreatedBy = userId,
@@ -2034,11 +2125,16 @@ namespace Runnatics.Services
                     existingOverride.AuditProperties.UpdatedDate = DateTime.UtcNow;
                     await overrideRepo.UpdateAsync(existingOverride);
 
-                    // 2. Soft-delete the manual ReadNormalized row(s) at this checkpoint.
+                    // 2. Soft-delete the ReadNormalized row(s) at this checkpoint.
+                    //    Key off (participant, checkpoint) — NOT IsManualEntry. A CHOSEN-READ override
+                    //    writes IsManualEntry=false, so filtering on the flag would skip it and leave a
+                    //    stale crossing after "revert" (the same lookup-by-flag class of bug as the old
+                    //    STEP A0 duplicate). At an override checkpoint there is exactly one normalized row
+                    //    (Phase 2 skip + STEP A0/Phase 2.4 collapse guarantee it), so deleting by key is
+                    //    correct and flag-independent.
                     var manualRns = await rnRepo.GetQuery(rn =>
                         rn.ParticipantId == decryptedParticipantId &&
                         rn.CheckpointId == decryptedCheckpointId &&
-                        rn.IsManualEntry &&
                         !rn.AuditProperties.IsDeleted)
                         .ToListAsync();
                     foreach (var rn in manualRns)
@@ -2051,11 +2147,12 @@ namespace Runnatics.Services
                     if (manualRns.Count > 0)
                         await rnRepo.UpdateRangeAsync(manualRns);
 
-                    // 3. Soft-delete the manual SplitTimes row(s) at this checkpoint.
+                    // 3. Soft-delete the SplitTimes row(s) at this checkpoint. Same reasoning as (2):
+                    //    key off (participant, checkpoint), NOT s.IsManual — a chosen-read split is
+                    //    IsManual=false and would otherwise survive the revert.
                     var manualSplits = await splitRepo.GetQuery(s =>
                         s.ParticipantId == decryptedParticipantId &&
                         s.CheckpointId == decryptedCheckpointId &&
-                        s.IsManual &&
                         !s.AuditProperties.IsDeleted)
                         .ToListAsync();
                     foreach (var s in manualSplits)

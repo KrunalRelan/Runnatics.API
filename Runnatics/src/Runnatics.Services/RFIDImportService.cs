@@ -2278,6 +2278,35 @@ namespace Runnatics.Services
                         .ToList();
                 }
 
+                // SKIP-IN-PHASE-2: do NOT build an automatic normalized row for any (participant,
+                // checkpoint) that has an ACTIVE manual override. That crossing is owned by the override
+                // layer and is inserted by Phase 2.4. Building an automatic row here too would leave TWO
+                // normalized crossings at one checkpoint (auto + manual) — the duplicate that corrupts
+                // split/result calc. One crossing per checkpoint; never create-then-replace.
+                var overrideRepoForSkip = _repository.GetRepository<ManualTimeOverride>();
+                var overridePairs = await overrideRepoForSkip.GetQuery(o =>
+                        o.EventId == decryptedEventId &&
+                        o.RaceId == decryptedRaceId &&
+                        o.AuditProperties.IsActive &&
+                        !o.AuditProperties.IsDeleted)
+                    .Select(o => new { o.ParticipantId, o.CheckpointId })
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                if (overridePairs.Count > 0)
+                {
+                    var overridePairSet = overridePairs
+                        .Select(p => (p.ParticipantId, p.CheckpointId))
+                        .ToHashSet();
+                    var beforeSkip = normalizedReadings.Count;
+                    normalizedReadings = normalizedReadings
+                        .Where(nr => !overridePairSet.Contains((nr.ParticipantId, nr.CheckpointId)))
+                        .ToList();
+                    _logger.LogInformation(
+                        "Phase 2: skipped {Count} automatic normalized row(s) at checkpoint(s) with an active manual override",
+                        beforeSkip - normalizedReadings.Count);
+                }
+
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     // TRUE BULK INSERT - Single DB roundtrip
@@ -2391,9 +2420,10 @@ namespace Runnatics.Services
                     .GroupBy(rn => rn.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).First().ChipTime);
 
-                var rnByKey = existingRns
+                // ALL rows per (participant, checkpoint), so we can collapse any duplicates to one.
+                var rnsByKey = existingRns
                     .GroupBy(rn => (rn.ParticipantId, rn.CheckpointId))
-                    .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).First());
+                    .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).ToList());
 
                 var toUpdate = new List<ReadNormalized>();
                 var toAdd = new List<ReadNormalized>();
@@ -2418,17 +2448,34 @@ namespace Runnatics.Services
                         netTime = null;
                     }
 
-                    if (rnByKey.TryGetValue((ov.ParticipantId, ov.CheckpointId), out var rn))
+                    if (rnsByKey.TryGetValue((ov.ParticipantId, ov.CheckpointId), out var rows) && rows.Count > 0)
                     {
-                        rn.ChipTime = crossingUtc;
-                        rn.GunTime = gunTime;
-                        rn.NetTime = netTime;
-                        rn.IsManualEntry = true;
-                        rn.ManualEntryReason = ov.Reason ?? "Manual time entry";
-                        rn.CreatedByUserId = ov.CreatedByUserId ?? rn.CreatedByUserId;
-                        rn.AuditProperties.UpdatedBy = userId;
-                        rn.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        toUpdate.Add(rn);
+                        // Convert the first existing crossing to the manual value (with skip-in-Phase-2
+                        // there normally IS none here, so this is a defensive collapse for any leftover
+                        // automatic/duplicate rows).
+                        var keep = rows[0];
+                        keep.ChipTime = crossingUtc;
+                        keep.GunTime = gunTime;
+                        keep.NetTime = netTime;
+                        keep.IsManualEntry = true;
+                        keep.ManualEntryReason = ov.Reason ?? "Manual time entry";
+                        keep.RawReadId = null;
+                        keep.CreatedByUserId = ov.CreatedByUserId ?? keep.CreatedByUserId;
+                        keep.AuditProperties.IsActive = true;
+                        keep.AuditProperties.IsDeleted = false;
+                        keep.AuditProperties.UpdatedBy = userId;
+                        keep.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        toUpdate.Add(keep);
+
+                        // Collapse extras so exactly one crossing survives at this checkpoint.
+                        foreach (var extra in rows.Skip(1))
+                        {
+                            extra.AuditProperties.IsDeleted = true;
+                            extra.AuditProperties.IsActive = false;
+                            extra.AuditProperties.UpdatedBy = userId;
+                            extra.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            toUpdate.Add(extra);
+                        }
                     }
                     else
                     {

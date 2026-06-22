@@ -1694,22 +1694,45 @@ namespace Runnatics.Services
                         });
                     }
 
-                    // STEP A0 — Upsert ReadNormalized so this manual detection is the source of truth for status
-                    var existingRn = await rnRepo.GetQuery(rn =>
+                    // STEP A0 — Make this manual detection the SOLE normalized crossing at this
+                    // (participant, checkpoint). Match on (participant, checkpoint) REGARDLESS of
+                    // IsManualEntry: if an AUTOMATIC row exists it must be CONVERTED in place, not left
+                    // beside a new manual row. The old query filtered rn.IsManualEntry, so it never saw
+                    // the automatic row and AddAsync'd a second one — two crossings at one checkpoint,
+                    // which is what fed the wrong-split bug. Invariant: exactly one active normalized
+                    // crossing per checkpoint.
+                    var rnsAtCheckpoint = await rnRepo.GetQuery(rn =>
                         rn.ParticipantId == decryptedParticipantId &&
                         rn.CheckpointId == decryptedCheckpointId &&
-                        rn.IsManualEntry &&
                         !rn.AuditProperties.IsDeleted)
-                        .FirstOrDefaultAsync();
+                        .ToListAsync();
 
-                    if (existingRn != null)
+                    if (rnsAtCheckpoint.Count > 0)
                     {
-                        existingRn.GunTime = chipTimeMs;
-                        existingRn.NetTime = chipTimeMs;
-                        existingRn.ChipTime = crossingUtc;
-                        existingRn.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        existingRn.AuditProperties.UpdatedBy = userId;
-                        await rnRepo.UpdateAsync(existingRn);
+                        var keep = rnsAtCheckpoint[0];
+                        keep.ChipTime = crossingUtc;
+                        keep.GunTime = chipTimeMs;
+                        keep.NetTime = chipTimeMs;
+                        keep.IsManualEntry = true;
+                        keep.ManualEntryReason = "Manual time entry";
+                        keep.RawReadId = null; // now a manual crossing, no longer sourced from a raw read
+                        keep.CreatedByUserId = userId;
+                        keep.AuditProperties.IsActive = true;
+                        keep.AuditProperties.IsDeleted = false;
+                        keep.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        keep.AuditProperties.UpdatedBy = userId;
+                        await rnRepo.UpdateAsync(keep);
+
+                        // Collapse any extra rows at this checkpoint (e.g. a pre-existing auto+manual pair)
+                        // so exactly one survives.
+                        foreach (var extra in rnsAtCheckpoint.Skip(1))
+                        {
+                            extra.AuditProperties.IsDeleted = true;
+                            extra.AuditProperties.IsActive = false;
+                            extra.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            extra.AuditProperties.UpdatedBy = userId;
+                            await rnRepo.UpdateAsync(extra);
+                        }
                     }
                     else
                     {

@@ -2749,19 +2749,24 @@ namespace Runnatics.Services
                 // =====================================================================
                 // Validate result times before processing
                 // =====================================================================
+                // A negative finish GunTime means this runner's finish-gate read lands BEFORE the gun
+                // (bad/stray data — e.g. a pre-gun cross-read on a shared finish mat). Do NOT fail the
+                // whole race (that 500'd everyone for one bad runner). Instead exclude these runners from
+                // finishers/ranking and flag them DNF, so the rest of the race still processes.
                 var negativeGunTimes = finishReadings.Where(r => r.GunTime.HasValue && r.GunTime.Value < 0).ToList();
-                if (negativeGunTimes.Any())
+                var flaggedNegativeFinishIds = negativeGunTimes.Select(r => r.ParticipantId).ToHashSet();
+                if (flaggedNegativeFinishIds.Count > 0)
                 {
-                    ErrorMessage = $"Found {negativeGunTimes.Count} finish readings with negative GunTime. " +
-                        "Race.StartTime is incorrectly configured. Please check Race.StartTime in database.";
-                    _logger.LogError(
-                        "Validation failed: {Count} participants have negative GunTime. Race.StartTime may be wrong. " +
-                        "First few examples: {Examples}",
-                        negativeGunTimes.Count,
+                    _logger.LogWarning(
+                        "Excluding {Count} participant(s) with negative finish GunTime from finishers (flagged DNF); " +
+                        "race continues. First few examples: {Examples}",
+                        flaggedNegativeFinishIds.Count,
                         string.Join(", ", negativeGunTimes.Take(5).Select(r =>
                             $"Participant {r.ParticipantId}: {r.GunTime}ms")));
-                    response.Status = "Failed";
-                    return response;
+                    // Drop them from the finish set so they are never ranked or written as finishers.
+                    finishReadings = finishReadings
+                        .Where(r => !flaggedNegativeFinishIds.Contains(r.ParticipantId))
+                        .ToList();
                 }
 
                 var negativeNetTimes = finishReadings.Where(r => r.NetTime.HasValue && r.NetTime.Value < 0).ToList();
@@ -2800,7 +2805,13 @@ namespace Runnatics.Services
                     // at that distance (not every checkpoint ID individually).
                     bool allMandatoryCovered = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
 
-                    if (allMandatoryCovered)
+                    if (flaggedNegativeFinishIds.Contains(participant.Id))
+                    {
+                        // Reached the finish gate but with an impossible (negative) time → flag DNF,
+                        // never Finished. (Their finish reading was dropped from finishReadings above.)
+                        dnfParticipantIds.Add(participant.Id);
+                    }
+                    else if (allMandatoryCovered)
                     {
                         // Detected at every mandatory distance → Finished
                         finishedParticipantIds.Add(participant.Id);
@@ -3031,7 +3042,10 @@ namespace Runnatics.Services
                 };
                 response.Status = "Completed";
                 response.Message = $"Results: {finishedParticipantIds.Count} Finished, " +
-                    $"{dnfParticipantIds.Count} DNF, {dnsParticipantIds.Count} DNS";
+                    $"{dnfParticipantIds.Count} DNF, {dnsParticipantIds.Count} DNS" +
+                    (flaggedNegativeFinishIds.Count > 0
+                        ? $" ({flaggedNegativeFinishIds.Count} flagged DNF: negative finish time)"
+                        : string.Empty);
 
                 var endTime = DateTime.UtcNow;
                 response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;
@@ -4217,7 +4231,8 @@ namespace Runnatics.Services
                 var raceSettings = race.RaceSettings;
                 var dedupWindowSeconds = (raceSettings?.DedUpSeconds > 0) ? raceSettings.DedUpSeconds.Value : 30;
                 var passGapThreshold = (raceSettings?.PassGapThresholdSeconds > 0) ? raceSettings.PassGapThresholdSeconds.Value : 300;
-                var earlyStartCutOff = (raceSettings?.EarlyStartCutOff > 0) ? raceSettings.EarlyStartCutOff.Value : 10;
+                // EarlyStartCutOff is stored in SECONDS (UI default 300). Default to 300s when null/0.
+                var earlyStartCutOff = (raceSettings?.EarlyStartCutOff > 0) ? raceSettings.EarlyStartCutOff.Value : 300;
 
                 // ISSUE-1: pass-ordinal → checkpoint mapping mode. Sequential (point-to-point,
                 // extra passes clamp to last checkpoint) unless the race is flagged as a loop
@@ -4419,10 +4434,16 @@ namespace Runnatics.Services
                 //     batches (2 checkpoints → deferred), leaving them as Pending.
                 //     Phase 1.5 must pick them up here or they are never assigned.
                 // ================================================================
-                // BUG 1+2 FIX: Extend the lower-bound before race start (earlyStartCutOff minutes).
-                // Participants often cross the start mat a few seconds before the gun fires.
-                // Without the buffer those readings are excluded and the participant loses Start assignment.
-                var readingsAfter = raceStartTime.AddMinutes(-earlyStartCutOff);
+                // BUG 1+2 FIX: Extend the lower-bound before race start by earlyStartCutOff SECONDS.
+                // Participants often cross the start mat a few seconds before the gun fires; without
+                // the buffer those reads are excluded and the participant loses Start assignment.
+                // (earlyStartCutOff is stored in SECONDS — consuming it as AddMinutes made the window
+                //  60x too wide; AddSeconds is correct.)
+                // FIX D: never let this OUTER load gate undercut commit 1's INNER gun-window pre-side
+                // (START_WINDOW_PRE_GUN_MINUTES) — otherwise a legit pre-gun start read would be
+                // dropped here before the gun-window selection can pick it.
+                var loadCutoffSeconds = Math.Max(earlyStartCutOff, START_WINDOW_PRE_GUN_MINUTES * 60);
+                var readingsAfter = raceStartTime.AddSeconds(-loadCutoffSeconds);
                 var allReadings = await readingRepo.GetQuery(r =>
                     (r.ProcessResult == "Success" || r.ProcessResult == "Pending") &&
                     batchIds.Contains(r.BatchId) &&
@@ -4435,7 +4456,7 @@ namespace Runnatics.Services
                     "Step 1: Loaded {Checkpoints} checkpoints, {Devices} devices, " +
                     "{Participants} EPC mappings, {Readings} readings (Success+Pending, from {Window})",
                     checkpoints.Count, devices.Count, epcToParticipant.Count, allReadings.Count,
-                    readingsAfter.ToString("HH:mm:ss") + $" UTC (race start -{earlyStartCutOff} min)");
+                    readingsAfter.ToString("HH:mm:ss") + $" UTC (race start -{loadCutoffSeconds} sec)");
 
                 if (allReadings.Count == 0)
                 {

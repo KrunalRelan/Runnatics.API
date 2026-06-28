@@ -16,6 +16,8 @@ This file is a router. Detailed context lives in focused files under `.claude/co
 | [context/manual-overrides.md](context/manual-overrides.md) | Three-layer model (raw / durable override / derived). `ManualTimeOverride` table survives clear; Phase 2.4 applies it on every rebuild; explicit revert + race-move-invalidation. | Any manual-time work, clear/reprocess, race move, or "why did a manual edit survive/disappear". |
 | [context/architecture.md](context/architecture.md) | Project overview, key architectural decisions, layer map, entity/service/controller inventory. | Onboarding / locating where code goes. |
 | [context/session-log.md](context/session-log.md) | Full dated history of every fix/diagnosis (the former CONTEXT.md body). | Tracing why a past change was made; appended after each task. |
+| [context/queued-cutoff-datetime-audit.md](context/queued-cutoff-datetime-audit.md) | QUEUED combined audit: (A) EarlyStartCutOff/LateStartCutOff seconds-vs-minutes unit fix + whole-group sweep; (B) full datetime=UTC every-column audit. Gated behind race-49 StartTime fix + commit-1 verification. Seeded pre-findings inside. | Before touching RaceSettings cutoff consumption or doing the datetime sweep. |
+| [context/queued-ui-starttime-fix.md](context/queued-ui-starttime-fix.md) | QUEUED (UI repo, gated): edit-race form must load/send the correct UTC StartTime on every save so a settings-only save can't clobber the gun. Server stays permissive (gun freely editable); the Option-1 server lock-down was reverted. | Why race StartTime reverts on settings save; any edit-race/gun UI work. |
 
 ## TODO — incremental migration
 Distill these topical references OUT of `session-log.md` into their own focused files (the raw history stays in session-log.md until then):

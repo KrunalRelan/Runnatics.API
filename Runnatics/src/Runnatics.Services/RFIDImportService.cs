@@ -29,6 +29,19 @@ namespace Runnatics.Services
         /// </summary>
         private const double DEFAULT_DEDUP_WINDOW_SECONDS = 30.0;
 
+        /// <summary>
+        /// Gun-anchored START window for staggered-start / shared-mat races (Phase 1.5).
+        /// The Start crossing is the read on a start-bound shared group NEAREST the race's
+        /// own gun within [gun − PreGun, gun + PostGun]; reads outside it are cross-reads
+        /// from other staggered races' starts on the same physical mat and are excluded.
+        /// PreGun is tight (a real start is at/after the gun; clocks are gun-calibrated, so
+        /// this only absorbs genuine gun-line early starters); PostGun is generous (start
+        /// surge + slow-to-line). Both MUST stay well under the minimum gun-to-gun gap
+        /// (7th GGHM = 27 min) so a participant's adjacent-gun cross-read never falls in-window.
+        /// </summary>
+        private const int START_WINDOW_PRE_GUN_MINUTES = 5;
+        private const int START_WINDOW_POST_GUN_MINUTES = 15;
+
         // =====================================================================
         // FIX: Deduplication helper methods for loop race support
         // =====================================================================
@@ -4636,9 +4649,26 @@ namespace Runnatics.Services
                 // who crossed the Start mat slightly before gun time (filtered by raceStartTime
                 // in the past) correctly get a Start assignment on their first recorded pass.
                 // ================================================================
+                // GUN-ANCHORED START SELECTION: start-bound shared groups (those that include
+                // the start checkpoint at distance 0) must pick their Start crossing relative to
+                // THIS race's gun, NOT "earliest read on the mat". On a shared Start/Finish mat at
+                // a staggered-start event, a runner's chip is also detected at the OTHER races'
+                // guns (e.g. a 5K runner near the arch at the 21K gun) — those pre-gun cross-reads
+                // would otherwise win pass 0 and become a bogus Start, pushing the real start read
+                // into the Finish slot (negative/short times). The gun window excludes them.
+                var startBoundGroupKeys = sharedDevices.Values
+                    .Where(m => m.StartsAtZero)
+                    .Select(m => m.SharedGroupKey)
+                    .ToHashSet();
+                var startWindowFrom = raceStartTime.AddMinutes(-START_WINDOW_PRE_GUN_MINUTES);
+                var startWindowTo = raceStartTime.AddMinutes(START_WINDOW_POST_GUN_MINUTES);
+
                 int passIndexOverrideCount = 0;
+                int startCrossReadsExcluded = 0;
                 foreach (var (_, epcReadings) in readingsByEpc)
                 {
+                    var readsToExclude = new List<LoopRaceCheckpointAssigner.ReadingInput>();
+
                     var byGroup = epcReadings
                         .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
                         .GroupBy(r => deviceToGroup[r.DeviceId]);
@@ -4646,12 +4676,65 @@ namespace Runnatics.Services
                     foreach (var grp in byGroup)
                     {
                         var sortedPasses = grp.OrderBy(r => r.ReadTimeUtc).ToList();
+
+                        // Start-bound group → anchor the Start on the gun.
+                        if (startBoundGroupKeys.Contains(grp.Key))
+                        {
+                            var candidates = sortedPasses
+                                .Where(r => r.ReadTimeUtc >= startWindowFrom && r.ReadTimeUtc <= startWindowTo)
+                                .ToList();
+
+                            if (candidates.Count > 0)
+                            {
+                                // Start = read NEAREST the gun (tiebreak: first at/after the gun).
+                                var startRead = candidates
+                                    .OrderBy(r => Math.Abs((r.ReadTimeUtc - raceStartTime).Ticks))
+                                    .ThenByDescending(r => r.ReadTimeUtc >= raceStartTime)
+                                    .First();
+
+                                // Reads BEFORE the chosen start on a start-bound group are pre-gun
+                                // cross-reads / pre-start noise → drop them (left unassigned). Reads
+                                // AFTER the start (e.g. the Finish crossing) keep passes 1..N so the
+                                // rest of the run chains off the corrected start.
+                                var preStart = sortedPasses
+                                    .Where(r => r.ReadTimeUtc < startRead.ReadTimeUtc)
+                                    .ToList();
+                                readsToExclude.AddRange(preStart);
+                                startCrossReadsExcluded += preStart.Count;
+
+                                var ordered = new List<LoopRaceCheckpointAssigner.ReadingInput> { startRead };
+                                ordered.AddRange(sortedPasses.Where(r => r.ReadTimeUtc > startRead.ReadTimeUtc));
+                                for (int pi = 0; pi < ordered.Count; pi++)
+                                {
+                                    ordered[pi].PassIndexOverride = pi;  // 0-based pass ordinal
+                                    passIndexOverrideCount++;
+                                }
+                                continue;
+                            }
+                            // No in-window candidate → this participant has no valid start crossing
+                            // near the gun. Fall through to chronological (no behavior change); if it
+                            // yields a negative time, the Phase 3 guard flags them (DNF) — not a 500.
+                        }
+
+                        // Default (existing): chronological pass ordinal.
                         for (int pi = 0; pi < sortedPasses.Count; pi++)
                         {
                             sortedPasses[pi].PassIndexOverride = pi;  // 0-based pass ordinal
                             passIndexOverrideCount++;
                         }
                     }
+
+                    // Drop excluded cross-reads so they are never assigned a checkpoint.
+                    if (readsToExclude.Count > 0)
+                        epcReadings.RemoveAll(r => readsToExclude.Contains(r));
+                }
+
+                if (startCrossReadsExcluded > 0)
+                {
+                    _logger.LogInformation(
+                        "Gun-window start selection: excluded {Count} pre-gun cross-read(s) on start-bound " +
+                        "shared group(s) (window [{From:HH:mm:ss}, {To:HH:mm:ss}] UTC around gun {Gun:HH:mm:ss})",
+                        startCrossReadsExcluded, startWindowFrom, startWindowTo, raceStartTime);
                 }
 
                 if (passIndexOverrideCount > 0)

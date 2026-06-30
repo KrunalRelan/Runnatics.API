@@ -967,6 +967,21 @@ namespace Runnatics.Services
             if (checkpoints.Count == 0)
                 return checkpointTimeInfos;
 
+            // VALID START WINDOW (display): the start checkpoint shows "not found" (blank, like a
+            // not-crossed gate) when the participant's start read is OUTSIDE
+            // [gun - EarlyStartCutOff, gun + LateStartCutOff] (SECONDS; defaults 300/1200) — mirrors
+            // the status rule in RFIDImportService Phase 3.
+            var startCheckpointId = checkpoints[0].Id; // ordered by DistanceFromStart asc → start gate
+            var raceForWindow = await _repository.GetRepository<Race>().GetQuery(r =>
+                    r.Id == raceId && r.EventId == eventId)
+                .Include(r => r.RaceSettings)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+            // SAME window computation as status (RFIDImportService Phase 3) via the shared helper —
+            // status and display cannot drift.
+            var (validStartFloor, validStartCeiling) =
+                StartWindow.For(raceForWindow?.StartTime, raceForWindow?.RaceSettings?.EarlyStartCutOff, raceForWindow?.RaceSettings?.LateStartCutOff);
+
             var normalizedRepo = _repository.GetRepository<ReadNormalized>();
             var allReadings = await normalizedRepo.GetQuery(r =>
                 r.EventId == eventId &&
@@ -1013,7 +1028,14 @@ namespace Runnatics.Services
                     var participantReading = sortedReadings
                         .FirstOrDefault(r => r.ParticipantId == participantId);
 
-                    if (participantReading != null)
+                    // Start gate with an OUT-OF-WINDOW read → no valid start crossing → render as
+                    // "not found" (leave Time/ranks unpopulated, same as a not-crossed gate).
+                    var startOutOfWindow = participantReading != null &&
+                        checkpoint.Id == startCheckpointId && validStartFloor.HasValue &&
+                        (participantReading.ChipTime < validStartFloor.Value ||
+                         participantReading.ChipTime > validStartCeiling!.Value);
+
+                    if (participantReading != null && !startOutOfWindow)
                     {
                         var localTime = TimeZoneInfo.ConvertTimeFromUtc(participantReading.ChipTime, timeZone);
                         info.Time = localTime.ToString("HH:mm:ss");

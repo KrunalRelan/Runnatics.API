@@ -2,6 +2,26 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-30 — Valid-start window [floor, ceiling] from settings + DNS truth-table — Opus
+
+**⚠️ PUSHED TO MASTER UNVERIFIED (user-authorized).** Build green (0 errors); pushed to `master` at the user's explicit request BEFORE prod verification. **Pending prod checks:** race 49 StartTime must be set to `00:59` UTC; reprocess 47/48/49; the regression gate = "any 47/48 FINISHER with earliest start-gate read < their floor?" (zero rows → safe; rows → genuine gun-jumper vs too-tight floor); 2133 → 06:29 start ~62 min; 05:29-only → DNS "not found". If a problem surfaces, fix forward on master.
+
+Replaces the hardcoded gun-window (commit `d02a01c`) with a settings-driven valid-start window and a precise DNS rule. Changes status classification for EVERY race.
+
+- **Window:** `floor = gun − EarlyStartCutOff` (default 300s), `ceiling = gun + LateStartCutOff` (default 1200s), both SECONDS, `>0` guard. **`LateStartCutOff` wired up** (was unused) as the ceiling. Removed the `START_WINDOW_PRE/POST_GUN_MINUTES` constants.
+- **Valid start = EARLIEST start read in [floor, ceiling].**
+- **P1.5 (shared, `RFIDImportService`):** window=[floor,ceiling]; start=earliest in-window; no in-window → chronological fallthrough keeps earliest as an INVALID placeholder. **Load lower-bound REMOVED** (load all Success+Pending for the race batches) so pre-floor/early reads are RETAINED for Phase 3 (the key "retain-not-drop" requirement — load-bound=floor would have broken case 2).
+- **P2 (simple):** `Include(RaceSettings)`; start row = earliest in-window else earliest-available placeholder; NetTime baseline = earliest valid (gun-clamped) else **gun** (late finisher nets from gun).
+- **P3 (status):** `Include(RaceSettings)`; per-participant earliest start-gate read drives the truth table:
+  - earliest start read **< floor** → **DNS** (case 2; even with finish data).
+  - earliest in **[floor,ceiling]** → Finished if all mandatory covered, else DNF.
+  - no valid start (late-only or no read) **+ finisher** → **kept Finished** (case 3 + Row-5 ruling: finisher = ran).
+  - no valid start **+ non-finisher** → **DNS** (case 1).
+- **Display (`ResultsService.LoadCheckpointTimesAsync`):** start checkpoint shows "not found" (blank) when the start read is ∉ [floor,ceiling].
+- **Row-5 ruling:** no start read + finisher → KEEP (full mandatory coverage = demonstrably ran; missing start = reader miss).
+- **Consistency (divergent-impl guard):** the window math lived in 4 copies (P1.5/P2/P3 + ResultsService display) — collapsed into ONE shared helper `Runnatics.Services.StartWindow.For(gun, early, late)` (defaults 300/1200, `>0` guard). All 4 sites call it, so **status and display can't drift** (the recurring dual-implementation failure mode). New file `StartWindow.cs`.
+- **Verify (working tree, then prod):** case 2 (early+finish → DNS, "not found"); case 1 (no start, non-finisher → DNS); race 49 2133 (06:29 ∈ [06:24,06:49] → valid, ~62 min); 05:29-only → DNS "not found"; defaults 300/1200; **47/48 regression — no in-window finisher flips to DNS; late finishers kept**. Prereq: race 49 StartTime = 00:59 in prod.
+
 ### 2026-06-28 — Result-calc fixes A+B+D (EarlyStartCutOff unit, negative-finish flag-not-500, load-gate floor) — Opus
 
 **⚠️ PUSHED TO MASTER UNVERIFIED (user-authorized).** Commit 1 (gun-window) + commit 2 (A+B+D) + commit 3 (docs) pushed straight to `master` at the user's explicit request BEFORE the prod a–e verification ran. Prod check still PENDING: (a) race 49 process-all completes; (b) the 7 runners resolve to a 06:29 start or flag DNF (2133 → 06:29, ~62 min); (c) negative-finish → flagged DNF not 500; (d) **47/48 regression diff — the gate**; (e) load window ~5 min not 5 h. Prereq: race 49 StartTime must be `00:59` in prod. If a–e surface a problem, fix forward on master.

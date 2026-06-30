@@ -29,18 +29,9 @@ namespace Runnatics.Services
         /// </summary>
         private const double DEFAULT_DEDUP_WINDOW_SECONDS = 30.0;
 
-        /// <summary>
-        /// Gun-anchored START window for staggered-start / shared-mat races (Phase 1.5).
-        /// The Start crossing is the read on a start-bound shared group NEAREST the race's
-        /// own gun within [gun − PreGun, gun + PostGun]; reads outside it are cross-reads
-        /// from other staggered races' starts on the same physical mat and are excluded.
-        /// PreGun is tight (a real start is at/after the gun; clocks are gun-calibrated, so
-        /// this only absorbs genuine gun-line early starters); PostGun is generous (start
-        /// surge + slow-to-line). Both MUST stay well under the minimum gun-to-gun gap
-        /// (7th GGHM = 27 min) so a participant's adjacent-gun cross-read never falls in-window.
-        /// </summary>
-        private const int START_WINDOW_PRE_GUN_MINUTES = 5;
-        private const int START_WINDOW_POST_GUN_MINUTES = 15;
+        // NOTE: the start-window edges are no longer hardcoded constants — they are settings-driven
+        // per race: floor = gun - RaceSettings.EarlyStartCutOff (default 300s), ceiling = gun +
+        // RaceSettings.LateStartCutOff (default 1200s), consumed as SECONDS. See Phase 1.5 / 2 / 3.
 
         // =====================================================================
         // FIX: Deduplication helper methods for loop race support
@@ -1787,6 +1778,7 @@ namespace Runnatics.Services
                 var race = await raceRepo.GetQuery(r =>
                     r.Id == decryptedRaceId &&
                     r.EventId == decryptedEventId)
+                    .Include(r => r.RaceSettings)
                     .FirstOrDefaultAsync();
 
                 if (race == null)
@@ -2076,39 +2068,37 @@ namespace Runnatics.Services
                 // =====================================================================
                 var participantStartTimes = new Dictionary<int, DateTime>();
 
-                // Collect all start checkpoint readings (use LATEST time at start mat per participant)
-                var startCheckpointReadings = readingsWithMergedCheckpoints
-                    .Where(r => r.CheckpointId == startCheckpointId)
-                    .GroupBy(r => r.ParticipantId)
-                    .Select(g => new
-                    {
-                        ParticipantId = g.Key,
-                        StartTime = g.Max(r => r.Reading.ReadTimeUtc) // LATEST reading at start mat
-                    })
-                    .ToList();
+                // VALID START WINDOW (Phase 2) — same rule as Phase 1.5: [gun - EarlyStartCutOff,
+                // gun + LateStartCutOff] (SECONDS; defaults 300/1200). Only a start-checkpoint read
+                // inside this window is a valid start. The NetTime baseline is the EARLIEST valid
+                // in-window read (gun-clamped — BUG-27), else the gun itself (out-of-window / no valid
+                // start → baseline = gun, so a kept late finisher nets from the gun). Start VALIDITY
+                // and the DNS consequence are decided in Phase 3 (CalculateRaceResultsAsync).
+                var raceSettingsP2 = race.RaceSettings;
+                var (validStartFloorP2, validStartCeilingP2) =
+                    StartWindow.For(raceStartTime, raceSettingsP2?.EarlyStartCutOff, raceSettingsP2?.LateStartCutOff);
 
-                foreach (var startReading in startCheckpointReadings)
+                if (raceStartTime.HasValue)
                 {
-                    // BUG-27: Gun clamp. A runner cannot start their personal (net) clock before
-                    // the official gun. The start-mat read can be a few seconds-to-minutes BEFORE
-                    // Race.StartTime (the EarlyStartCutOff window admits pre-gun reads), which would
-                    // make NetTime = finish - startMat LARGER than GunTime = finish - gun — the
-                    // physically impossible Chip Time > Gun Time. Clamp the baseline up to the gun.
-                    var clampedStart = raceStartTime.HasValue && raceStartTime.Value > startReading.StartTime
-                        ? raceStartTime.Value
-                        : startReading.StartTime;
+                    var gunP2 = raceStartTime.Value;
+                    var startGroups = readingsWithMergedCheckpoints
+                        .Where(r => r.CheckpointId == startCheckpointId)
+                        .GroupBy(r => r.ParticipantId);
 
-                    if (clampedStart != startReading.StartTime)
+                    foreach (var g in startGroups)
                     {
-                        _logger.LogInformation(
-                            "BUG-27 gun clamp: Participant {ParticipantId} crossed start mat at {MatTime} " +
-                            "(before gun {GunTime}). Clamping net baseline to gun time.",
-                            startReading.ParticipantId,
-                            startReading.StartTime.ToString("HH:mm:ss.fff"),
-                            raceStartTime!.Value.ToString("HH:mm:ss.fff"));
-                    }
+                        var earliestValid = g
+                            .Where(r => r.Reading.ReadTimeUtc >= validStartFloorP2!.Value &&
+                                        r.Reading.ReadTimeUtc <= validStartCeilingP2!.Value)
+                            .OrderBy(r => r.Reading.ReadTimeUtc)
+                            .Select(r => (DateTime?)r.Reading.ReadTimeUtc)
+                            .FirstOrDefault();
 
-                    participantStartTimes[startReading.ParticipantId] = clampedStart;
+                        DateTime baseline = earliestValid.HasValue
+                            ? (gunP2 > earliestValid.Value ? gunP2 : earliestValid.Value)
+                            : gunP2;
+                        participantStartTimes[g.Key] = baseline;
+                    }
                 }
 
                 _logger.LogInformation(
@@ -2119,20 +2109,31 @@ namespace Runnatics.Services
                 var normalizedReadings = grouped.Select(group =>
                 {
                     // ==========================================================
-                    // FIX: For START checkpoint, pick LAST entry (runner leaving mat).
-                    //      For all other checkpoints, pick EARLIEST entry.
+                    // START checkpoint: pick the EARLIEST VALID read in [floor, ceiling]; if none is
+                    //   in-window, keep the earliest available read as an INVALID placeholder so Phase 3
+                    //   and the display can see it (early → DNS / "not found"; late → finisher-safe).
+                    // All other checkpoints: EARLIEST entry.
                     // ==========================================================
                     var isStartCheckpoint = group.Key.CheckpointId == startCheckpointId;
 
-                    var bestReading = isStartCheckpoint
+                    var bestReading = !isStartCheckpoint
                         ? group
-                            .OrderByDescending(r => r.Reading.TimestampMs)  // LAST entry for start
-                            .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
-                            .First()
-                        : group
                             .OrderBy(r => r.Reading.TimestampMs)             // EARLIEST entry for others
                             .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
-                            .First();
+                            .First()
+                        : (validStartFloorP2.HasValue && group.Any(r =>
+                                r.Reading.ReadTimeUtc >= validStartFloorP2.Value &&
+                                r.Reading.ReadTimeUtc <= validStartCeilingP2!.Value)
+                            ? group
+                                .Where(r => r.Reading.ReadTimeUtc >= validStartFloorP2.Value &&
+                                            r.Reading.ReadTimeUtc <= validStartCeilingP2!.Value)
+                                .OrderBy(r => r.Reading.TimestampMs)         // earliest VALID in-window
+                                .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
+                                .First()
+                            : group
+                                .OrderBy(r => r.Reading.TimestampMs)         // earliest available (out-of-window placeholder)
+                                .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
+                                .First());
 
                     if (isStartCheckpoint && group.Count() > 1)
                     {
@@ -2608,6 +2609,7 @@ namespace Runnatics.Services
                     r.EventId == decryptedEventId &&
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
+                    .Include(r => r.RaceSettings)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
 
@@ -2617,6 +2619,12 @@ namespace Runnatics.Services
                     response.Status = "Failed";
                     return response;
                 }
+
+                // VALID START WINDOW for DNS classification: [gun - EarlyStartCutOff, gun + LateStartCutOff]
+                // (SECONDS; defaults 300/1200). A runner's start is valid only if their earliest start-gate
+                // read falls in this window. Out-of-window/none → DNS per the rules below.
+                var (validStartFloorP3, validStartCeilingP3) =
+                    StartWindow.For(race.StartTime, race.RaceSettings?.EarlyStartCutOff, race.RaceSettings?.LateStartCutOff);
 
                 // Get all checkpoints ordered by distance
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
@@ -2703,9 +2711,25 @@ namespace Runnatics.Services
                     !rn.AuditProperties.IsDeleted)
                     .ToListAsync();
 
-                var participantsWithStart = startReadings
-                    .Select(r => r.ParticipantId)
-                    .ToHashSet();
+                // Per-participant EARLIEST start-gate read (one logical start crossing). Its position
+                // relative to [validStartFloorP3, validStartCeilingP3] drives status:
+                //   in-window      → valid start
+                //   before floor   → too early (illegitimate) → DNS even with finish data
+                //   after ceiling  → late: finisher kept (case 3), non-finisher DNS
+                //   no read at all → DNS (non-finisher) / kept (finisher, reader-miss)
+                var earliestStartByParticipant = startReadings
+                    .GroupBy(r => r.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.Min(r => r.ChipTime));
+
+                // A start is VALID only when an in-window start read exists. When the window can't be
+                // computed (no StartTime — shouldn't happen post-validation), fall back to "any read".
+                bool HasValidStart(int pid) =>
+                    earliestStartByParticipant.TryGetValue(pid, out var chip) &&
+                    (!validStartFloorP3.HasValue || (chip >= validStartFloorP3.Value && chip <= validStartCeilingP3!.Value));
+                bool IsEarlyStart(int pid) =>
+                    validStartFloorP3.HasValue &&
+                    earliestStartByParticipant.TryGetValue(pid, out var chip) &&
+                    chip < validStartFloorP3.Value;
 
                 // Get normalized readings at the FINISH GATE (all checkpoints at the highest
                 // mandatory distance) — used for finish time and ranking. Reaching the gate alone
@@ -2811,20 +2835,31 @@ namespace Runnatics.Services
                         // never Finished. (Their finish reading was dropped from finishReadings above.)
                         dnfParticipantIds.Add(participant.Id);
                     }
+                    else if (IsEarlyStart(participant.Id))
+                    {
+                        // Start crossing BEFORE the valid-start floor (too early) → illegitimate start →
+                        // DNS for the WHOLE run, even if mandatory checkpoints / finish are present.
+                        dnsParticipantIds.Add(participant.Id);
+                    }
+                    else if (HasValidStart(participant.Id))
+                    {
+                        // Valid in-window start → Finished if all mandatory distances covered, else DNF.
+                        if (allMandatoryCovered)
+                            finishedParticipantIds.Add(participant.Id);
+                        else
+                            dnfParticipantIds.Add(participant.Id);
+                    }
                     else if (allMandatoryCovered)
                     {
-                        // Detected at every mandatory distance → Finished
+                        // No valid start (late-only, or no start read), but the runner covered every
+                        // mandatory distance → they demonstrably ran → keep Finished (finisher-safe;
+                        // a late/ missing start read is not a "did not start"). NetTime nets from the gun.
                         finishedParticipantIds.Add(participant.Id);
-                    }
-                    else if (!participantsWithStart.Contains(participant.Id))
-                    {
-                        // No start reading → Did Not Start
-                        dnsParticipantIds.Add(participant.Id);
                     }
                     else
                     {
-                        // Started but missed ≥1 mandatory checkpoint → Did Not Finish
-                        dnfParticipantIds.Add(participant.Id);
+                        // No valid start AND not a finisher → Did Not Start.
+                        dnsParticipantIds.Add(participant.Id);
                     }
                 }
 
@@ -4231,8 +4266,12 @@ namespace Runnatics.Services
                 var raceSettings = race.RaceSettings;
                 var dedupWindowSeconds = (raceSettings?.DedUpSeconds > 0) ? raceSettings.DedUpSeconds.Value : 30;
                 var passGapThreshold = (raceSettings?.PassGapThresholdSeconds > 0) ? raceSettings.PassGapThresholdSeconds.Value : 300;
-                // EarlyStartCutOff is stored in SECONDS (UI default 300). Default to 300s when null/0.
-                var earlyStartCutOff = (raceSettings?.EarlyStartCutOff > 0) ? raceSettings.EarlyStartCutOff.Value : 300;
+                // VALID START WINDOW = [validStartFloor, validStartCeiling], both from settings (SECONDS).
+                //   floor   = gun - EarlyStartCutOff (default 300s) — a read before this is too early (pre-start stray).
+                //   ceiling = gun + LateStartCutOff  (default 1200s) — a read after this is not a start crossing.
+                // The valid start = earliest start read in [floor, ceiling]; out-of-window reads drive DNS in Phase 3.
+                var (validStartFloor, validStartCeiling) =
+                    StartWindow.For(raceStartTime, raceSettings?.EarlyStartCutOff, raceSettings?.LateStartCutOff);
 
                 // ISSUE-1: pass-ordinal → checkpoint mapping mode. Sequential (point-to-point,
                 // extra passes clamp to last checkpoint) unless the race is flagged as a loop
@@ -4437,26 +4476,24 @@ namespace Runnatics.Services
                 // BUG 1+2 FIX: Extend the lower-bound before race start by earlyStartCutOff SECONDS.
                 // Participants often cross the start mat a few seconds before the gun fires; without
                 // the buffer those reads are excluded and the participant loses Start assignment.
-                // (earlyStartCutOff is stored in SECONDS — consuming it as AddMinutes made the window
-                //  60x too wide; AddSeconds is correct.)
-                // FIX D: never let this OUTER load gate undercut commit 1's INNER gun-window pre-side
-                // (START_WINDOW_PRE_GUN_MINUTES) — otherwise a legit pre-gun start read would be
-                // dropped here before the gun-window selection can pick it.
-                var loadCutoffSeconds = Math.Max(earlyStartCutOff, START_WINDOW_PRE_GUN_MINUTES * 60);
-                var readingsAfter = raceStartTime.AddSeconds(-loadCutoffSeconds);
+                // Load ALL Success+Pending reads for the race's batches (NO time lower-bound). A
+                // pre-floor / early start crossing MUST be RETAINED so Phase 3 can see it and apply the
+                // early-start → DNS rule (case 2) even for a finisher. Validity is decided by the
+                // [floor, ceiling] window during selection/status — it does NOT gate which reads load.
+                // (Reads are already scoped to this race's batches and, downstream, its EPCs.)
                 var allReadings = await readingRepo.GetQuery(r =>
                     (r.ProcessResult == "Success" || r.ProcessResult == "Pending") &&
                     batchIds.Contains(r.BatchId) &&
-                    r.ReadTimeUtc >= readingsAfter &&
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
                     .ToListAsync();
 
                 _logger.LogInformation(
                     "Step 1: Loaded {Checkpoints} checkpoints, {Devices} devices, " +
-                    "{Participants} EPC mappings, {Readings} readings (Success+Pending, from {Window})",
+                    "{Participants} EPC mappings, {Readings} readings (Success+Pending, all times; " +
+                    "valid-start window [{Floor:HH:mm:ss}, {Ceiling:HH:mm:ss}] UTC)",
                     checkpoints.Count, devices.Count, epcToParticipant.Count, allReadings.Count,
-                    readingsAfter.ToString("HH:mm:ss") + $" UTC (race start -{loadCutoffSeconds} sec)");
+                    validStartFloor, validStartCeiling);
 
                 if (allReadings.Count == 0)
                 {
@@ -4681,8 +4718,8 @@ namespace Runnatics.Services
                     .Where(m => m.StartsAtZero)
                     .Select(m => m.SharedGroupKey)
                     .ToHashSet();
-                var startWindowFrom = raceStartTime.AddMinutes(-START_WINDOW_PRE_GUN_MINUTES);
-                var startWindowTo = raceStartTime.AddMinutes(START_WINDOW_POST_GUN_MINUTES);
+                var startWindowFrom = validStartFloor;
+                var startWindowTo = validStartCeiling;
 
                 int passIndexOverrideCount = 0;
                 int startCrossReadsExcluded = 0;
@@ -4707,10 +4744,9 @@ namespace Runnatics.Services
 
                             if (candidates.Count > 0)
                             {
-                                // Start = read NEAREST the gun (tiebreak: first at/after the gun).
+                                // Start = EARLIEST valid read in [floor, ceiling] (first valid at/after floor).
                                 var startRead = candidates
-                                    .OrderBy(r => Math.Abs((r.ReadTimeUtc - raceStartTime).Ticks))
-                                    .ThenByDescending(r => r.ReadTimeUtc >= raceStartTime)
+                                    .OrderBy(r => r.ReadTimeUtc)
                                     .First();
 
                                 // Reads BEFORE the chosen start on a start-bound group are pre-gun

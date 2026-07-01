@@ -1445,9 +1445,10 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                // Load Race for UTC gun start time and IsTimed flag
+                // Load Race for UTC gun start time and IsTimed flag (+ RaceSettings for the valid-start window)
                 var raceRepo = _repository.GetRepository<Race>();
                 var race = await raceRepo.GetQuery(r => r.Id == decryptedRaceId)
+                    .Include(r => r.RaceSettings)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
 
@@ -1495,8 +1496,14 @@ namespace Runnatics.Services
 
                 var editedCheckpoint = raceCheckpoints[editedIndex];
                 var isFinish = editedIndex == raceCheckpoints.Count - 1;
+                var isStart = editedIndex == 0; // start = lowest DistanceFromStart
 
                 var raceStartUtc = race.StartTime.Value;
+
+                // Valid-start window [floor, ceiling] via the SAME StartWindow helper as the pipeline
+                // (no divergent copy) — used to validate a manually-entered START crossing.
+                var (validStartFloor, validStartCeiling) = StartWindow.For(
+                    raceStartUtc, race.RaceSettings?.EarlyStartCutOff, race.RaceSettings?.LateStartCutOff);
 
                 // Resolve the event's local timezone — the SAME source the display path
                 // (LoadCheckpointTimesAsync) and automatic reads (RFIDImportService.ParseSqliteFileAsync)
@@ -1618,9 +1625,38 @@ namespace Runnatics.Services
                     return null;
                 }
 
-                if (chipTimeMs <= 0 || chipTimeMs > 86_400_000)
+                if (chipTimeMs > 86_400_000)
                 {
-                    ErrorMessage = $"Calculated chip time {chipTimeMs}ms is invalid. Check that finish time is after race start.";
+                    ErrorMessage = $"Calculated chip time {chipTimeMs}ms is invalid (exceeds 24 hours). Check the entered time.";
+                    return null;
+                }
+
+                if (isStart)
+                {
+                    // Apply the valid-start window (gun − EarlyStartCutOff … gun + LateStartCutOff) — the
+                    // SAME rule as the pipeline. A start in the window is valid (even slightly before the
+                    // gun); a start OUTSIDE it is not a valid start.
+                    var startInWindow = crossingUtc >= validStartFloor && crossingUtc <= validStartCeiling;
+                    if (!startInWindow)
+                    {
+                        // Out-of-window (e.g. a pre-floor stray) → NOT a valid start → discard it and flag
+                        // the runner DNS (mirrors the pipeline's early-start rule). Succeeds with a warning;
+                        // NEVER a hard error.
+                        return await DiscardOutOfWindowStartAsync(
+                            decryptedEventId, decryptedRaceId, decryptedParticipantId, decryptedCheckpointId,
+                            participantId, participant.BibNumber ?? string.Empty, participant.FullName,
+                            editedCheckpoint.Name, crossingUtc, eventTz);
+                    }
+                    // A legit slightly-early start (crossing in [floor, gun)) has chipTimeMs < 0 → clamp the
+                    // baseline up to the gun (BUG-27 gun clamp) so downstream Gun/Net/Split times aren't negative.
+                    if (chipTimeMs < 0)
+                        chipTimeMs = 0;
+                }
+                else if (chipTimeMs <= 0)
+                {
+                    // A mid-race/finish gate can't be reached before the gun → operator error → clean
+                    // validation message (the controller maps "before the race start" to HTTP 400, not 500).
+                    ErrorMessage = "A mid-race/finish crossing can't be before the race start time (gun). Check the entered time.";
                     return null;
                 }
 
@@ -2038,6 +2074,75 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error recording manual time for participant {ParticipantId}", participantId);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// A manually-entered START crossing that falls OUTSIDE the valid-start window is not a valid
+        /// start: discard it (soft-delete any manual override / normalized / split row at the start
+        /// checkpoint), flag the runner DNS (mirrors the pipeline's pre-floor early-start rule), re-rank,
+        /// and return a SUCCESS response with a warning — never a hard error.
+        /// </summary>
+        private async Task<ManualTimeResponse?> DiscardOutOfWindowStartAsync(
+            int eventId, int raceId, int participantId, int checkpointId,
+            string encParticipantId, string bib, string fullName, string? checkpointName,
+            DateTime crossingUtc, TimeZoneInfo eventTz)
+        {
+            var userId = _userContext.UserId;
+            var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
+            var rnRepo = _repository.GetRepository<ReadNormalized>();
+            var splitRepo = _repository.GetRepository<SplitTimes>();
+            var resultsRepo = _repository.GetRepository<Results>();
+
+            await _repository.ExecuteInTransactionAsync(async () =>
+            {
+                // Do NOT record this invalid start — soft-delete any manual override / normalized / split
+                // row at the start checkpoint (key off participant+checkpoint, like RemoveManualTimeAsync).
+                var overrides = await overrideRepo.GetQuery(o =>
+                    o.ParticipantId == participantId && o.CheckpointId == checkpointId && !o.AuditProperties.IsDeleted).ToListAsync();
+                foreach (var o in overrides) { o.AuditProperties.IsDeleted = true; o.AuditProperties.IsActive = false; o.AuditProperties.UpdatedBy = userId; o.AuditProperties.UpdatedDate = DateTime.UtcNow; }
+                if (overrides.Count > 0) await overrideRepo.UpdateRangeAsync(overrides);
+
+                var rns = await rnRepo.GetQuery(rn =>
+                    rn.ParticipantId == participantId && rn.CheckpointId == checkpointId && !rn.AuditProperties.IsDeleted).ToListAsync();
+                foreach (var rn in rns) { rn.AuditProperties.IsDeleted = true; rn.AuditProperties.IsActive = false; rn.AuditProperties.UpdatedBy = userId; rn.AuditProperties.UpdatedDate = DateTime.UtcNow; }
+                if (rns.Count > 0) await rnRepo.UpdateRangeAsync(rns);
+
+                var splits = await splitRepo.GetQuery(s =>
+                    s.ParticipantId == participantId && s.CheckpointId == checkpointId && !s.AuditProperties.IsDeleted).ToListAsync();
+                foreach (var s in splits) { s.AuditProperties.IsDeleted = true; s.AuditProperties.IsActive = false; s.AuditProperties.UpdatedBy = userId; s.AuditProperties.UpdatedDate = DateTime.UtcNow; }
+                if (splits.Count > 0) await splitRepo.UpdateRangeAsync(splits);
+
+                // Force DNS — a start outside the valid window invalidates the whole run (pipeline case-2).
+                var result = await resultsRepo.GetQuery(r =>
+                    r.ParticipantId == participantId && r.EventId == eventId && r.RaceId == raceId).FirstOrDefaultAsync();
+                if (result != null)
+                {
+                    result.Status = ResultStatus.DNS;
+                    result.FinishTime = null; result.GunTime = null; result.NetTime = null;
+                    result.OverallRank = null; result.GenderRank = null; result.CategoryRank = null;
+                    result.IsManual = true;
+                    result.AuditProperties.UpdatedBy = userId; result.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    await resultsRepo.UpdateAsync(result);
+                }
+                await _repository.SaveChangesAsync();
+            });
+
+            // Re-rank the race (DNS excluded) via the shared RankCalculator.
+            await CalculateResultRankingsAsync(eventId, raceId, userId);
+
+            var localCrossing = TimeZoneInfo.ConvertTimeFromUtc(crossingUtc, eventTz);
+            return new ManualTimeResponse
+            {
+                ParticipantId = encParticipantId,
+                Bib = bib,
+                FullName = fullName,
+                CheckpointId = checkpointId,
+                CheckpointName = checkpointName,
+                IsManual = true,
+                Status = ResultStatus.DNS,
+                Warning = $"Start crossing {localCrossing:HH:mm:ss} is outside the valid-start window " +
+                          "(gun − EarlyStartCutOff … gun + LateStartCutOff); not recorded — runner flagged DNS (did not validly start)."
+            };
         }
 
         public async Task<bool> RemoveManualTimeAsync(

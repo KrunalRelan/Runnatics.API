@@ -21,5 +21,8 @@ namespace Runnatics.Models.Client.Responses.RFID
         public int? CategoryRank { get; set; }
         public int? TotalFinishers { get; set; }
         public string? Status { get; set; }
+
+        /// <summary>Non-fatal note surfaced on a successful edit (e.g. an out-of-window start was discarded and the runner flagged DNS).</summary>
+        public string? Warning { get; set; }
     }
 }

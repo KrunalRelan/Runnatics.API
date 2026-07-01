@@ -2,6 +2,20 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-30 — Manual-edit path now applies the valid-start floor + is negative-safe (parallel-impl catch-up) — Opus
+
+**⚠️ PUSHED TO MASTER UNVERIFIED (user-authorized).** Build green. The manual-time edit (`ResultsService.RecordManualTimeAsync`) was the divergent parallel impl that never got the floor / negative-safe fixes the pipeline already has: it rejected ANY crossing at/before the GUN (`chipTimeMs <= 0`) and hard-errored (`ErrorMessage` → 500). So a valid slightly-early start (06:07:41, after the floor) AND a pre-floor stray (06:06:41) both 500'd.
+
+**Fix (routes through the SAME `StartWindow` helper — no 3rd copy):**
+- Race load now `Include(RaceSettings)`; compute `isStart = editedIndex == 0` + `(floor, ceiling) = StartWindow.For(gun, EarlyStartCutOff, LateStartCutOff)`.
+- Replaced the `chipTimeMs <= 0` reject with checkpoint-aware logic (kept the `> 24h` upper guard for both):
+  - **Start + in-window** → VALID (accept even if `chipTimeMs < 0`; clamp to 0 = gun-time baseline, BUG-27). → 06:07:41 accepted.
+  - **Start + out-of-window** → `DiscardOutOfWindowStartAsync`: soft-delete any override/RN/split at the start checkpoint, force **DNS** (pipeline case-2), re-rank via shared `RankCalculator`, return **SUCCESS + Warning** (new `ManualTimeResponse.Warning`). No error. → 06:06:41 discarded + DNS.
+  - **Non-start + pre-gun** → clean validation message ("A mid-race/finish crossing can't be before the race start time (gun)") → controller maps "before the race start" → **HTTP 400** (added the keyword to `RFIDController` RecordManualTime's 400 conditions; it already 400s "invalid"/"after race start").
+- Files: `ResultsService.cs`, `ManualTimeResponse.cs`, `RFIDController.cs`.
+- **Note:** the controller already mapped "invalid"/"after race start" → 400, so the reported 500 was likely a pre-`d6232e1` build; this makes the new non-start message 400 too.
+- **Verify (prod):** start 06:06:41 → success/DNS/"not found", no error; start 06:07:41 → accepted, normal times; non-start pre-gun → 400 not 500; manual path + pipeline agree on status/times.
+
 ### 2026-06-30 — Item C: Phase-2 StartTime abort guard now respects the valid-start floor (race 62 / event 36) — Opus (UNCOMMITTED, working tree)
 
 **Symptom:** race 62 (event 36) reprocess aborted with "Race.StartTime … is more than 1 hour AFTER the earliest reading". Confirmed (via device mapping) the "earliest reading" was a ~87-min-early setup/test-tag stray on the shared Start/Finish mat (hw `00162511809d`/`0016251182c3` = devices 11/10; gun 06:30 IST, floor 06:29:50 @ cutoff 10s).

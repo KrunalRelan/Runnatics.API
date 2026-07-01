@@ -436,6 +436,7 @@ namespace Runnatics.Api.Controller
                 // and the typed-time checks — are all client errors → clean 400, never a 500.
                 if (_resultsService.ErrorMessage?.Contains("invalid", StringComparison.OrdinalIgnoreCase) == true ||
                     _resultsService.ErrorMessage?.Contains("after race start", StringComparison.OrdinalIgnoreCase) == true ||
+                    _resultsService.ErrorMessage?.Contains("before the race start", StringComparison.OrdinalIgnoreCase) == true ||
                     _resultsService.ErrorMessage?.Contains("EPC", StringComparison.OrdinalIgnoreCase) == true ||
                     _resultsService.ErrorMessage?.Contains("Selected read", StringComparison.OrdinalIgnoreCase) == true)
                     return BadRequest(response);

@@ -9,5 +9,8 @@ namespace Runnatics.Models.Client.Responses.RFID
         public int ParticipantsProcessed { get; set; }
         public long ProcessingTimeMs { get; set; }
         public string Status { get; set; } = "Completed";
+
+        /// <summary>Non-fatal note (e.g. an unusually-early but within-window earliest reading) surfaced for observability.</summary>
+        public string? Message { get; set; }
     }
 }

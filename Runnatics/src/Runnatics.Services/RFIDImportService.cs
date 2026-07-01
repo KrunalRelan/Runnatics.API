@@ -1574,6 +1574,10 @@ namespace Runnatics.Services
                     response.Warnings.Add("No new readings to deduplicate");
                 }
 
+                // Surface any non-fatal Phase-2 note (e.g. the downgraded "unusually-early reading" warning).
+                if (!string.IsNullOrEmpty(dedupeResponse.Message))
+                    response.Warnings.Add(dedupeResponse.Message);
+
                 _logger.LogInformation(
                     "Phase 2 completed in {Time}ms. Normalized: {Normalized}, Duplicates removed: {Duplicates}",
                     response.Phase2DeduplicationMs,
@@ -1992,28 +1996,47 @@ namespace Runnatics.Services
                 // =====================================================================
                 if (rawReadings.Count > 0)
                 {
-                    var earliestReading = rawReadings.Min(r => r.Reading.ReadTimeUtc);
-                    var daysDiff = Math.Abs((raceStartTime.Value - earliestReading).TotalDays);
+                    // FIX (item C): exclude PRE-FLOOR reads before validating StartTime against the
+                    // earliest reading. Pre-gun strays (setup/test tags on the start mat — e.g. ~87 min
+                    // early) must NOT be treated as "the earliest reading" and abort the whole race; the
+                    // valid-start floor already says to ignore anything before gun − EarlyStartCutOff.
+                    // Same StartWindow helper as start selection / status — no divergent window logic.
+                    var (guardFloor, _) = StartWindow.For(raceStartTime,
+                        race.RaceSettings?.EarlyStartCutOff, race.RaceSettings?.LateStartCutOff);
+                    var postFloorReadings = guardFloor.HasValue
+                        ? rawReadings.Where(r => r.Reading.ReadTimeUtc >= guardFloor.Value).ToList()
+                        : rawReadings;
 
-                    if (daysDiff > 1)
+                    if (postFloorReadings.Count > 0)
                     {
-                        ErrorMessage = $"Race.StartTime ({raceStartTime.Value:yyyy-MM-dd HH:mm:ss}) differs from earliest reading ({earliestReading:yyyy-MM-dd HH:mm:ss}) by {daysDiff:F1} days. Please fix Race.StartTime in database.";
-                        _logger.LogError(
-                            "Race.StartTime validation failed for Race {RaceId}. StartTime: {StartTime}, Earliest reading: {EarliestReading}, Diff: {Diff} days",
-                            decryptedRaceId, raceStartTime.Value, earliestReading, daysDiff);
-                        response.Status = "Failed";
-                        return response;
-                    }
+                        var earliestReading = postFloorReadings.Min(r => r.Reading.ReadTimeUtc);
+                        var daysDiff = Math.Abs((raceStartTime.Value - earliestReading).TotalDays);
 
-                    var minutesDiff = (earliestReading - raceStartTime.Value).TotalMinutes;
-                    if (minutesDiff < -60)
-                    {
-                        ErrorMessage = $"Race.StartTime ({raceStartTime.Value:yyyy-MM-dd HH:mm:ss}) is more than 1 hour AFTER the earliest reading ({earliestReading:yyyy-MM-dd HH:mm:ss}). This would result in negative times. Please fix Race.StartTime.";
-                        _logger.LogError(
-                            "Race.StartTime appears to be in the future for Race {RaceId}. StartTime: {StartTime}, Earliest reading: {EarliestReading}",
-                            decryptedRaceId, raceStartTime.Value, earliestReading);
-                        response.Status = "Failed";
-                        return response;
+                        // KEEP: a genuinely >1-day-off StartTime is a real misconfiguration (not a
+                        // stray) → still abort the whole race so the data gets fixed.
+                        if (daysDiff > 1)
+                        {
+                            ErrorMessage = $"Race.StartTime ({raceStartTime.Value:yyyy-MM-dd HH:mm:ss}) differs from earliest (post-floor) reading ({earliestReading:yyyy-MM-dd HH:mm:ss}) by {daysDiff:F1} days. Please fix Race.StartTime in database.";
+                            _logger.LogError(
+                                "Race.StartTime validation failed for Race {RaceId}. StartTime: {StartTime}, Earliest post-floor reading: {EarliestReading}, Diff: {Diff} days",
+                                decryptedRaceId, raceStartTime.Value, earliestReading, daysDiff);
+                            response.Status = "Failed";
+                            return response;
+                        }
+
+                        // DOWNGRADED (was a whole-race abort): once pre-floor reads are excluded, a
+                        // post-floor read is by definition within EarlyStartCutOff of the gun, so a large
+                        // negative here means an intentionally-wide early window, not a bad StartTime — do
+                        // NOT abort. Log + surface for observability.
+                        var minutesDiff = (earliestReading - raceStartTime.Value).TotalMinutes;
+                        if (minutesDiff < -60)
+                        {
+                            var warn = $"Earliest post-floor reading ({earliestReading:yyyy-MM-dd HH:mm:ss}) is {-minutesDiff:F0} min before Race.StartTime ({raceStartTime.Value:yyyy-MM-dd HH:mm:ss}) — within the configured EarlyStartCutOff window but unusually early. Processing continues (no abort).";
+                            _logger.LogWarning(
+                                "Race {RaceId}: earliest post-floor reading {EarliestReading} is {Minutes:F0} min before StartTime {StartTime}; not aborting (item C).",
+                                decryptedRaceId, earliestReading, -minutesDiff, raceStartTime.Value);
+                            response.Message = string.IsNullOrEmpty(response.Message) ? warn : response.Message + " " + warn;
+                        }
                     }
                 }
 

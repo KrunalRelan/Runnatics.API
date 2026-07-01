@@ -2,6 +2,21 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-30 — Item C: Phase-2 StartTime abort guard now respects the valid-start floor (race 62 / event 36) — Opus (UNCOMMITTED, working tree)
+
+**Symptom:** race 62 (event 36) reprocess aborted with "Race.StartTime … is more than 1 hour AFTER the earliest reading". Confirmed (via device mapping) the "earliest reading" was a ~87-min-early setup/test-tag stray on the shared Start/Finish mat (hw `00162511809d`/`0016251182c3` = devices 11/10; gun 06:30 IST, floor 06:29:50 @ cutoff 10s).
+
+**Root cause:** the Phase-2 guard (`DeduplicateAndNormalizeAsync`, `RFIDImportService.cs:~1993`) computed `earliestReading = rawReadings.Min(...)` with **no floor**, so a pre-floor stray became "the earliest" and tripped `minutesDiff < -60` → whole-race abort — before the floor could ignore it.
+
+**Fix (build green, uncommitted):**
+- Exclude pre-floor reads via the shared `StartWindow.For(...)` (same helper as selection/status) BEFORE computing `earliestReading` → earliest is now the earliest **post-floor** read. Race 62 → real 06:xx → no abort; 05:03 strays ignored.
+- KEPT `daysDiff > 1` whole-race abort (genuine >1-day StartTime misconfig).
+- DOWNGRADED `minutesDiff < -60` from whole-race abort → logged **warning** + surfaced via new `DeduplicationResponse.Message` (added) → `ProcessCompleteWorkflow` adds it to `response.Warnings`. Rationale: post-floor reads are within EarlyStartCutOff of the gun by construction; a large negative = intentionally-wide window, not bad data → must not abort.
+- Files: `RFIDImportService.cs`, `DeduplicationResponse.cs`.
+- **Depends on** the valid-start-window/floor code (commit `83e4b3f`, on master) — this guard fix + that floor logic must ship together; confirm event 36's env is on latest master.
+
+**⚠️ SEPARATE LATENT FINDING — Devices duplicate hardware (NOT fixed this pass):** the Devices table has multiple rows for one hardware MAC (`0016251182bc` → Ids 2/9/13/14; `00162511ebf3` → 1/8), some active, some deleted. The read→device lookups correctly filter `IsActive && !IsDeleted` (so deleted rows are excluded), BUT among multiple **active** rows sharing a MAC the lookup is last-wins: `deviceLookup[mac] = device.Id` (Phase 1.5 ~:4240) / `deviceSerialToId` (Phase 1 ~:3317) → could map a read to the wrong active device/checkpoint. **Race 62 unaffected** (its MACs are unique). For a later data-integrity pass: unique constraint on active `DeviceMacAddress`, or a deterministic lowest-Id tiebreak in the lookup.
+
 ### 2026-06-30 — Stored ranks via one RankCalculator + RankOnNet/per-view basis; all surfaces read stored ranks — Opus
 
 **⚠️ PUSHED TO MASTER UNVERIFIED (user-authorized).** Build green; pushed before the verification below ran. **Pending:** per-view query (`SortByOverallChipTime<>SortByCategoryChipTime`); reprocess; confirm admin grid + public site + export show identical order per view; reprocess vs manual-edit produce same ranks; grid order == rank number. Changes ranks for every race + reorders live published results — fix forward on master if a problem surfaces.

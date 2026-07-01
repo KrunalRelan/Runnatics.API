@@ -3049,12 +3049,10 @@ namespace Runnatics.Services
 
                     await _repository.SaveChangesAsync();
 
-                    // Calculate gender rankings (only for Finished)
-                    await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
-
-                    // Calculate category rankings (only for Finished)
-                    categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
-
+                    // Stored ranks (Overall/Gender/Category) via the single RankCalculator — honors
+                    // RankOnNet / per-view leaderboard settings (chip vs gun). Every surface (admin
+                    // grid, public site, export) reads these stored ranks, so they can't disagree.
+                    await RankCalculator.ApplyStoredRanksAsync(_repository, decryptedEventId, decryptedRaceId, userId);
                 });
 
                 // Build response
@@ -3102,98 +3100,9 @@ namespace Runnatics.Services
             }
         }
 
-        private async Task CalculateGenderRankingsAsync(int eventId, int raceId, int? userId)
-        {
-            var resultsRepo = _repository.GetRepository<Results>();
-
-            var results = await resultsRepo.GetQuery(r =>
-                r.EventId == eventId &&
-                r.RaceId == raceId &&
-                r.Status == "Finished")
-                .Include(r => r.Participant)
-                .OrderBy(r => r.GunTime ?? long.MaxValue)
-                .ToListAsync();
-
-            // Process all rankings using LINQ - no nested for loops
-            var updatedResults = results
-                .GroupBy(r => r.Participant?.Gender?.ToLower() ?? "other")
-                .SelectMany(group => group
-                    .OrderBy(r => r.GunTime ?? long.MaxValue)
-                    .Select((result, index) =>
-                    {
-                        result.GenderRank = index + 1;
-                        result.AuditProperties.UpdatedBy = userId;
-                        result.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        return result;
-                    }))
-                .ToList();
-
-            // Bulk update - single DB roundtrip
-            if (updatedResults.Count > 0)
-            {
-                await resultsRepo.BulkUpdateAsync(updatedResults);
-                _logger.LogInformation("Bulk updated gender rankings for {Count} results", updatedResults.Count);
-            }
-        }
-
-        private async Task<int> CalculateCategoryRankingsAsync(int eventId, int raceId, int? userId)
-        {
-            var resultsRepo = _repository.GetRepository<Results>();
-
-            var results = await resultsRepo.GetQuery(r =>
-                r.EventId == eventId &&
-                r.RaceId == raceId &&
-                r.Status == "Finished")
-                .Include(r => r.Participant)
-                .OrderBy(r => r.GunTime ?? long.MaxValue)
-                .ToListAsync();
-
-            // BUG-12: only rank finishers that have a real age category — uncategorized
-            // finishers don't belong to a category bucket, so clear any stale CategoryRank
-            // rather than ranking them under an "Unknown" group.
-            bool HasCategory(Results r) =>
-                !string.IsNullOrWhiteSpace(r.Participant?.AgeCategory) &&
-                !string.Equals(r.Participant!.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase);
-
-            var uncategorized = results
-                .Where(r => !HasCategory(r) && r.CategoryRank != null)
-                .Select(result =>
-                {
-                    result.CategoryRank = null;
-                    result.AuditProperties.UpdatedBy = userId;
-                    result.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                    return result;
-                });
-
-            // Process all rankings using LINQ - no nested for loops
-            var categoryGroups = results
-                .Where(HasCategory)
-                .GroupBy(r => r.Participant!.AgeCategory!)
-                .ToList();
-
-            var updatedResults = categoryGroups
-                .SelectMany(group => group
-                    .OrderBy(r => r.GunTime ?? long.MaxValue)
-                    .Select((result, index) =>
-                    {
-                        result.CategoryRank = index + 1;
-                        result.AuditProperties.UpdatedBy = userId;
-                        result.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        return result;
-                    }))
-                .Concat(uncategorized)
-                .ToList();
-
-            // Bulk update - single DB roundtrip
-            if (updatedResults.Count > 0)
-            {
-                await resultsRepo.BulkUpdateAsync(updatedResults);
-                _logger.LogInformation("Bulk updated category rankings for {Count} results across {Categories} categories",
-                    updatedResults.Count, categoryGroups.Count);
-            }
-
-            return categoryGroups.Count;
-        }
+        // CalculateGenderRankingsAsync / CalculateCategoryRankingsAsync removed — finisher ranking
+        // (Overall/Gender/Category) is now computed once, with the RankOnNet / per-view basis, by the
+        // shared RankCalculator.ApplyStoredRanksAsync. Both calc paths call it; surfaces read stored ranks.
 
         // ============================================================================
         // REPLACE ProcessAllRFIDDataAsync AND ProcessRFIDStagingDataAsync with these
@@ -4047,10 +3956,8 @@ namespace Runnatics.Services
                         _logger.LogInformation("Recalculated overall rankings for {Count} participants", rankUpdates.Count);
                     }
 
-                    await CalculateGenderRankingsAsync(decryptedEventId, decryptedRaceId, userId);
-
-                    var categoriesProcessed = await CalculateCategoryRankingsAsync(decryptedEventId, decryptedRaceId, userId);
-                    _logger.LogInformation("Recalculated rankings across {Categories} categories", categoriesProcessed);
+                    await RankCalculator.ApplyStoredRanksAsync(_repository, decryptedEventId, decryptedRaceId, userId);
+                    _logger.LogInformation("Recalculated stored ranks (Overall/Gender/Category) via RankCalculator");
                 });
 
                 response.Status = processResult.Status;

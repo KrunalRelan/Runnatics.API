@@ -2,6 +2,18 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-06-30 — Stored ranks via one RankCalculator + RankOnNet/per-view basis; all surfaces read stored ranks — Opus
+
+**⚠️ PUSHED TO MASTER UNVERIFIED (user-authorized).** Build green; pushed before the verification below ran. **Pending:** per-view query (`SortByOverallChipTime<>SortByCategoryChipTime`); reprocess; confirm admin grid + public site + export show identical order per view; reprocess vs manual-edit produce same ranks; grid order == rank number. Changes ranks for every race + reorders live published results — fix forward on master if a problem surfaces.
+
+Root-cause fix for the "grid order vs rank-number disagree" bug + the 3-way divergence (stored ranks by gun; admin grid ordered by NetTime showing gun ranks; public/export computed their own order off a *different* setting).
+- **New `RankCalculator`** (single source of truth): `AssignRanks(finished, overallBasis, categoryBasis)` — Overall+Gender by overall basis, Category by category basis; **Gender = M/F only** (non-M/F → null GenderRank); Category skips blank/"Unknown"; tiebreak **primary time → other time → ParticipantId** (not bib — reused/non-unique). `ResolveBasis(effective, rankOnNetDefault)` — per-view `SortByOverallChipTime/SortByCategoryChipTime` defaulting to `EventSettings.RankOnNet`. `ApplyStoredRanksAsync(repo, event, race, user)` — loads Finished+Participant, resolves basis, assigns, BulkUpdate.
+- **Both calc paths call it:** pipeline `CalculateRaceResultsAsync` + `ReprocessParticipantsAsync`; interactive `ResultsService.CalculateResultRankingsAsync` now delegates. **Removed** the pipeline `CalculateGenderRankingsAsync`/`CalculateCategoryRankingsAsync` (gun-only) — no more divergent ranking impls.
+- **All 3 surfaces read stored ranks:** admin grid `GetLeaderboardAsync` overall branch → `OverallRank` (was `OrderBy(NetTime)` while showing gun rank — the screenshot bug); public site podium/category/overall → stored `OverallRank`/`CategoryRank` (+ display stored rank as the number; labels aligned via `ResolveBasis`); export category sheet → `CategoryRank` (overall sheet already used `OverallRank`).
+- **Behavior change to note:** public/export basis default when `SortBy*ChipTime` is null flips from `?? true` (chip) to `?? RankOnNet` — matches event-level intent; for event 30 (RankOnNet=true) identical. `CalculateResultsResponse.CategoriesProcessed` now 0 (cosmetic; ranking no longer returns a category count).
+- **Part 2 (hh:mm:ss + numeric column sort + Start-as-clock + default-order-by-rank):** UI repo, gated — API already exposes ms + hh:mm:ss + stored ranks. `FormatTime` already `@"hh\:mm\:ss"`.
+- **Verify (working tree, before master):** run `SELECT COUNT(*) … SortByOverallChipTime<>SortByCategoryChipTime` (settles per-view usage); reprocess; **admin grid + public site + export show identical order per view**; reprocess vs manual-edit produce same ranks; grid order == rank number; ties deterministic (ParticipantId); only Finished ranked.
+
 ### 2026-06-30 — Valid-start window [floor, ceiling] from settings + DNS truth-table — Opus
 
 **⚠️ PUSHED TO MASTER UNVERIFIED (user-authorized).** Build green (0 errors); pushed to `master` at the user's explicit request BEFORE prod verification. **Pending prod checks:** race 49 StartTime must be set to `00:59` UTC; reprocess 47/48/49; the regression gate = "any 47/48 FINISHER with earliest start-gate read < their floor?" (zero rows → safe; rows → genuine gun-jumper vs too-tight floor); 2133 → 06:29 start ~62 min; 05:29-only → DNS "not found". If a problem surfaces, fix forward on master.

@@ -97,7 +97,6 @@ namespace Runnatics.Services
             bool showGenderRank   = leaderboardSettings?.ShowGenderResults  ?? false;
             bool showCategoryRank = leaderboardSettings?.ShowCategoryResults?? false;
             bool showOverallRank  = leaderboardSettings?.ShowOverallResults ?? true;
-            bool rankOnNet        = leaderboardSettings?.SortByOverallChipTime ?? true;
 
             // Distinct checkpoint names ordered by distance
             var checkpointColumns = showSplits
@@ -226,9 +225,10 @@ namespace Runnatics.Services
                     {
                         Gender   = genderGroup.Key,
                         Category = catGroup.Key,
-                        Entries  = rankOnNet
-                            ? catGroup.OrderBy(r => r.NetTime ?? long.MaxValue).ToList()
-                            : catGroup.OrderBy(r => r.GunTime ?? long.MaxValue).ToList()
+                        // Order by the STORED CategoryRank (computed with the category basis) instead of
+                        // recomputing here off the OVERALL setting — keeps the export consistent with the
+                        // grid + public site (all read the same stored ranks).
+                        Entries  = catGroup.OrderBy(r => r.CategoryRank ?? int.MaxValue).ToList()
                     }))
                 .ToList();
 

@@ -585,19 +585,18 @@ namespace Runnatics.Services
                     query = query.Where(r => r.Participant.AgeCategory == request.Category);
                 }
 
-                // Determine sort field based on settings
-                var useNetTime = displaySettings.RankOnNet;
+                // Order by the STORED rank column (already computed with the RankOnNet / per-view
+                // basis). The row order therefore matches the displayed rank number. (Was: OrderBy(NetTime)
+                // when RankOnNet=true while showing the gun-based OverallRank — rows and numbers disagreed.)
                 query = rankBy switch
                 {
                     "gender" => query
                         .OrderBy(r => r.Participant.Gender)
-                        .ThenBy(r => r.GenderRank),
+                        .ThenBy(r => r.GenderRank ?? int.MaxValue),
                     "category" => query
                         .OrderBy(r => r.Participant.AgeCategory)
-                        .ThenBy(r => r.CategoryRank),
-                    _ => useNetTime
-                        ? query.OrderBy(r => r.NetTime)
-                        : query.OrderBy(r => r.OverallRank)
+                        .ThenBy(r => r.CategoryRank ?? int.MaxValue),
+                    _ => query.OrderBy(r => r.OverallRank ?? int.MaxValue)
                 };
 
                 var totalCount = await query.CountAsync();
@@ -1392,52 +1391,11 @@ namespace Runnatics.Services
             await _repository.SaveChangesAsync();
         }
 
-        private async Task CalculateResultRankingsAsync(int eventId, int raceId, int userId)
-        {
-            var resultsRepo = _repository.GetRepository<Results>();
-            var results = await resultsRepo.GetQuery(r =>
-                r.EventId == eventId &&
-                r.RaceId == raceId &&
-                r.Status == ResultStatus.Finished &&
-                r.FinishTime.HasValue &&
-                r.AuditProperties.IsActive &&
-                !r.AuditProperties.IsDeleted)
-                .Include(r => r.Participant)
-                .AsNoTracking()
-                .OrderBy(r => r.FinishTime)
-                .ToListAsync();
-
-            var rank = 1;
-            foreach (var result in results)
-            {
-                result.OverallRank = rank++;
-                result.AuditProperties.UpdatedBy = userId;
-                result.AuditProperties.UpdatedDate = DateTime.UtcNow;
-            }
-
-            foreach (var gender in new[] { "M", "F" })
-            {
-                var genderResults = results.Where(r => r.Participant.Gender == gender).ToList();
-                rank = 1;
-                foreach (var result in genderResults)
-                {
-                    result.GenderRank = rank++;
-                }
-            }
-
-            var categories = results.Select(r => r.Participant.AgeCategory).Distinct().Where(c => !string.IsNullOrEmpty(c));
-            foreach (var category in categories)
-            {
-                var categoryResults = results.Where(r => r.Participant.AgeCategory == category).ToList();
-                rank = 1;
-                foreach (var result in categoryResults)
-                {
-                    result.CategoryRank = rank++;
-                }
-            }
-
-            await resultsRepo.BulkUpdateAsync(results);
-        }
+        // Finisher ranking is computed once, with the RankOnNet / per-view basis + deterministic
+        // tiebreak, by the shared RankCalculator — the SAME helper the reprocess pipeline calls — so a
+        // manual edit and a reprocess store identical ranks, and every surface reads the stored ranks.
+        private Task CalculateResultRankingsAsync(int eventId, int raceId, int userId)
+            => RankCalculator.ApplyStoredRanksAsync(_repository, eventId, raceId, userId);
 
         private static string FormatTime(long milliseconds)
         {

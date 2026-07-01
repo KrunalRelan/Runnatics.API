@@ -235,10 +235,17 @@ namespace Runnatics.Services
                         .FirstOrDefaultAsync(ct);
                 }
 
-                // BUG-24: Overall and Category sort INDEPENDENTLY. Previously a single flag
-                // (from SortByOverallChipTime) drove both, so Category ignored its own setting.
-                bool overallRankOnNet  = leaderboardSettings?.SortByOverallChipTime  ?? true;
-                bool categoryRankOnNet = leaderboardSettings?.SortByCategoryChipTime ?? true;
+                // BUG-24: Overall and Category rank INDEPENDENTLY (per-view basis). Resolved from the
+                // SAME source as the STORED ranks (RankCalculator.ResolveBasis) — per-view leaderboard
+                // setting, defaulting to EventSettings.RankOnNet — so the "Chip time / Gun time" labels
+                // always match the stored-rank order the sections are now sorted by.
+                var eventSettingsForRank = await _repository.GetRepository<EventSettings>()
+                    .GetQuery(es => es.EventId == decryptedEventId &&
+                                    es.AuditProperties.IsActive && !es.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(ct);
+                var (overallRankOnNet, categoryRankOnNet) =
+                    RankCalculator.ResolveBasis(leaderboardSettings, eventSettingsForRank?.RankOnNet ?? false);
 
                 // BUG-24: honour the Show Overall / Show Category toggles.
                 bool showOverall  = leaderboardSettings?.ShowOverallResults  ?? true;
@@ -269,7 +276,7 @@ namespace Runnatics.Services
                                    !r.AuditProperties.IsDeleted)
                     .Include(r => r.Participant)
                     .AsNoTracking()
-                    .OrderBy(r => overallRankOnNet ? r.NetTime ?? long.MaxValue : r.GunTime ?? long.MaxValue)
+                    .OrderBy(r => r.OverallRank ?? int.MaxValue)
                     .Take(3)
                     .ToListAsync(ct);
 
@@ -338,14 +345,14 @@ namespace Runnatics.Services
                             .OrderBy(c => c.Key)
                             .Select(catGroup =>
                             {
-                                var sorted = categoryRankOnNet
-                                    ? catGroup.OrderBy(r => r.NetTime ?? long.MaxValue).ToList()
-                                    : catGroup.OrderBy(r => r.GunTime ?? long.MaxValue).ToList();
+                                // Order by the STORED CategoryRank (category basis) — same ranks every
+                                // surface reads; display the stored rank as the number.
+                                var sorted = catGroup.OrderBy(r => r.CategoryRank ?? int.MaxValue).ToList();
 
                                 var participants = sorted
                                     .Select((r, idx) => new PublicLeaderboardEntryDto
                                     {
-                                        Rank  = idx + 1,
+                                        Rank  = r.CategoryRank ?? (idx + 1),
                                         Name  = r.Participant.FullName,
                                         Bib   = r.Participant.BibNumber ?? string.Empty,
                                         ChipTime = r.NetTime.HasValue
@@ -376,9 +383,10 @@ namespace Runnatics.Services
                 int totalOverall = allFinishers.Count;
                 int totalPages   = totalOverall == 0 ? 0 : (int)Math.Ceiling(totalOverall / (double)pageSize);
 
-                var overallSorted = (overallRankOnNet
-                    ? allFinishers.OrderBy(r => r.NetTime ?? long.MaxValue)
-                    : allFinishers.OrderBy(r => r.GunTime ?? long.MaxValue))
+                // Order by the STORED OverallRank (overall basis) so the row order matches the
+                // displayed rank number (which already reads r.OverallRank below).
+                var overallSorted = allFinishers
+                    .OrderBy(r => r.OverallRank ?? int.MaxValue)
                     .ToList();
 
                 // BUG-24: when a NumberOfResultsToShowOverall cap is configured, return the top N

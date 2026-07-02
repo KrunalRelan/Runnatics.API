@@ -119,6 +119,27 @@ namespace Runnatics.Services.RFID
                     "Pass-ordinal assignment between equal distances is undefined — fix DistanceFromStart.");
             }
 
+            // ── (e) Orphan child — no row for ParentDeviceId at the same distance ──
+            // Phase 2's child→parent merge finds the parent checkpoint by
+            // (DeviceId == child.ParentDeviceId, same distance within 0.001 KM); with no match the
+            // child's readings are silently never merged (they stay on a checkpoint no display or
+            // gate logic points at). Same tolerance here so the validator can't disagree with the
+            // merge.
+            foreach (var child in deviceRows.Where(IsChild))
+            {
+                bool parentRowExists = activeCheckpoints.Any(cp =>
+                    cp.DeviceId == child.ParentDeviceId!.Value &&
+                    Math.Abs(cp.DistanceFromStart - child.DistanceFromStart) < 0.001m);
+
+                if (!parentRowExists)
+                {
+                    violations.Add(
+                        $"Orphan CHILD checkpoint: {Describe(new[] { child })} has no checkpoint row for its " +
+                        $"parent device {child.ParentDeviceId} at {child.DistanceFromStart} KM — " +
+                        "its readings would never be merged into a primary. Add the parent row or fix ParentDeviceId.");
+                }
+            }
+
             return violations;
         }
 

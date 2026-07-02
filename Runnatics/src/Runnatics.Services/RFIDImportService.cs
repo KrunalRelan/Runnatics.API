@@ -1891,14 +1891,13 @@ namespace Runnatics.Services
 
                 // =====================================================================
                 // FIX: Identify start checkpoint for special handling (pick LAST entry)
+                // Gate selection via CheckpointGates: distance → PRIMARY before child → Id.
+                // A bare OrderBy(distance).First() broke the same-distance tie (e.g. race 65's
+                // primary 396 vs child 429 at 0.0 KM) by DB return order — and readings are
+                // merged INTO the primary, so the child id would never match a merged group.
                 // =====================================================================
-                var startCheckpointId = allCheckpoints
-                    .OrderBy(cp => cp.DistanceFromStart)
-                    .FirstOrDefault()?.Id ?? 0;
-
-                var finishCheckpointId = allCheckpoints
-                    .OrderByDescending(cp => cp.DistanceFromStart)
-                    .FirstOrDefault()?.Id ?? 0;
+                var startCheckpointId = CheckpointGates.Start(allCheckpoints)?.Id ?? 0;
+                var finishCheckpointId = CheckpointGates.Finish(allCheckpoints)?.Id ?? 0;
 
                 _logger.LogInformation(
                     "Start checkpoint ID: {StartId}, Finish checkpoint ID: {FinishId}",
@@ -2763,7 +2762,8 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 // Per-participant EARLIEST start-gate read (one logical start crossing). Its position
-                // relative to [validStartFloorP3, validStartCeilingP3] drives status:
+                // relative to [validStartFloorP3, validStartCeilingP3] drives status — the full
+                // truth table lives in ResultClassifier.Classify (single source, unit-tested):
                 //   in-window      → valid start
                 //   before floor   → too early (illegitimate) → DNS even with finish data
                 //   after ceiling  → late: finisher kept (case 3), non-finisher DNS
@@ -2771,16 +2771,6 @@ namespace Runnatics.Services
                 var earliestStartByParticipant = startReadings
                     .GroupBy(r => r.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.Min(r => r.ChipTime));
-
-                // A start is VALID only when an in-window start read exists. When the window can't be
-                // computed (no StartTime — shouldn't happen post-validation), fall back to "any read".
-                bool HasValidStart(int pid) =>
-                    earliestStartByParticipant.TryGetValue(pid, out var chip) &&
-                    (!validStartFloorP3.HasValue || (chip >= validStartFloorP3.Value && chip <= validStartCeilingP3!.Value));
-                bool IsEarlyStart(int pid) =>
-                    validStartFloorP3.HasValue &&
-                    earliestStartByParticipant.TryGetValue(pid, out var chip) &&
-                    chip < validStartFloorP3.Value;
 
                 // Get normalized readings at the FINISH GATE (all checkpoints at the highest
                 // mandatory distance) — used for finish time and ranking. Reaching the gate alone
@@ -2880,37 +2870,29 @@ namespace Runnatics.Services
                     // at that distance (not every checkpoint ID individually).
                     bool allMandatoryCovered = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
 
-                    if (flaggedNegativeFinishIds.Contains(participant.Id))
+                    // The start-window truth table (negative-finish → DNF; early → DNS taint;
+                    // in-window → Finished/DNF by coverage; finisher-safe; else DNS) is a single
+                    // pure function — see ResultClassifier for the full table + unit tests.
+                    var outcome = ResultClassifier.Classify(
+                        earliestStartByParticipant.TryGetValue(participant.Id, out var earliestStart)
+                            ? (DateTime?)earliestStart
+                            : null,
+                        validStartFloorP3,
+                        validStartCeilingP3,
+                        allMandatoryCovered,
+                        flaggedNegativeFinishIds.Contains(participant.Id));
+
+                    switch (outcome)
                     {
-                        // Reached the finish gate but with an impossible (negative) time → flag DNF,
-                        // never Finished. (Their finish reading was dropped from finishReadings above.)
-                        dnfParticipantIds.Add(participant.Id);
-                    }
-                    else if (IsEarlyStart(participant.Id))
-                    {
-                        // Start crossing BEFORE the valid-start floor (too early) → illegitimate start →
-                        // DNS for the WHOLE run, even if mandatory checkpoints / finish are present.
-                        dnsParticipantIds.Add(participant.Id);
-                    }
-                    else if (HasValidStart(participant.Id))
-                    {
-                        // Valid in-window start → Finished if all mandatory distances covered, else DNF.
-                        if (allMandatoryCovered)
+                        case ParticipantOutcome.Finished:
                             finishedParticipantIds.Add(participant.Id);
-                        else
+                            break;
+                        case ParticipantOutcome.DNF:
                             dnfParticipantIds.Add(participant.Id);
-                    }
-                    else if (allMandatoryCovered)
-                    {
-                        // No valid start (late-only, or no start read), but the runner covered every
-                        // mandatory distance → they demonstrably ran → keep Finished (finisher-safe;
-                        // a late/ missing start read is not a "did not start"). NetTime nets from the gun.
-                        finishedParticipantIds.Add(participant.Id);
-                    }
-                    else
-                    {
-                        // No valid start AND not a finisher → Did Not Start.
-                        dnsParticipantIds.Add(participant.Id);
+                            break;
+                        default:
+                            dnsParticipantIds.Add(participant.Id);
+                            break;
                     }
                 }
 
@@ -4222,8 +4204,8 @@ namespace Runnatics.Services
 
                 var raceStartTime = race.StartTime.Value;
                 var raceSettings = race.RaceSettings;
-                var dedupWindowSeconds = (raceSettings?.DedUpSeconds > 0) ? raceSettings.DedUpSeconds.Value : 30;
-                var passGapThreshold = (raceSettings?.PassGapThresholdSeconds > 0) ? raceSettings.PassGapThresholdSeconds.Value : 300;
+                var dedupWindowSeconds = PassCollapseSettings.DedupSeconds(raceSettings?.DedUpSeconds);
+                var passGapThreshold = PassCollapseSettings.PassGapSeconds(raceSettings?.PassGapThresholdSeconds);
                 // VALID START WINDOW = [validStartFloor, validStartCeiling], both from settings (SECONDS).
                 //   floor   = gun - EarlyStartCutOff (default 300s) — a read before this is too early (pre-start stray).
                 //   ceiling = gun + LateStartCutOff  (default 1200s) — a read after this is not a start crossing.
@@ -4589,192 +4571,40 @@ namespace Runnatics.Services
                     .ToDictionary(g => g.Key, g => g.ToList());
 
                 // ================================================================
-                // FIX #5: DEDUP WINDOW — Group readings within N seconds as same "pass"
-                // Before passing to the assigner, collapse readings from the same
-                // shared group that are within DEDUP_WINDOW_SECONDS into one representative
-                // ================================================================
-                var deviceToGroup = new Dictionary<int, string>();
-                foreach (var kvp in sharedDevices)
-                {
-                    deviceToGroup[kvp.Key] = kvp.Value.SharedGroupKey;
-                }
+                // Gun-anchored start selection + pass-collapse + pass-ordinal assignment —
+                // extracted (pure, unit-tested) to LoopRaceCheckpointAssigner.CollapseIntoPasses.
+                // INVARIANT (race-65 fix): the collapse can never merge reads across the
+                // valid-start floor — the start is chosen from RAW reads (earliest in
+                // [floor, ceiling] per start-bound group), pre-start reads are excluded, and the
+                // chosen start is pinned as its pass-0 representative. See the method's docs.
+                var collapse = LoopRaceCheckpointAssigner.CollapseIntoPasses(
+                    readingInputs, sharedDevices, validStartFloor, validStartCeiling,
+                    dedupWindowSeconds, passGapThreshold);
+                var readingsByEpc = collapse.ReadingsByEpc;
 
-                // Start-bound shared groups (those including the distance-0 start checkpoint)
-                // get their Start chosen from RAW reads BEFORE the pass-collapse — see the
-                // GUN-ANCHORED START SELECTION comment inside the loop below. Hoisted here
-                // because the collapse itself must honor the chosen start.
-                var startBoundGroupKeys = sharedDevices.Values
-                    .Where(m => m.StartsAtZero)
-                    .Select(m => m.SharedGroupKey)
-                    .ToHashSet();
-                var startWindowFrom = validStartFloor;
-                var startWindowTo = validStartCeiling;
-                int startCrossReadsExcluded = 0;
-
-                // Group by EPC, then within each EPC, collapse passes within shared groups
-                var readingsByEpc = new Dictionary<string, List<LoopRaceCheckpointAssigner.ReadingInput>>();
-
-                foreach (var epcGroup in readingInputs.GroupBy(r => r.Epc))
-                {
-                    var epc = epcGroup.Key;
-                    var sorted = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
-
-                    // ── GUN-ANCHORED START SELECTION (pre-collapse) ──
-                    // INVARIANT (race-65 fix): the pass-collapse must NEVER merge reads across the
-                    // valid-start floor — a pre-floor read and an in-window read are categorically
-                    // different and cannot share a pass. The start is therefore chosen from RAW
-                    // reads FIRST: the EARLIEST read in [floor, ceiling] per start-bound group
-                    // (same StartWindow rule as Phase 2/3 and display). Reads BEFORE the chosen
-                    // start are pre-gun cross-reads / pre-start noise → excluded from the collapse
-                    // entirely (never assigned). The chosen start is PINNED as its pass-0
-                    // representative below. Race 65: the pre-gun cluster ended 57s before the real
-                    // start — under the 300s pass gap — so the collapse used to merge them and keep
-                    // a pre-floor representative, swallowing the true start; a late finish-area
-                    // read then won the window and was normalized as the "start".
-                    var chosenStartByGroup = new Dictionary<string, LoopRaceCheckpointAssigner.ReadingInput>();
-                    foreach (var grp in sorted
-                        .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
-                        .GroupBy(r => deviceToGroup[r.DeviceId]))
-                    {
-                        if (!startBoundGroupKeys.Contains(grp.Key))
-                            continue;
-
-                        var startRead = grp
-                            .Where(r => r.ReadTimeUtc >= startWindowFrom && r.ReadTimeUtc <= startWindowTo)
-                            .OrderBy(r => r.ReadTimeUtc)
-                            .FirstOrDefault();
-
-                        if (startRead != null)
-                            chosenStartByGroup[grp.Key] = startRead;
-                        // No in-window read → no valid start near the gun: the group falls through
-                        // to plain chronological ordinals (unchanged behavior); an early/pre-floor
-                        // "start" then reaches Phase 2/3 as the INVALID placeholder driving DNS.
-                    }
-
-                    // For each shared group, collapse readings within DEDUP_WINDOW_SECONDS
-                    // into one representative reading per pass.
-                    // Start passes (device OutboundDistance == 0, first pass per EPC): keep LAST.
-                    // All other passes: keep EARLIEST.
-                    var collapsedReadings = new List<LoopRaceCheckpointAssigner.ReadingInput>();
-                    var lastPassTimeByGroup = new Dictionary<string, DateTime>();
-                    var lastAddedIndexByGroup = new Dictionary<string, int>();     // index of representative in collapsedReadings
-                    var completedPassCountByGroup = new Dictionary<string, int>(); // completed passes per group key
-
-                    foreach (var reading in sorted)
-                    {
-                        if (deviceToGroup.TryGetValue(reading.DeviceId, out var groupKey))
-                        {
-                            // Pre-start reads on a group WITH a chosen valid start never enter a
-                            // pass — they are pre-gun cross-reads / pre-start noise, not crossings.
-                            if (chosenStartByGroup.TryGetValue(groupKey, out var chosenStart) &&
-                                reading.ReadTimeUtc < chosenStart.ReadTimeUtc)
-                            {
-                                startCrossReadsExcluded++;
-                                continue;
-                            }
-
-                            if (lastPassTimeByGroup.TryGetValue(groupKey, out var lastTime))
-                            {
-                                var gap = (reading.ReadTimeUtc - lastTime).TotalSeconds;
-
-                                if (gap <= passGapThreshold)
-                                {
-                                    // Same pass — extend the pass window timestamp
-                                    lastPassTimeByGroup[groupKey] = reading.ReadTimeUtc;
-
-                                    // Within dedup window: replace representative for Start-facing first pass.
-                                    // Between dedup window and pass-gap threshold: same pass, keep earliest (no replace).
-                                    if (gap <= dedupWindowSeconds)
-                                    {
-                                        var isStartBound = sharedDevices.TryGetValue(reading.DeviceId, out var m)
-                                            && m.StartsAtZero;
-                                        var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
-                                        // Keep-LAST applies only when NO valid start was chosen for
-                                        // the group: with a chosen start the first-pass representative
-                                        // is PINNED (start = EARLIEST in-window read; a later same-pass
-                                        // read must not displace it).
-                                        if (isStartBound && isFirstPass && !chosenStartByGroup.ContainsKey(groupKey))
-                                            collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
-                                    }
-                                    continue;
-                                }
-                                // Gap exceeded PASS_GAP_THRESHOLD — new pass (outbound → return)
-                                completedPassCountByGroup[groupKey] =
-                                    completedPassCountByGroup.GetValueOrDefault(groupKey, 0) + 1;
-                            }
-                            // New pass
-                            lastPassTimeByGroup[groupKey] = reading.ReadTimeUtc;
-                            lastAddedIndexByGroup[groupKey] = collapsedReadings.Count;
-                            collapsedReadings.Add(reading);
-                        }
-                        else
-                        {
-                            // Non-shared device (turnaround, single-mapping): keep all readings
-                            // (the assigner's Step 5 dedup will handle same-checkpoint duplicates)
-                            collapsedReadings.Add(reading);
-                        }
-                    }
-
-                    readingsByEpc[epc] = collapsedReadings;
-                }
-
-                var totalCollapsed = readingsByEpc.Values.Sum(v => v.Count);
+                var totalCollapsed = collapse.TotalCollapsedReadings;
                 if (totalCollapsed < readingInputs.Count)
                 {
                     _logger.LogInformation(
                         "FIX #5: Pass dedup (dedup={Dedup}s, pass-gap={PassGap}s): {Before} → {After} readings " +
-                        "(collapsed {Removed} same-pass readings within shared groups)",
+                        "(collapsed or excluded {Removed} reads within shared groups)",
                         dedupWindowSeconds, passGapThreshold, readingInputs.Count, totalCollapsed,
                         readingInputs.Count - totalCollapsed);
                 }
 
-                // ================================================================
-                // BUG 2 FIX + ISSUE-1: Assign the pass ORDINAL per shared group.
-                // pass[0] → first checkpoint (smallest DistanceFromStart)
-                // pass[k] → k-th checkpoint in distance order (Sequential clamps extra
-                //           passes to the last checkpoint; Cyclic wraps via pass % N)
-                // 1 pass only → first checkpoint (participant is DNF; later mandatory
-                //               checkpoints missing)
-                //
-                // The GUN-ANCHORED START SELECTION already ran PRE-COLLAPSE (above): for a
-                // start-bound group with a valid in-window start, every read before the chosen
-                // start was excluded and the chosen start survived the collapse pinned as its
-                // pass-0 representative — so ordinal 0 lands on the Start checkpoint by
-                // construction. Groups without a valid start (and non-start groups) keep plain
-                // chronological ordinals; an early/pre-floor "start" then reaches Phase 2/3 as
-                // the INVALID placeholder driving the early-start → DNS rule — not a 500.
-                // ================================================================
-                int passIndexOverrideCount = 0;
-                foreach (var (_, epcReadings) in readingsByEpc)
-                {
-                    var byGroup = epcReadings
-                        .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
-                        .GroupBy(r => deviceToGroup[r.DeviceId]);
-
-                    foreach (var grp in byGroup)
-                    {
-                        var sortedPasses = grp.OrderBy(r => r.ReadTimeUtc).ToList();
-                        for (int pi = 0; pi < sortedPasses.Count; pi++)
-                        {
-                            sortedPasses[pi].PassIndexOverride = pi;  // 0-based pass ordinal
-                            passIndexOverrideCount++;
-                        }
-                    }
-                }
-
-                if (startCrossReadsExcluded > 0)
+                if (collapse.PreStartReadsExcluded > 0)
                 {
                     _logger.LogInformation(
                         "Gun-window start selection (pre-collapse): excluded {Count} pre-start raw read(s) on " +
                         "start-bound shared group(s) (window [{From:HH:mm:ss}, {To:HH:mm:ss}] UTC around gun {Gun:HH:mm:ss})",
-                        startCrossReadsExcluded, startWindowFrom, startWindowTo, raceStartTime);
+                        collapse.PreStartReadsExcluded, validStartFloor, validStartCeiling, raceStartTime);
                 }
 
-                if (passIndexOverrideCount > 0)
+                if (collapse.PassIndexOverridesSet > 0)
                 {
                     _logger.LogInformation(
                         "BUG 2 FIX + ISSUE-1: Set PassIndexOverride on {Count} shared-device readings via pass ordinal (Mode={Mode})",
-                        passIndexOverrideCount, assignmentMode);
+                        collapse.PassIndexOverridesSet, assignmentMode);
                 }
 
                 // ================================================================

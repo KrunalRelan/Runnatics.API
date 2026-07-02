@@ -332,6 +332,191 @@ namespace Runnatics.Services.RFID
 
         #endregion
 
+        #region Step 2c: Pass Collapse + Gun-Anchored Start Selection (pre-assignment)
+
+        /// <summary>Result of <see cref="CollapseIntoPasses"/>.</summary>
+        public class PassCollapseResult
+        {
+            public Dictionary<string, List<ReadingInput>> ReadingsByEpc { get; init; } = new();
+
+            /// <summary>Raw reads on start-bound groups dropped as pre-start noise (never assigned).</summary>
+            public int PreStartReadsExcluded { get; init; }
+
+            /// <summary>Number of readings that received a 0-based PassIndexOverride.</summary>
+            public int PassIndexOverridesSet { get; init; }
+
+            public int TotalCollapsedReadings => ReadingsByEpc.Values.Sum(v => v.Count);
+        }
+
+        /// <summary>
+        /// Pre-assignment pipeline for shared devices: gun-anchored start selection, pass-collapse
+        /// and pass-ordinal assignment. Extracted (pure) from RFIDImportService Phase 1.5 so the
+        /// race-65 invariant is unit-testable.
+        ///
+        /// INVARIANT (race-65 fix): the pass-collapse must NEVER merge reads across the valid-start
+        /// floor — a pre-floor read and an in-window read are categorically different and cannot
+        /// share a pass. The start is therefore chosen from RAW reads FIRST: the EARLIEST read in
+        /// [validStartFloor, validStartCeiling] per start-bound group (same StartWindow rule as
+        /// Phase 2/3 and display). Reads BEFORE the chosen start are pre-gun cross-reads /
+        /// pre-start noise → excluded entirely (never assigned). The chosen start is PINNED as its
+        /// pass-0 representative (the dedup-window keep-LAST rule never displaces it). Race 65: the
+        /// pre-gun cluster ended 57s before the real start — under the 300s pass gap — so the
+        /// collapse used to merge them and keep a pre-floor representative, swallowing the true
+        /// start; a late finish-area read then won the window and was normalized as the "start".
+        ///
+        /// Groups without a valid in-window read keep plain chronological behavior (keep-LAST for
+        /// the start-facing first pass; ordinals 0..N) — an early/pre-floor "start" then reaches
+        /// Phase 2/3 as the INVALID placeholder driving the early-start → DNS rule.
+        /// </summary>
+        public static PassCollapseResult CollapseIntoPasses(
+            IReadOnlyCollection<ReadingInput> readingInputs,
+            IReadOnlyDictionary<int, SharedDeviceMapping> sharedDevices,
+            DateTime validStartFloor,
+            DateTime validStartCeiling,
+            int dedupWindowSeconds,
+            int passGapThresholdSeconds)
+        {
+            var deviceToGroup = new Dictionary<int, string>();
+            foreach (var kvp in sharedDevices)
+            {
+                deviceToGroup[kvp.Key] = kvp.Value.SharedGroupKey;
+            }
+
+            // Start-bound shared groups: those including the distance-0 start checkpoint.
+            var startBoundGroupKeys = sharedDevices.Values
+                .Where(m => m.StartsAtZero)
+                .Select(m => m.SharedGroupKey)
+                .ToHashSet();
+
+            int preStartReadsExcluded = 0;
+            var readingsByEpc = new Dictionary<string, List<ReadingInput>>();
+
+            foreach (var epcGroup in readingInputs.GroupBy(r => r.Epc))
+            {
+                var epc = epcGroup.Key;
+                var sorted = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
+
+                // ── GUN-ANCHORED START SELECTION (pre-collapse) ──
+                // Earliest RAW read in [floor, ceiling] per start-bound group. See invariant above.
+                var chosenStartByGroup = new Dictionary<string, ReadingInput>();
+                foreach (var grp in sorted
+                    .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
+                    .GroupBy(r => deviceToGroup[r.DeviceId]))
+                {
+                    if (!startBoundGroupKeys.Contains(grp.Key))
+                        continue;
+
+                    var startRead = grp
+                        .Where(r => r.ReadTimeUtc >= validStartFloor && r.ReadTimeUtc <= validStartCeiling)
+                        .OrderBy(r => r.ReadTimeUtc)
+                        .FirstOrDefault();
+
+                    if (startRead != null)
+                        chosenStartByGroup[grp.Key] = startRead;
+                    // No in-window read → no valid start near the gun: the group falls through
+                    // to plain chronological ordinals (unchanged behavior); an early/pre-floor
+                    // "start" then reaches Phase 2/3 as the INVALID placeholder driving DNS.
+                }
+
+                // For each shared group, collapse readings within the dedup window into one
+                // representative reading per pass (passes separated by the pass-gap threshold).
+                // Start passes WITHOUT a chosen start (first pass per EPC): keep LAST.
+                // All other passes: keep EARLIEST.
+                var collapsedReadings = new List<ReadingInput>();
+                var lastPassTimeByGroup = new Dictionary<string, DateTime>();
+                var lastAddedIndexByGroup = new Dictionary<string, int>();     // index of representative in collapsedReadings
+                var completedPassCountByGroup = new Dictionary<string, int>(); // completed passes per group key
+
+                foreach (var reading in sorted)
+                {
+                    if (deviceToGroup.TryGetValue(reading.DeviceId, out var groupKey))
+                    {
+                        // Pre-start reads on a group WITH a chosen valid start never enter a
+                        // pass — they are pre-gun cross-reads / pre-start noise, not crossings.
+                        if (chosenStartByGroup.TryGetValue(groupKey, out var chosenStart) &&
+                            reading.ReadTimeUtc < chosenStart.ReadTimeUtc)
+                        {
+                            preStartReadsExcluded++;
+                            continue;
+                        }
+
+                        if (lastPassTimeByGroup.TryGetValue(groupKey, out var lastTime))
+                        {
+                            var gap = (reading.ReadTimeUtc - lastTime).TotalSeconds;
+
+                            if (gap <= passGapThresholdSeconds)
+                            {
+                                // Same pass — extend the pass window timestamp
+                                lastPassTimeByGroup[groupKey] = reading.ReadTimeUtc;
+
+                                // Within dedup window: replace representative for Start-facing first pass.
+                                // Between dedup window and pass-gap threshold: same pass, keep earliest (no replace).
+                                if (gap <= dedupWindowSeconds)
+                                {
+                                    var isStartBound = sharedDevices.TryGetValue(reading.DeviceId, out var m)
+                                        && m.StartsAtZero;
+                                    var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
+                                    // Keep-LAST applies only when NO valid start was chosen for
+                                    // the group: with a chosen start the first-pass representative
+                                    // is PINNED (start = EARLIEST in-window read; a later same-pass
+                                    // read must not displace it).
+                                    if (isStartBound && isFirstPass && !chosenStartByGroup.ContainsKey(groupKey))
+                                        collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
+                                }
+                                continue;
+                            }
+                            // Gap exceeded the pass-gap threshold — new pass (outbound → return)
+                            completedPassCountByGroup[groupKey] =
+                                completedPassCountByGroup.GetValueOrDefault(groupKey, 0) + 1;
+                        }
+                        // New pass
+                        lastPassTimeByGroup[groupKey] = reading.ReadTimeUtc;
+                        lastAddedIndexByGroup[groupKey] = collapsedReadings.Count;
+                        collapsedReadings.Add(reading);
+                    }
+                    else
+                    {
+                        // Non-shared device (turnaround, single-mapping): keep all readings
+                        // (the assigner's Step 5 dedup will handle same-checkpoint duplicates)
+                        collapsedReadings.Add(reading);
+                    }
+                }
+
+                readingsByEpc[epc] = collapsedReadings;
+            }
+
+            // Assign the 0-based pass ORDINAL per shared group. For a start-bound group with a
+            // valid in-window start, every read before the chosen start was excluded and the
+            // chosen start survived the collapse pinned as its pass-0 representative — so
+            // ordinal 0 lands on the Start checkpoint by construction.
+            int passIndexOverridesSet = 0;
+            foreach (var (_, epcReadings) in readingsByEpc)
+            {
+                var byGroup = epcReadings
+                    .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
+                    .GroupBy(r => deviceToGroup[r.DeviceId]);
+
+                foreach (var grp in byGroup)
+                {
+                    var sortedPasses = grp.OrderBy(r => r.ReadTimeUtc).ToList();
+                    for (int pi = 0; pi < sortedPasses.Count; pi++)
+                    {
+                        sortedPasses[pi].PassIndexOverride = pi;  // 0-based pass ordinal
+                        passIndexOverridesSet++;
+                    }
+                }
+            }
+
+            return new PassCollapseResult
+            {
+                ReadingsByEpc = readingsByEpc,
+                PreStartReadsExcluded = preStartReadsExcluded,
+                PassIndexOverridesSet = passIndexOverridesSet
+            };
+        }
+
+        #endregion
+
         #region Step 3: Calculate Turnaround Times
 
         /// <summary>

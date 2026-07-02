@@ -238,6 +238,59 @@ namespace Runnatics.Services.Tests.RFID
         }
 
         // ─────────────────────────────────────────────────────────────────
+        // (e) Orphan child — parent device has no row at the child's distance
+        // ─────────────────────────────────────────────────────────────────
+
+        [TestMethod]
+        public void Validate_OrphanChild_NoParentRowAtAll_Fires()
+        {
+            var checkpoints = new List<Checkpoint>
+            {
+                Cp(1, 2, 0m, "start"),
+                Cp(2, 1, 0m, "start", parentDeviceId: 5)   // device 5 has NO checkpoint rows
+            };
+
+            var violations = CheckpointConfigValidator.Validate(checkpoints);
+
+            Assert.IsTrue(violations.Any(v => v.Contains("Orphan CHILD")),
+                string.Join(" | ", violations));
+        }
+
+        [TestMethod]
+        public void Validate_OrphanChild_ParentRowOnlyAtOtherDistance_Fires()
+        {
+            // Phase 2's merge requires the parent row at the SAME distance — a parent row
+            // elsewhere on the course does not satisfy it.
+            var checkpoints = new List<Checkpoint>
+            {
+                Cp(1, 2, 5m, "Finish"),                    // device 2 exists, but only at 5.0
+                Cp(2, 1, 0m, "start", parentDeviceId: 2)   // child at 0.0 → orphan there
+            };
+
+            var violations = CheckpointConfigValidator.Validate(checkpoints);
+
+            Assert.IsTrue(violations.Any(v => v.Contains("Orphan CHILD")),
+                string.Join(" | ", violations));
+        }
+
+        [TestMethod]
+        public void Validate_ChildWithMatchingParentRow_DoesNotFire()
+        {
+            // The race-65 active shape (also asserted by the full-config test above) — spelled
+            // out minimally: child + parent row at the same distance is the LEGITIMATE pattern.
+            var checkpoints = new List<Checkpoint>
+            {
+                Cp(1, 2, 0m, "start"),
+                Cp(2, 1, 0m, "start", parentDeviceId: 2)
+            };
+
+            var violations = CheckpointConfigValidator.Validate(checkpoints);
+
+            Assert.IsFalse(violations.Any(v => v.Contains("Orphan CHILD")),
+                string.Join(" | ", violations));
+        }
+
+        // ─────────────────────────────────────────────────────────────────
         // LoopRaceCheckpointAssigner promotion: equal distances hard-fail
         // ─────────────────────────────────────────────────────────────────
 

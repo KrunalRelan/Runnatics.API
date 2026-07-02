@@ -1140,3 +1140,28 @@ Branch: `bugfix/testing-round-1`.
 **Tests:** new `CheckpointConfigValidatorTests` (13) incl. race-65 active-config-must-pass and 8-row historical-state-fires-a/b/c/d fixtures + assigner throw test. Full suite 31/31 green (`DOTNET_ROLL_FORWARD=LatestMajor` needed locally — no .NET 8 runtime on this box).
 
 **Build:** 0 errors, pre-existing warnings only. NOT committed — awaiting prod verification: reprocess race 65 → bib 5176 start 05:33:34, finish ~05:51:53, net ~18:19, GunTime at start ≈ 34s. EarlyStartCutOff stays 1s (cutoff was not the bug).
+
+---
+
+## 2026-07-02 (2) — Result-calc edge-case regression suite (56 new tests) + 7c/7d fixes
+
+**Goal:** turn every rule from this session (valid-start window, DNS truth table, collapse fix, finisher-safe, ranking, config validation) into permanent tests. 87/87 green.
+
+**Test-enablement extractions (behavior-preserving, verified by the untouched 31 pre-existing tests + zero build errors):**
+- `ResultClassifier.cs` (NEW) — the Phase 3 Finished/DNF/DNS truth table as a pure function; `CalculateRaceResultsAsync` now calls it (replaced the inline if/else + `HasValidStart`/`IsEarlyStart` locals).
+- `LoopRaceCheckpointAssigner.CollapseIntoPasses` (NEW static) — gun-anchored start selection + pass-collapse + ordinal assignment extracted pure from Phase 1.5; service calls it and logs from the returned counts.
+- `PassCollapseSettings.cs` (NEW) — DedUpSeconds/PassGapThresholdSeconds defaults+guards (30s/300s, ">0" rule), mirrors StartWindow.
+- `CheckpointGates.cs` (NEW) — deterministic start/finish gate selection: distance → PRIMARY before child → Id.
+
+**In-scope fixes (pre-approved):**
+- 7c: validator check (e) — orphan child (no parent row at the child's distance, 0.001 KM tolerance mirroring the Phase 2 merge) → violation.
+- 7d: Phase 2 (`DeduplicateAndNormalizeAsync`) start/finish gate ids now via `CheckpointGates` (was OrderBy(distance).First() = DB-order tie between primary 396 / child 429). Phase 3 already used primaries-only; `ResultsService.LoadCheckpointTimesAsync:956` filters primaries → left unchanged.
+
+**New tests (56):** StartWindowTests 8 (window edges, seconds-not-minutes, defaults incl. negative, null gun, IST midnight rollback); ResultClassifierTests 19 (truth-table rows a–l incl. boundary inclusivity, early-taint-beats-finish, finisher-safe, negative-finish precedence, no-window fallback, cross-UTC-midnight); PassCollapseTests 8 (bib-5176 end-to-end collapse→assign→dedup = start 00:03:34/net 18:19, earliest-in-cluster, DNS placeholder keep-LAST, finish-never-start, staggered cross-read excluded across midnight, per-EPC independence, non-start groups untouched, settings defaults); RankCalculatorTests 13 (net/gun bases, BUG-24 per-view, tie chain → ParticipantId, order-stable fixed point, null-times-last, M/F-only gender, Unknown category, ResolveBasis matrix); CheckpointGatesTests 5; validator (e) 3.
+
+**Verification split:**
+- UNIT-TESTED: sections 1 (a–l), 2 (a–e), 3 (a–e core), 4a (classifier part), 6 (a–f + determinism core of g), 7 (a–e), 8a.
+- CODE-VERIFIED (line-cited, no test): 3f HasLoops routing (`sharedDeviceExists` :4300s), 4e negative NetTime → null (:2243-2252), 2d no AddMinutes consumer anywhere (grep — the queued Part A concern is already resolved in code), 6d/6g caller contracts (Status=="Finished" loads; both paths call ApplyStoredRanksAsync :1398/:3106/:4010), 8b edge conversion.
+- INTEGRATION/PROD-VERIFY ONLY: 4b/4c/4d Phase-2 StartTime guards (prod-verified in d6232e1/46ec16d), section 5 manual-override flows (EF-heavy; prod-verified per 2026-06-20 entry), Phase 2 placeholder retention + gun-clamped baseline.
+
+**No new failures found:** every tested rule passed on first run; the only "failures" were the two pre-approved gaps (7c/7d), fixed. Build 0 errors. NOT committed/pushed per instruction. Race-65 prod reprocess verification still outstanding for commit 996b2e0.

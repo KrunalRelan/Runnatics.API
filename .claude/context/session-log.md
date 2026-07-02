@@ -1165,3 +1165,25 @@ Branch: `bugfix/testing-round-1`.
 - INTEGRATION/PROD-VERIFY ONLY: 4b/4c/4d Phase-2 StartTime guards (prod-verified in d6232e1/46ec16d), section 5 manual-override flows (EF-heavy; prod-verified per 2026-06-20 entry), Phase 2 placeholder retention + gun-clamped baseline.
 
 **No new failures found:** every tested rule passed on first run; the only "failures" were the two pre-approved gaps (7c/7d), fixed. Build 0 errors. NOT committed/pushed per instruction. Race-65 prod reprocess verification still outstanding for commit 996b2e0.
+
+---
+
+## 2026-07-02 (3) — Splits/cumulative rebased to the runner''s own valid start (net baseline)
+
+**Client rule:** Start row = 00:00/00:00 always; cumulative@N = crossing N − runner''s valid start crossing; INVARIANT cumulative@Finish == NetTime; the gun-to-start offset (Gun − Net) is a separate value, never a split/cumulative.
+
+**Decisions (all five confirmed):** (1) Option B — stored `SplitTimes.SplitTimeMs` STAYS gun-based (checkpoint ranks + legacy rows depend on it); net cumulative derived at read time via ONE pure helper. (2) No-start-read finisher keeps NULL NetTime (invariant vacuous; cumulative shows gun-based). (3) DNS split rendering untouched. (4) Comparison diffs switched to net. (5) `SplitTimes.Rank` basis untouched (gun-ordered) — product decision, flagged.
+
+**New:** `Runnatics.Services/SplitBaseline.cs` — `BaselineMs(startRowSplitTimeMs, lateStartCutOffSeconds)` (validity gate via `StartWindow.LateSeconds` defaulting — a raw column read of a null cutoff would invalidate every start row) and `CumulativeMs`. Valid start (≤ ceiling) → baseline = max(0, offset) (mirrors BUG-27 gun clamp); late placeholder / no start row → baseline 0 = gun (matches gun-clamped NetTime, so the invariant holds for late-only finishers too).
+
+**Consumers rewired (the 5-implementation divergence closed):** `PerformanceMetricsBuilder` (start row keyed on DISTANCE not row index — a missed-start runner''s first row is no longer zeroed/baselined; signature now takes LateStartCutOff); `ResultsService.GetParticipantSplitsAsync` (+pace recomputed from net cumulative — stored Pace may be stale gun-based); `PublicResultsService` participant detail, comparison (per-runner baselines incl. cross-race, diffs net-based), results list `MapToResultDto`; `ResultsExportService` Excel splits. Includes threaded: Race→RaceSettings at 4 load sites + `LoadParticipantDataAsync` returns per-runner baseline.
+
+**Writers:** Phase 2.5 stores Start-row `SegmentTime = 0` going forward (display forces 0 regardless — old rows'' stored offset is masked, NO reprocess needed); interactive `CalculateSplitTimesAsync` same + stored `Pace` now from net cumulative.
+
+**Decision-2 flag confirmed:** RankOnNet=true + Finished with null NetTime → `RankCalculator.OrderByBasis` sorts null as long.MaxValue → ranks LAST, never above real times (pinned by `NullTimes_SortLast_NotFirst`).
+
+**Not changed (noted):** W2''s pre-existing `GunTime <= 0` row skip (a start crossing exactly AT the gun gets no split row); checkpoint-rank basis; DNS split rows still render.
+
+**Tests:** +10 `SplitBaselineTests` (defaulting trap, validity gate, bib-5176 math incl. Finish==NetTime invariant and Gun=Net+offset reconciliation, late-only == gun-clamped NetTime, clamps). 97/97 green; build 0 errors.
+
+**Prod verify pending:** bib 5176 → Start 0/0, 2.5K ≈ 8:26 net, Finish cumulative 18:19 == NetTime; a late-start finisher → cumulative == gun-clamped NetTime; C1–C5 all show identical numbers; Excel matches screens. NOT committed — sits alone in the working tree (prior work already pushed), ready to be its own commit.

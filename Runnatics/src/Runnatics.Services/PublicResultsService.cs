@@ -472,6 +472,7 @@ namespace Runnatics.Services
                                    !p.AuditProperties.IsDeleted)
                     .Include(p => p.Event)
                     .Include(p => p.Race)
+                        .ThenInclude(r => r.RaceSettings) // LateStartCutOff → net split baseline
                     .AsNoTracking()
                     .FirstOrDefaultAsync(ct);
 
@@ -589,6 +590,16 @@ namespace Runnatics.Services
                     };
                 }
 
+                // NET baseline (SplitBaseline): cumulative "race time" is measured from the
+                // runner's own VALID start crossing, not the gun (stored SplitTimeMs is
+                // gun-based). Gun fallback for a late-only placeholder / missing start row —
+                // consistent with the (gun-clamped) NetTime, so RaceTime@Finish == chip time.
+                var startRowMsPublic = splits
+                    .FirstOrDefault(s => s.ToCheckpoint != null && s.ToCheckpoint.DistanceFromStart == 0m)
+                    ?.SplitTimeMs;
+                var splitBaselineMs = SplitBaseline.BaselineMs(
+                    startRowMsPublic, participant.Race?.RaceSettings?.LateStartCutOff);
+
                 // splits is ordered by ToCheckpoint.DistanceFromStart (see query above), so we can
                 // walk it with the previous checkpoint's distance to derive each SEGMENT.
                 var splitDtos = splits.Select((st, idx) =>
@@ -599,6 +610,10 @@ namespace Runnatics.Services
                     // Keyed on distance (not idx 0) so a finisher who missed the start mat — whose
                     // first recorded row is a >0 km checkpoint — is NOT wrongly zeroed.
                     bool isStartRow = thisDist.HasValue && thisDist.Value == 0m;
+
+                    var cumulativeMs = isStartRow
+                        ? 0L
+                        : SplitBaseline.CumulativeMs(st.SplitTimeMs, splitBaselineMs);
 
                     decimal? speed = null;
                     if (!isStartRow && st.SegmentTime is { } segMs && segMs > 0 && thisDist.HasValue)
@@ -619,10 +634,13 @@ namespace Runnatics.Services
                         SplitTime  = isStartRow ? "00:00:00"
                                      : (st.SegmentTime.HasValue ? FormatMs(st.SegmentTime.Value) : null),
                         RaceTime   = isStartRow ? "00:00:00"
-                                     : (st.SplitTimeMs.HasValue ? FormatMs(st.SplitTimeMs.Value) : null),
+                                     : (st.SplitTimeMs.HasValue ? FormatMs(cumulativeMs) : null),
                         RaceRank   = st.Rank,
                         SplitDist  = thisDist,
-                        Pace       = st.Pace.HasValue ? FormatPace(st.Pace.Value) : null,
+                        // Pace recomputed from the NET cumulative (stored Pace may be stale gun-based).
+                        Pace       = !isStartRow && thisDist is > 0 && cumulativeMs > 0
+                                     ? FormatPace(cumulativeMs / 60000m / thisDist.Value)
+                                     : null,
                         Speed      = speed
                     };
                 }).ToList();
@@ -835,8 +853,8 @@ namespace Runnatics.Services
                 int p1Id = Convert.ToInt32(_encryptionService.Decrypt(request.ParticipantId1));
                 int p2Id = Convert.ToInt32(_encryptionService.Decrypt(request.ParticipantId2));
 
-                var (p1Data, p1Result, p1Splits) = await LoadParticipantDataAsync(p1Id, ct);
-                var (p2Data, p2Result, p2Splits) = await LoadParticipantDataAsync(p2Id, ct);
+                var (p1Data, p1Result, p1Splits, p1BaselineMs) = await LoadParticipantDataAsync(p1Id, ct);
+                var (p2Data, p2Result, p2Splits, p2BaselineMs) = await LoadParticipantDataAsync(p2Id, ct);
 
                 if (p1Data == null || p2Data == null)
                 {
@@ -854,18 +872,32 @@ namespace Runnatics.Services
                     return $"{mins}:{secs:D2}";
                 }
 
+                // NET cumulative per runner (Start row 0 by definition; stored SplitTimeMs is
+                // gun-based). Pace recomputed from the net cumulative (stored Pace may be stale).
+                static List<PublicComparisonSplitDto> BuildSplits(List<SplitTimes> splits, long baselineMs) =>
+                    splits.Select(s =>
+                    {
+                        var dist = s.ToCheckpoint?.DistanceFromStart;
+                        var isStartRow = dist == 0m;
+                        var cumulativeMs = isStartRow ? 0L : SplitBaseline.CumulativeMs(s.SplitTimeMs, baselineMs);
+                        return new PublicComparisonSplitDto
+                        {
+                            Checkpoint = s.ToCheckpoint?.Name ?? string.Empty,
+                            Time       = isStartRow ? FormatMs(0)
+                                         : (s.SplitTimeMs.HasValue ? FormatMs(cumulativeMs) : null),
+                            Pace       = FormatPaceNullable(!isStartRow && dist is > 0 && cumulativeMs > 0
+                                         ? cumulativeMs / 60000m / dist.Value
+                                         : null)
+                        };
+                    }).ToList();
+
                 var p1Dto = new PublicComparisonParticipantDto
                 {
                     Name     = p1Data.FullName,
                     Bib      = p1Data.BibNumber ?? string.Empty,
                     ChipTime = p1Result?.NetTime.HasValue == true ? FormatMs(p1Result.NetTime.Value) : null,
                     GunTime  = p1Result?.GunTime.HasValue  == true ? FormatMs(p1Result.GunTime.Value)  : null,
-                    Splits   = p1Splits.Select(s => new PublicComparisonSplitDto
-                    {
-                        Checkpoint = s.ToCheckpoint?.Name ?? string.Empty,
-                        Time       = s.SplitTimeMs.HasValue ? FormatMs(s.SplitTimeMs.Value) : null,
-                        Pace       = FormatPaceNullable(s.Pace)
-                    }).ToList()
+                    Splits   = BuildSplits(p1Splits, p1BaselineMs)
                 };
 
                 var p2Dto = new PublicComparisonParticipantDto
@@ -874,15 +906,11 @@ namespace Runnatics.Services
                     Bib      = p2Data.BibNumber ?? string.Empty,
                     ChipTime = p2Result?.NetTime.HasValue == true ? FormatMs(p2Result.NetTime.Value) : null,
                     GunTime  = p2Result?.GunTime.HasValue  == true ? FormatMs(p2Result.GunTime.Value)  : null,
-                    Splits   = p2Splits.Select(s => new PublicComparisonSplitDto
-                    {
-                        Checkpoint = s.ToCheckpoint?.Name ?? string.Empty,
-                        Time       = s.SplitTimeMs.HasValue ? FormatMs(s.SplitTimeMs.Value) : null,
-                        Pace       = FormatPaceNullable(s.Pace)
-                    }).ToList()
+                    Splits   = BuildSplits(p2Splits, p2BaselineMs)
                 };
 
-                // Per-checkpoint diffs using cumulative race time
+                // Per-checkpoint diffs using NET cumulative race time (per-runner baseline) —
+                // a gun-based diff would be skewed by the corral-offset difference.
                 var checkpointNames = p1Splits.Select(s => s.ToCheckpoint?.Name ?? string.Empty)
                     .Union(p2Splits.Select(s => s.ToCheckpoint?.Name ?? string.Empty))
                     .Where(n => !string.IsNullOrEmpty(n))
@@ -897,8 +925,8 @@ namespace Runnatics.Services
 
                     if (s1?.SplitTimeMs == null || s2?.SplitTimeMs == null) continue;
 
-                    long t1 = s1.SplitTimeMs.Value;
-                    long t2 = s2.SplitTimeMs.Value;
+                    long t1 = SplitBaseline.CumulativeMs(s1.SplitTimeMs, p1BaselineMs);
+                    long t2 = SplitBaseline.CumulativeMs(s2.SplitTimeMs, p2BaselineMs);
                     long diffMs = Math.Abs(t1 - t2);
 
                     diffs.Add(new PublicComparisonDiffDto
@@ -980,7 +1008,7 @@ namespace Runnatics.Services
             }
         }
 
-        private async Task<(Participant? participant, Results? result, List<SplitTimes> splits)>
+        private async Task<(Participant? participant, Results? result, List<SplitTimes> splits, long baselineMs)>
             LoadParticipantDataAsync(int participantId, CancellationToken ct)
         {
             var participant = await _repository.GetRepository<Participant>()
@@ -991,7 +1019,7 @@ namespace Runnatics.Services
                 .FirstOrDefaultAsync(ct);
 
             if (participant == null)
-                return (null, null, []);
+                return (null, null, [], 0L);
 
             var result = await _repository.GetRepository<Results>()
                 .GetQuery(r => r.ParticipantId == participantId &&
@@ -1009,7 +1037,19 @@ namespace Runnatics.Services
                 .AsNoTracking()
                 .ToListAsync(ct);
 
-            return (participant, result, splits);
+            // NET split baseline (SplitBaseline) — per runner, from THEIR race's LateStartCutOff:
+            // comparisons must compare running time, not corral positions (a gun-based diff is
+            // skewed by offset1 − offset2).
+            var lateStartCutOff = await _repository.GetRepository<Race>()
+                .GetQuery(r => r.Id == participant.RaceId)
+                .Select(r => (int?)r.RaceSettings.LateStartCutOff)
+                .FirstOrDefaultAsync(ct);
+            var startRowMs = splits
+                .FirstOrDefault(s => s.ToCheckpoint != null && s.ToCheckpoint.DistanceFromStart == 0m)
+                ?.SplitTimeMs;
+            var baselineMs = SplitBaseline.BaselineMs(startRowMs, lateStartCutOff);
+
+            return (participant, result, splits, baselineMs);
         }
 
         private PublicPodiumDto BuildPodium(List<Results> top3)
@@ -1058,6 +1098,7 @@ namespace Runnatics.Services
                     !r.AuditProperties.IsDeleted)
                     .Include(r => r.Participant)
                     .Include(r => r.Race)
+                        .ThenInclude(rc => rc.RaceSettings) // LateStartCutOff → net split baseline
                     .Include(r => r.Participant.SplitTimes
                         .Where(st => st.EventId == eventId &&
                                      st.AuditProperties.IsActive &&
@@ -1116,30 +1157,43 @@ namespace Runnatics.Services
             }
         }
 
-        private static PublicResultDto MapToResultDto(Results r) => new()
+        private static PublicResultDto MapToResultDto(Results r)
         {
-            BibNumber = r.Participant?.BibNumber ?? string.Empty,
-            ParticipantName = r.Participant?.FullName ?? string.Empty,
-            RaceName = r.Race?.Title ?? string.Empty,
-            AgeGroup = r.Participant?.AgeCategory,
-            Gender = r.Participant?.Gender, // BUG-17: emit raw "M"/"F", not full words
-            GunTime = r.GunTime.HasValue ? TimeSpan.FromMilliseconds(r.GunTime.Value) : null,
-            NetTime = r.NetTime.HasValue ? TimeSpan.FromMilliseconds(r.NetTime.Value) : null,
-            OverallRank = r.OverallRank,
-            CategoryRank = r.CategoryRank,
-            GenderRank = r.GenderRank,
-            Splits = r.Participant?.SplitTimes?
-                .OrderBy(st => st.ToCheckpoint?.DistanceFromStart)
-                .Select(st => new PublicSplitDto
-                {
-                    CheckpointName = st.ToCheckpoint?.Name ?? string.Empty,
-                    Time = st.SplitTimeMs.HasValue
-                        ? TimeSpan.FromMilliseconds(st.SplitTimeMs.Value)
-                        : st.SplitTime,
-                    Rank = st.Rank
-                })
-                .ToList()
-        };
+            // NET split baseline (SplitBaseline): stored SplitTimeMs is gun-based; the displayed
+            // cumulative is measured from the runner's own valid start crossing (gun fallback).
+            var startRowMs = r.Participant?.SplitTimes?
+                .FirstOrDefault(st => st.ToCheckpoint != null && st.ToCheckpoint.DistanceFromStart == 0m)
+                ?.SplitTimeMs;
+            var baselineMs = SplitBaseline.BaselineMs(startRowMs, r.Race?.RaceSettings?.LateStartCutOff);
+
+            return new()
+            {
+                BibNumber = r.Participant?.BibNumber ?? string.Empty,
+                ParticipantName = r.Participant?.FullName ?? string.Empty,
+                RaceName = r.Race?.Title ?? string.Empty,
+                AgeGroup = r.Participant?.AgeCategory,
+                Gender = r.Participant?.Gender, // BUG-17: emit raw "M"/"F", not full words
+                GunTime = r.GunTime.HasValue ? TimeSpan.FromMilliseconds(r.GunTime.Value) : null,
+                NetTime = r.NetTime.HasValue ? TimeSpan.FromMilliseconds(r.NetTime.Value) : null,
+                OverallRank = r.OverallRank,
+                CategoryRank = r.CategoryRank,
+                GenderRank = r.GenderRank,
+                Splits = r.Participant?.SplitTimes?
+                    .OrderBy(st => st.ToCheckpoint?.DistanceFromStart)
+                    .Select(st => new PublicSplitDto
+                    {
+                        CheckpointName = st.ToCheckpoint?.Name ?? string.Empty,
+                        // Start row: 00:00 by definition; others: net cumulative.
+                        Time = st.ToCheckpoint?.DistanceFromStart == 0m
+                            ? TimeSpan.Zero
+                            : st.SplitTimeMs.HasValue
+                                ? TimeSpan.FromMilliseconds(SplitBaseline.CumulativeMs(st.SplitTimeMs, baselineMs))
+                                : st.SplitTime,
+                        Rank = st.Rank
+                    })
+                    .ToList()
+            };
+        }
 
         private async Task<PublicLeaderboardSettingsDto> GetEffectivePublicLeaderboardSettingsAsync(
             int eventId, int? raceId)

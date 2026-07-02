@@ -4898,6 +4898,16 @@ namespace Runnatics.Services
                             segmentTimeMs = (long)(reading.ChipTime - previousCheckpointTime.Value).TotalMilliseconds;
                         }
 
+                        // Client rule: the Start row's split is 00:00 by definition — the gun-to-mat
+                        // offset is corral delay, not running time. Stored going forward; display
+                        // paths force 0 regardless (old rows still hold the offset — masked there).
+                        var isStartGateRow = reading.Checkpoint != null &&
+                            reading.Checkpoint.DistanceFromStart == startCheckpoint.DistanceFromStart;
+                        if (isStartGateRow)
+                        {
+                            segmentTimeMs = 0;
+                        }
+
                         // Validate: Skip readings that occurred before race start (invalid data)
                         if (splitTimeMs < 0)
                         {

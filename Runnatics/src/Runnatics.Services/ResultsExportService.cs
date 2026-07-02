@@ -41,6 +41,13 @@ namespace Runnatics.Services
                 .AsNoTracking()
                 .FirstOrDefaultAsync(cancellationToken);
 
+            // LateStartCutOff → NET split baseline (SplitBaseline): exported split columns show the
+            // cumulative from the runner's own valid start crossing, matching the screens.
+            var lateStartCutOff = await _context.Races
+                .Where(r => r.Id == raceId)
+                .Select(r => (int?)r.RaceSettings.LateStartCutOff)
+                .FirstOrDefaultAsync(cancellationToken);
+
             // 4. Load leaderboard settings — race-level override first, then event-level
             var leaderboardSettings = await _context.LeaderboardSettings
                 .Where(s => s.EventId == eventId &&
@@ -167,7 +174,8 @@ namespace Runnatics.Services
                     }
                 }
 
-                // Splits
+                // Splits — NET cumulative (from the runner's own valid start crossing; the stored
+                // SplitTimeMs is gun-based). Start column: 00:00:00 by definition.
                 if (showSplits && r.Participant != null)
                 {
                     var participantSplits = splitsByParticipant.TryGetValue(r.ParticipantId, out var ps) ? ps : null;
@@ -178,10 +186,17 @@ namespace Runnatics.Services
                         .ToDictionary(g => g.Key, g => g.Last())
                         ?? new Dictionary<int, SplitTimes>();
 
+                    var startRowMs = participantSplits?
+                        .FirstOrDefault(s => s.ToCheckpoint?.DistanceFromStart == 0m)
+                        ?.SplitTimeMs;
+                    var baselineMs = SplitBaseline.BaselineMs(startRowMs, lateStartCutOff);
+
                     foreach (var cp in checkpointColumns)
                     {
                         if (splitLookup.TryGetValue(cp.Id, out var st) && st.SplitTimeMs.HasValue)
-                            ws1.Cell(row, col++).Value = TimeSpan.FromMilliseconds(st.SplitTimeMs.Value).ToString(@"hh\:mm\:ss");
+                            ws1.Cell(row, col++).Value = cp.DistanceFromStart == 0m
+                                ? "00:00:00"
+                                : TimeSpan.FromMilliseconds(SplitBaseline.CumulativeMs(st.SplitTimeMs, baselineMs)).ToString(@"hh\:mm\:ss");
                         else
                             ws1.Cell(row, col++).Value = string.Empty;
                     }

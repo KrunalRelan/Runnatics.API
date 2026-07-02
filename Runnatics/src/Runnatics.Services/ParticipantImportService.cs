@@ -1696,6 +1696,7 @@ namespace Runnatics.Services
                     !p.AuditProperties.IsDeleted)
                     .Include(p => p.Event)
                     .Include(p => p.Race)
+                        .ThenInclude(r => r.RaceSettings) // LateStartCutOff → net split baseline
                     .Include(p => p.Result)
                     .AsNoTracking()
                     .FirstOrDefaultAsync();

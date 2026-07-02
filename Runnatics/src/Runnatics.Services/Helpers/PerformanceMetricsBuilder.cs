@@ -12,7 +12,10 @@ namespace Runnatics.Services.Helpers
     {
         private readonly IMapper _mapper = mapper;
 
-        public void BuildSplitTimesAndPerformance(ParticipantDetailsResponse response, List<SplitTimes> splitTimes)
+        public void BuildSplitTimesAndPerformance(
+            ParticipantDetailsResponse response,
+            List<SplitTimes> splitTimes,
+            int? lateStartCutOffSeconds)
         {
             response.SplitTimes = [];
             response.PaceProgression = [];
@@ -24,24 +27,29 @@ namespace Runnatics.Services.Helpers
             }
 
             var metrics = new PerformanceMetrics();
-            // GunTime of the first checkpoint (= time from gun to start line crossing).
-            // All subsequent cumulative times are measured from this baseline.
-            var startGunTimeMs = splitTimes[0].SplitTimeMs ?? 0L;
-            bool isFirstCheckpoint = true;
+            // NET baseline (SplitBaseline): the runner's own VALID start crossing, gun fallback
+            // when the start row is a late placeholder or absent — never blindly "the first row"
+            // (a runner who missed the start mat must NOT be baselined on their 2.5K crossing).
+            var startRowMs = splitTimes
+                .FirstOrDefault(st => (st.ToCheckpoint?.DistanceFromStart ?? st.Distance) == 0m)
+                ?.SplitTimeMs;
+            var baselineMs = SplitBaseline.BaselineMs(startRowMs, lateStartCutOffSeconds);
+
             decimal? previousPace = null;
             long? previousSplitTimeMs = null;
 
             foreach (var st in splitTimes)
             {
-                // Cumulative = elapsed since crossing the start line.
-                // For the Start row itself we show its own GunTime (the gun-to-start offset).
-                // For every subsequent row: GunTime[i] - GunTime[Start].
-                long cumulativeMs = isFirstCheckpoint
-                    ? startGunTimeMs
-                    : (st.SplitTimeMs ?? 0L) - startGunTimeMs;
-                isFirstCheckpoint = false;
+                // Start row: Split = 00:00 / Cumulative = 00:00 always — corral delay (the
+                // gun-to-mat offset) is not running time. Keyed on DISTANCE, not row index.
+                bool isStartRow = (st.ToCheckpoint?.DistanceFromStart ?? st.Distance) == 0m;
 
-                var (splitTimeInfo, progressionInfo, segmentPace, segmentSpeed) = ProcessSplitTime(st, metrics, cumulativeMs, previousSplitTimeMs);
+                // Cumulative = elapsed since the runner's own valid start crossing
+                // (gun-based stored ms minus the baseline). INVARIANT: at the Finish this
+                // equals Results.NetTime.
+                long cumulativeMs = isStartRow ? 0L : SplitBaseline.CumulativeMs(st.SplitTimeMs, baselineMs);
+
+                var (splitTimeInfo, progressionInfo, segmentPace, segmentSpeed) = ProcessSplitTime(st, metrics, cumulativeMs, previousSplitTimeMs, isStartRow);
                 previousSplitTimeMs = st.SplitTimeMs;
 
                 // Populate checkpoint ranks from pre-calculated values
@@ -102,7 +110,8 @@ namespace Runnatics.Services.Helpers
             SplitTimes st,
             PerformanceMetrics metrics,
             long cumulativeTimeMs,
-            long? previousSplitTimeMs)
+            long? previousSplitTimeMs,
+            bool isStartRow)
         {
             var checkpoint = st.ToCheckpoint;
             var distanceKm = checkpoint?.DistanceFromStart ?? st.Distance ?? 0;
@@ -110,10 +119,15 @@ namespace Runnatics.Services.Helpers
             metrics.TotalDistance = distanceKm;
 
             // SplitTime = time for this segment only (between consecutive checkpoints).
-            // Prefer stored SegmentTime; when absent, derive from consecutive SplitTimeMs values.
-            // For the very first row (no previous), SplitTimeMs is the gun-to-start-line offset.
+            // Start row: 00:00 by definition (older rows may still store the gun-to-mat offset
+            // in SegmentTime — never show it as a split). Otherwise prefer stored SegmentTime;
+            // when absent, derive from consecutive SplitTimeMs values (baseline-independent).
             long segmentTimeMs;
-            if (st.SegmentTime.HasValue)
+            if (isStartRow)
+            {
+                segmentTimeMs = 0L;
+            }
+            else if (st.SegmentTime.HasValue)
             {
                 segmentTimeMs = st.SegmentTime.Value;
             }
@@ -123,6 +137,8 @@ namespace Runnatics.Services.Helpers
             }
             else
             {
+                // No previous row and not the start row (runner missed the start mat):
+                // the first recorded segment runs from the gun — equals their cumulative.
                 segmentTimeMs = st.SplitTimeMs ?? 0L;
             }
 

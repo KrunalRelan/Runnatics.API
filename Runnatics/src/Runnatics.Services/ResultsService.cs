@@ -71,6 +71,7 @@ namespace Runnatics.Services
                     r.EventId == decryptedEventId &&
                     r.AuditProperties.IsActive &&
                     !r.AuditProperties.IsDeleted)
+                    .Include(r => r.RaceSettings) // LateStartCutOff → net split baseline (Pace)
                     .FirstOrDefaultAsync();
 
                 if (race == null)
@@ -146,11 +147,21 @@ namespace Runnatics.Services
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
+                    var startGateDistance = checkpoints[0].DistanceFromStart;
+
                     foreach (var participantData in participantReadings)
                     {
                         long? previousSplitTime = null;
                         int? previousCheckpointId = null;
                         var participantHasSplits = false;
+
+                        // NET baseline (SplitBaseline): the runner's own VALID start crossing at the
+                        // start gate; gun fallback for a late placeholder / missing start row.
+                        var startRowGunMs = participantData.Readings
+                            .Where(rd => checkpoints.FirstOrDefault(c => c.Id == rd.CheckpointId)?.DistanceFromStart == startGateDistance)
+                            .Select(rd => rd.GunTime)
+                            .FirstOrDefault(gt => gt.HasValue);
+                        var baselineMs = SplitBaseline.BaselineMs(startRowGunMs, race.RaceSettings?.LateStartCutOff);
 
                         foreach (var reading in participantData.Readings)
                         {
@@ -166,11 +177,20 @@ namespace Runnatics.Services
                                 segmentTimeMs = splitTimeMs - previousSplitTime.Value;
                             }
 
-                            // Calculate pace (min/km)
+                            // Client rule: the Start row's split is 00:00 by definition — the
+                            // gun-to-mat offset is corral delay, not running time.
+                            if (checkpoint.DistanceFromStart == startGateDistance)
+                            {
+                                segmentTimeMs = 0;
+                            }
+
+                            // Calculate pace (min/km) from the NET cumulative — gun-based pace
+                            // would include the corral delay in every runner's pace.
                             decimal? pace = null;
                             if (checkpoint.DistanceFromStart > 0)
                             {
-                                var timeInMinutes = splitTimeMs / 60000.0m; // Convert ms to minutes
+                                var netCumulativeMs = SplitBaseline.CumulativeMs(splitTimeMs, baselineMs);
+                                var timeInMinutes = netCumulativeMs / 60000.0m; // Convert ms to minutes
                                 pace = timeInMinutes / checkpoint.DistanceFromStart;
                             }
 
@@ -835,6 +855,7 @@ namespace Runnatics.Services
                     !p.AuditProperties.IsDeleted)
                     .Include(p => p.Event)
                     .Include(p => p.Race)
+                        .ThenInclude(r => r.RaceSettings) // LateStartCutOff → net split baseline
                     .Include(p => p.Result)
                     .Include(p => p.ChipAssignments)
                         .ThenInclude(ca => ca.Chip)
@@ -1301,32 +1322,51 @@ namespace Runnatics.Services
 
             var splitInfos = _mapper.Map<List<ResultsSplitTimeInfo>>(splits);
 
-            var startSplitTimeMs = splits.Count > 0 ? (splits[0].SplitTimeMs ?? 0L) : 0L;
+            // NET baseline (SplitBaseline): the runner's own VALID start crossing; gun fallback
+            // for a late-only placeholder or a missing start row (matches the NetTime rule).
+            var lateStartCutOff = await _repository.GetRepository<Models.Data.Entities.Participant>()
+                .GetQuery(p => p.Id == participantId)
+                .Select(p => (int?)p.Race.RaceSettings.LateStartCutOff)
+                .FirstOrDefaultAsync();
+            var startRowMs = splits
+                .FirstOrDefault(s => s.Checkpoint != null && s.Checkpoint.DistanceFromStart == 0m)
+                ?.SplitTimeMs;
+            var baselineMs = SplitBaseline.BaselineMs(startRowMs, lateStartCutOff);
 
             for (int i = 0; i < splits.Count; i++)
             {
                 var raw = splits[i];
 
+                // Start row (keyed on DISTANCE, not row index): Split = 00:00 / Cumulative = 00:00
+                // always — the gun-to-mat offset is corral delay, not running time.
+                var isStartRow = raw.Checkpoint != null && raw.Checkpoint.DistanceFromStart == 0m;
+
                 // SplitTime = interval between consecutive checkpoints (SegmentTime), not cumulative
-                splitInfos[i].SplitTime = raw.SegmentTime.HasValue
-                    ? FormatTime(raw.SegmentTime.Value)
-                    : FormatTime(raw.SplitTimeMs ?? 0);
+                splitInfos[i].SplitTime = isStartRow
+                    ? FormatTime(0)
+                    : raw.SegmentTime.HasValue
+                        ? FormatTime(raw.SegmentTime.Value)
+                        : FormatTime(raw.SplitTimeMs ?? 0);
 
                 // SegmentTime = same value (kept for backward compatibility)
-                splitInfos[i].SegmentTime = raw.SegmentTime.HasValue
-                    ? FormatTime(raw.SegmentTime.Value)
-                    : null;
+                splitInfos[i].SegmentTime = isStartRow
+                    ? FormatTime(0)
+                    : raw.SegmentTime.HasValue
+                        ? FormatTime(raw.SegmentTime.Value)
+                        : null;
 
-                // CumulativeTime = elapsed from start-line crossing
-                // Start row: show its own SplitTimeMs (the gun-to-start delay)
-                // All others: SplitTimeMs - startSplitTimeMs
-                var cumulativeMs = i == 0
-                    ? (raw.SplitTimeMs ?? 0L)
-                    : (raw.SplitTimeMs ?? 0L) - startSplitTimeMs;
+                // CumulativeTime = elapsed from the runner's own valid start crossing
+                // (stored SplitTimeMs is gun-based; subtract the baseline).
+                // INVARIANT: at the Finish this equals Results.NetTime.
+                var cumulativeMs = isStartRow ? 0L : SplitBaseline.CumulativeMs(raw.SplitTimeMs, baselineMs);
                 splitInfos[i].CumulativeTimeMs = cumulativeMs;
                 splitInfos[i].CumulativeTime = FormatTime(cumulativeMs);
 
-                splitInfos[i].PaceFormatted = raw.Pace.HasValue ? FormatPace(raw.Pace.Value) : null;
+                // Pace recomputed from the NET cumulative (stored Pace may be stale gun-based).
+                var dist = raw.Checkpoint?.DistanceFromStart ?? 0m;
+                splitInfos[i].PaceFormatted = dist > 0 && cumulativeMs > 0
+                    ? FormatPace(cumulativeMs / 60000m / dist)
+                    : null;
             }
 
             return splitInfos;

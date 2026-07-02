@@ -30,15 +30,18 @@ namespace Runnatics.Services.Helpers
             if (participant.Result != null)
             {
                 SetTimingInfo(response, participant);
-                response.Rankings = BuildRankingInfo(participant.Result, 
+                response.Rankings = BuildRankingInfo(participant.Result,
                     totalParticipantsInRace, totalInGender, totalInCategory);
             }
 
-            // Build split times and calculate performance metrics
+            // Build split times and calculate performance metrics.
+            // LateStartCutOff feeds the NET split baseline (SplitBaseline) — requires the caller
+            // to have included participant.Race.RaceSettings (null-safe: defaults via StartWindow).
             if (splitTimes.Any())
             {
                 var performanceBuilder = new PerformanceMetricsBuilder(_mapper);
-                performanceBuilder.BuildSplitTimesAndPerformance(response, splitTimes);
+                performanceBuilder.BuildSplitTimesAndPerformance(
+                    response, splitTimes, participant.Race?.RaceSettings?.LateStartCutOff);
             }
 
             return response;

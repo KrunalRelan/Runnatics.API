@@ -1490,6 +1490,34 @@ namespace Runnatics.Services
             {
                 _logger.LogInformation("Starting complete RFID processing workflow for race {RaceId}", raceId);
 
+                // ========== PHASE 0: CHECKPOINT CONFIG GUARD (fail loudly) ==========
+                // A malformed checkpoint config (duplicate primaries, circular parent/child,
+                // contradictory device roles, same-device equal distances) makes device→checkpoint
+                // resolution order-dependent — race 65 produced DIFFERENT wrong starts across
+                // reprocesses with no error anywhere. Abort the WHOLE workflow up front: this guard
+                // cannot live only inside Phase 1.5, because a Phase 1.5 failure is deliberately
+                // non-fatal there (warning) and Phase 2/3 would continue on stale assignments.
+                var guardEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var guardRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var guardCheckpoints = await _repository.GetRepository<Checkpoint>().GetQuery(cp =>
+                        cp.RaceId == guardRaceId &&
+                        cp.EventId == guardEventId &&
+                        cp.AuditProperties.IsActive &&
+                        !cp.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                var configViolations = CheckpointConfigValidator.Validate(guardCheckpoints);
+                if (configViolations.Count > 0)
+                {
+                    ErrorMessage = $"Checkpoint configuration invalid for race {guardRaceId}: " +
+                        string.Join(" | ", configViolations);
+                    _logger.LogError("Workflow aborted before Phase 1 — {Message}", ErrorMessage);
+                    response.Errors.Add(ErrorMessage);
+                    response.Status = "Failed";
+                    return response;
+                }
+
                 // ========== PHASE 1: Validate & Process ALL Readings (Race-Level) ==========
                 var phase1Start = DateTime.UtcNow;
                 _logger.LogInformation("Phase 1: Processing ALL staging data for race...");
@@ -4275,6 +4303,23 @@ namespace Runnatics.Services
                     return response;
                 }
 
+                // FAIL LOUDLY on a malformed checkpoint config (duplicate primaries, circular
+                // parent/child, contradictory device roles, same-device equal distances): every
+                // downstream step (shared grouping, pass ordinals, dedup) assumes an unambiguous
+                // device→checkpoint resolution — a silent guess here is order-dependent (race 65).
+                // ProcessCompleteWorkflowAsync runs the same guard before Phase 1; this one covers
+                // direct Phase 1.5 invocations.
+                var checkpointConfigViolations = CheckpointConfigValidator.Validate(checkpoints);
+                if (checkpointConfigViolations.Count > 0)
+                {
+                    ErrorMessage = $"Checkpoint configuration invalid for race {decryptedRaceId}: " +
+                        string.Join(" | ", checkpointConfigViolations);
+                    _logger.LogError("Phase 1.5 aborted — {Message}", ErrorMessage);
+                    response.Status = "Failed";
+                    response.ErrorMessage = ErrorMessage;
+                    return response;
+                }
+
                 // Routing: only proceed with the shared-device loop algorithm when at least
                 // one Device ID is shared across two or more checkpoints. Simple races (each
                 // device mapped to exactly one checkpoint) are fully handled by Phase 1.
@@ -4554,6 +4599,18 @@ namespace Runnatics.Services
                     deviceToGroup[kvp.Key] = kvp.Value.SharedGroupKey;
                 }
 
+                // Start-bound shared groups (those including the distance-0 start checkpoint)
+                // get their Start chosen from RAW reads BEFORE the pass-collapse — see the
+                // GUN-ANCHORED START SELECTION comment inside the loop below. Hoisted here
+                // because the collapse itself must honor the chosen start.
+                var startBoundGroupKeys = sharedDevices.Values
+                    .Where(m => m.StartsAtZero)
+                    .Select(m => m.SharedGroupKey)
+                    .ToHashSet();
+                var startWindowFrom = validStartFloor;
+                var startWindowTo = validStartCeiling;
+                int startCrossReadsExcluded = 0;
+
                 // Group by EPC, then within each EPC, collapse passes within shared groups
                 var readingsByEpc = new Dictionary<string, List<LoopRaceCheckpointAssigner.ReadingInput>>();
 
@@ -4561,6 +4618,38 @@ namespace Runnatics.Services
                 {
                     var epc = epcGroup.Key;
                     var sorted = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
+
+                    // ── GUN-ANCHORED START SELECTION (pre-collapse) ──
+                    // INVARIANT (race-65 fix): the pass-collapse must NEVER merge reads across the
+                    // valid-start floor — a pre-floor read and an in-window read are categorically
+                    // different and cannot share a pass. The start is therefore chosen from RAW
+                    // reads FIRST: the EARLIEST read in [floor, ceiling] per start-bound group
+                    // (same StartWindow rule as Phase 2/3 and display). Reads BEFORE the chosen
+                    // start are pre-gun cross-reads / pre-start noise → excluded from the collapse
+                    // entirely (never assigned). The chosen start is PINNED as its pass-0
+                    // representative below. Race 65: the pre-gun cluster ended 57s before the real
+                    // start — under the 300s pass gap — so the collapse used to merge them and keep
+                    // a pre-floor representative, swallowing the true start; a late finish-area
+                    // read then won the window and was normalized as the "start".
+                    var chosenStartByGroup = new Dictionary<string, LoopRaceCheckpointAssigner.ReadingInput>();
+                    foreach (var grp in sorted
+                        .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
+                        .GroupBy(r => deviceToGroup[r.DeviceId]))
+                    {
+                        if (!startBoundGroupKeys.Contains(grp.Key))
+                            continue;
+
+                        var startRead = grp
+                            .Where(r => r.ReadTimeUtc >= startWindowFrom && r.ReadTimeUtc <= startWindowTo)
+                            .OrderBy(r => r.ReadTimeUtc)
+                            .FirstOrDefault();
+
+                        if (startRead != null)
+                            chosenStartByGroup[grp.Key] = startRead;
+                        // No in-window read → no valid start near the gun: the group falls through
+                        // to plain chronological ordinals (unchanged behavior); an early/pre-floor
+                        // "start" then reaches Phase 2/3 as the INVALID placeholder driving DNS.
+                    }
 
                     // For each shared group, collapse readings within DEDUP_WINDOW_SECONDS
                     // into one representative reading per pass.
@@ -4575,6 +4664,15 @@ namespace Runnatics.Services
                     {
                         if (deviceToGroup.TryGetValue(reading.DeviceId, out var groupKey))
                         {
+                            // Pre-start reads on a group WITH a chosen valid start never enter a
+                            // pass — they are pre-gun cross-reads / pre-start noise, not crossings.
+                            if (chosenStartByGroup.TryGetValue(groupKey, out var chosenStart) &&
+                                reading.ReadTimeUtc < chosenStart.ReadTimeUtc)
+                            {
+                                startCrossReadsExcluded++;
+                                continue;
+                            }
+
                             if (lastPassTimeByGroup.TryGetValue(groupKey, out var lastTime))
                             {
                                 var gap = (reading.ReadTimeUtc - lastTime).TotalSeconds;
@@ -4591,7 +4689,11 @@ namespace Runnatics.Services
                                         var isStartBound = sharedDevices.TryGetValue(reading.DeviceId, out var m)
                                             && m.StartsAtZero;
                                         var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
-                                        if (isStartBound && isFirstPass)
+                                        // Keep-LAST applies only when NO valid start was chosen for
+                                        // the group: with a chosen start the first-pass representative
+                                        // is PINNED (start = EARLIEST in-window read; a later same-pass
+                                        // read must not displace it).
+                                        if (isStartBound && isFirstPass && !chosenStartByGroup.ContainsKey(groupKey))
                                             collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
                                     }
                                     continue;
@@ -4627,36 +4729,24 @@ namespace Runnatics.Services
                 }
 
                 // ================================================================
-                // BUG 2 FIX + ISSUE-1: Pre-compute the pass ORDINAL per shared group.
+                // BUG 2 FIX + ISSUE-1: Assign the pass ORDINAL per shared group.
                 // pass[0] → first checkpoint (smallest DistanceFromStart)
                 // pass[k] → k-th checkpoint in distance order (Sequential clamps extra
                 //           passes to the last checkpoint; Cyclic wraps via pass % N)
                 // 1 pass only → first checkpoint (participant is DNF; later mandatory
                 //               checkpoints missing)
-                // This replaces turnaround-reference for shared devices so that participants
-                // who crossed the Start mat slightly before gun time (filtered by raceStartTime
-                // in the past) correctly get a Start assignment on their first recorded pass.
+                //
+                // The GUN-ANCHORED START SELECTION already ran PRE-COLLAPSE (above): for a
+                // start-bound group with a valid in-window start, every read before the chosen
+                // start was excluded and the chosen start survived the collapse pinned as its
+                // pass-0 representative — so ordinal 0 lands on the Start checkpoint by
+                // construction. Groups without a valid start (and non-start groups) keep plain
+                // chronological ordinals; an early/pre-floor "start" then reaches Phase 2/3 as
+                // the INVALID placeholder driving the early-start → DNS rule — not a 500.
                 // ================================================================
-                // GUN-ANCHORED START SELECTION: start-bound shared groups (those that include
-                // the start checkpoint at distance 0) must pick their Start crossing relative to
-                // THIS race's gun, NOT "earliest read on the mat". On a shared Start/Finish mat at
-                // a staggered-start event, a runner's chip is also detected at the OTHER races'
-                // guns (e.g. a 5K runner near the arch at the 21K gun) — those pre-gun cross-reads
-                // would otherwise win pass 0 and become a bogus Start, pushing the real start read
-                // into the Finish slot (negative/short times). The gun window excludes them.
-                var startBoundGroupKeys = sharedDevices.Values
-                    .Where(m => m.StartsAtZero)
-                    .Select(m => m.SharedGroupKey)
-                    .ToHashSet();
-                var startWindowFrom = validStartFloor;
-                var startWindowTo = validStartCeiling;
-
                 int passIndexOverrideCount = 0;
-                int startCrossReadsExcluded = 0;
                 foreach (var (_, epcReadings) in readingsByEpc)
                 {
-                    var readsToExclude = new List<LoopRaceCheckpointAssigner.ReadingInput>();
-
                     var byGroup = epcReadings
                         .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
                         .GroupBy(r => deviceToGroup[r.DeviceId]);
@@ -4664,63 +4754,19 @@ namespace Runnatics.Services
                     foreach (var grp in byGroup)
                     {
                         var sortedPasses = grp.OrderBy(r => r.ReadTimeUtc).ToList();
-
-                        // Start-bound group → anchor the Start on the gun.
-                        if (startBoundGroupKeys.Contains(grp.Key))
-                        {
-                            var candidates = sortedPasses
-                                .Where(r => r.ReadTimeUtc >= startWindowFrom && r.ReadTimeUtc <= startWindowTo)
-                                .ToList();
-
-                            if (candidates.Count > 0)
-                            {
-                                // Start = EARLIEST valid read in [floor, ceiling] (first valid at/after floor).
-                                var startRead = candidates
-                                    .OrderBy(r => r.ReadTimeUtc)
-                                    .First();
-
-                                // Reads BEFORE the chosen start on a start-bound group are pre-gun
-                                // cross-reads / pre-start noise → drop them (left unassigned). Reads
-                                // AFTER the start (e.g. the Finish crossing) keep passes 1..N so the
-                                // rest of the run chains off the corrected start.
-                                var preStart = sortedPasses
-                                    .Where(r => r.ReadTimeUtc < startRead.ReadTimeUtc)
-                                    .ToList();
-                                readsToExclude.AddRange(preStart);
-                                startCrossReadsExcluded += preStart.Count;
-
-                                var ordered = new List<LoopRaceCheckpointAssigner.ReadingInput> { startRead };
-                                ordered.AddRange(sortedPasses.Where(r => r.ReadTimeUtc > startRead.ReadTimeUtc));
-                                for (int pi = 0; pi < ordered.Count; pi++)
-                                {
-                                    ordered[pi].PassIndexOverride = pi;  // 0-based pass ordinal
-                                    passIndexOverrideCount++;
-                                }
-                                continue;
-                            }
-                            // No in-window candidate → this participant has no valid start crossing
-                            // near the gun. Fall through to chronological (no behavior change); if it
-                            // yields a negative time, the Phase 3 guard flags them (DNF) — not a 500.
-                        }
-
-                        // Default (existing): chronological pass ordinal.
                         for (int pi = 0; pi < sortedPasses.Count; pi++)
                         {
                             sortedPasses[pi].PassIndexOverride = pi;  // 0-based pass ordinal
                             passIndexOverrideCount++;
                         }
                     }
-
-                    // Drop excluded cross-reads so they are never assigned a checkpoint.
-                    if (readsToExclude.Count > 0)
-                        epcReadings.RemoveAll(r => readsToExclude.Contains(r));
                 }
 
                 if (startCrossReadsExcluded > 0)
                 {
                     _logger.LogInformation(
-                        "Gun-window start selection: excluded {Count} pre-gun cross-read(s) on start-bound " +
-                        "shared group(s) (window [{From:HH:mm:ss}, {To:HH:mm:ss}] UTC around gun {Gun:HH:mm:ss})",
+                        "Gun-window start selection (pre-collapse): excluded {Count} pre-start raw read(s) on " +
+                        "start-bound shared group(s) (window [{From:HH:mm:ss}, {To:HH:mm:ss}] UTC around gun {Gun:HH:mm:ss})",
                         startCrossReadsExcluded, startWindowFrom, startWindowTo, raceStartTime);
                 }
 

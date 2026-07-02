@@ -1113,3 +1113,30 @@ Branch: `bugfix/testing-round-1`.
 **Staged UI (blocked on auth):** "Remove manual time" button must warn when the checkpoint has no underlying raw read (runner may become DNF). Endpoint doesn't block; UI warns.
 
 **Build**: 0 errors, pre-existing warnings only. SQL to be run manually by Kunal; test matrix on race 47 (set → reprocess persists; clear+reprocess survives; revert; re-override after revert; move invalidates).
+
+---
+
+## 2026-07-02 — Race 65 start mis-selection: pass-collapse floor invariant + checkpoint-config validation (scope B)
+
+**Problem (race 65, event 38, bib 5176):** The Phase 1.5 pass-collapse merged the pre-gun cluster (05:31:22–05:32:37 IST) with the real start read (05:33:34 — 57s later, under the 300s default `PassGapThresholdSeconds`) and kept a pre-floor representative. Gun-window start selection then ran on collapsed reps, found nothing in-window until the finish-area read, and normalized 05:51:53 as the "start" (GunTime 18:53). The active checkpoint config was CLEAN (shared start/finish mat: Dev 2 primary + Dev 1 child at 0.0/5.0, Dev 11 at 2.5); the earlier "malformed config" 8-row dump included deleted rows. Historical note: that deleted state (duplicate primary Finish rows + circular Dev1↔Dev2 parent/child) is exactly what the new validator rejects.
+
+**Fix 1 — collapse floor invariant (`RFIDImportService.AssignCheckpointsForLoopRaceAsync`):**
+- INVARIANT: the pass-collapse must NEVER merge reads across the valid-start floor. Start selection now runs PRE-collapse on RAW reads — earliest in `[floor, ceiling]` per start-bound shared group (same `StartWindow` helper). Reads before the chosen start are excluded from collapse entirely (never assigned); the chosen start is PINNED as its pass-0 representative (dedup-window keep-LAST suppressed when a valid start exists).
+- The old post-collapse gun-anchored selection block reduced to plain per-group chronological ordinal assignment (one selection site). No-valid-start groups unchanged: chronological ordinals → pre-floor "start" reaches Phase 2/3 as the INVALID placeholder → early-start DNS rule.
+- Behavior nuance: for an in-window start cluster the representative is now the EARLIEST in-window read (was: LAST within dedup window) — matches the deployed "earliest in [floor, ceiling]" rule (Phase 2 `participantStartTimes`, display).
+
+**Fix 2 — checkpoint-config validation (fail loudly, never silently guess):**
+- New `Runnatics.Services/RFID/CheckpointConfigValidator.cs` — checks (a) duplicate PRIMARY checkpoints at one distance, (b) circular parent/child device refs incl. self-parent (DFS over all edges, cycles deduped), (c) contradictory roles: device both primary and child, or child of multiple parents, (d) same device with 2+ rows at equal distance.
+- Wired at: `ProcessCompleteWorkflowAsync` entry (REQUIRED there — a Phase 1.5 failure is deliberately downgraded to a warning at :1541 and the workflow would continue into Phase 2 on stale assignments); `AssignCheckpointsForLoopRaceAsync` after checkpoint load (covers direct Phase 1.5 calls); `CheckpointService` Create/BulkCreate/Clone/Update/AddLoops (reject at authoring time; Update validates a would-be copy before mutating; deletes can't introduce these violations, left unguarded).
+- `LoopRaceCheckpointAssigner.OrderCheckpointsByDistance` equal-distance warning promoted to `InvalidOperationException` (service catch → Status="Failed").
+
+**Confirmed:** `HasLoops=0` does NOT gate the shared-device path — routing is `sharedDeviceExists` (any device with ≥2 checkpoint rows); `HasLoops` only picks Cyclic vs Sequential.
+
+**Known follow-ups (reported, NOT fixed — out of approved scope):**
+- Phase 2 `startCheckpointId = allCheckpoints.OrderBy(DistanceFromStart).First()` is an unstable tie among same-distance rows (396 vs 429); works today because the primary has the lower Id / DB order, but should prefer the primary row explicitly.
+- Orphan-child check (child row whose ParentDeviceId has no primary row at the same distance → Phase 2 merge silently skips) — candidate validator check (e).
+- Save-time guard blocks edits to races whose config is ALREADY invalid until the named rows are fixed (deletes always allowed) — intended fail-loud behavior, noted for support.
+
+**Tests:** new `CheckpointConfigValidatorTests` (13) incl. race-65 active-config-must-pass and 8-row historical-state-fires-a/b/c/d fixtures + assigner throw test. Full suite 31/31 green (`DOTNET_ROLL_FORWARD=LatestMajor` needed locally — no .NET 8 runtime on this box).
+
+**Build:** 0 errors, pre-existing warnings only. NOT committed — awaiting prod verification: reprocess race 65 → bib 5176 start 05:33:34, finish ~05:51:53, net ~18:19, GunTime at start ≈ 34s. EarlyStartCutOff stays 1s (cutoff was not the bug).

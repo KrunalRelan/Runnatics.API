@@ -8,6 +8,7 @@ using Runnatics.Models.Client.Responses.Checkpoints;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
+using Runnatics.Services.RFID;
 
 namespace Runnatics.Services
 {
@@ -79,6 +80,12 @@ namespace Runnatics.Services
                 checkpoint.DistanceFromStart = request.DistanceFromStart;
                 checkpoint.AuditProperties = CreateAuditProperties(currentUserId);
 
+                // Reject a save that would make the race's device→checkpoint config ambiguous
+                if (!await RaceConfigRemainsValidAsync(decryptedEventId, decryptedRaceId, new[] { checkpoint }))
+                {
+                    return false;
+                }
+
                 await checkpointRepo.AddAsync(checkpoint);
                 await _repository.SaveChangesAsync();
 
@@ -132,6 +139,12 @@ namespace Runnatics.Services
                     checkpoint.AuditProperties = CreateAuditProperties(currentUserId);
 
                     entities.Add(checkpoint);
+                }
+
+                // Reject a save that would make the race's device→checkpoint config ambiguous
+                if (!await RaceConfigRemainsValidAsync(decryptedEventId, decryptedRaceId, entities))
+                {
+                    return false;
                 }
 
                 await checkpointRepo.AddRangeAsync(entities);
@@ -195,6 +208,13 @@ namespace Runnatics.Services
                         AuditProperties = CreateAuditProperties(currentUserId)
                     })
                     .ToList();
+
+                // Reject a clone that would make the DESTINATION race's config ambiguous
+                // (e.g. cloning onto a race that already has checkpoints at the same distances)
+                if (!await RaceConfigRemainsValidAsync(decryptedEventId, decryptedDestinationRaceId, clones))
+                {
+                    return false;
+                }
 
                 await checkpointRepo.AddRangeAsync(clones);
                 await _repository.SaveChangesAsync();
@@ -398,6 +418,26 @@ namespace Runnatics.Services
 
                 var currentUserId = _userContext?.IsAuthenticated == true ? _userContext.UserId : 0;
 
+                // Reject an update that would make the race's device→checkpoint config ambiguous.
+                // Validated on an in-memory WOULD-BE copy BEFORE mutating the tracked entity, so a
+                // rejected save leaves nothing dirty in the change tracker.
+                var wouldBe = new Checkpoint
+                {
+                    Id = existing.Id,
+                    EventId = decryptedEventId,
+                    RaceId = decryptedRaceId,
+                    Name = request.Name,
+                    DistanceFromStart = request.DistanceFromStart,
+                    IsMandatory = request.IsMandatory,
+                    DeviceId = decryptedDeviceId ?? 0,
+                    ParentDeviceId = decryptedParentDeviceId.HasValue && decryptedParentDeviceId.Value != 0 ? decryptedParentDeviceId : null
+                };
+
+                if (!await RaceConfigRemainsValidAsync(decryptedEventId, decryptedRaceId, new[] { wouldBe }, existing.Id))
+                {
+                    return false;
+                }
+
                 // FIX: Manually update all fields instead of using AutoMapper
                 // AutoMapper was configured to ignore DeviceId and ParentDeviceId, causing updates to fail
                 existing.Name = request.Name;
@@ -561,6 +601,12 @@ namespace Runnatics.Services
                     return false;
                 }
 
+                // Reject generated loop rows that would make the race's config ambiguous
+                if (!await RaceConfigRemainsValidAsync(decryptedEventId, decryptedRaceId, newCheckpoints))
+                {
+                    return false;
+                }
+
                 await checkpointRepo.AddRangeAsync(newCheckpoints);
                 await _repository.SaveChangesAsync();
 
@@ -691,6 +737,46 @@ namespace Runnatics.Services
                 .Include(c => c.Device)
                 .Include(c => c.ParentDevice)
                 .FirstOrDefaultAsync();
+        }
+
+        /// <summary>
+        /// Validates the WOULD-BE active checkpoint config for a race: current active rows with
+        /// the pending change applied in-memory (rows in <paramref name="addedOrChanged"/> added,
+        /// the row with <paramref name="excludeCheckpointId"/> replaced). Rejects the save when
+        /// the config is malformed — duplicate primaries at one distance, circular parent/child
+        /// devices, contradictory device roles, or same-device equal distances make the RFID
+        /// pipeline's device→checkpoint resolution ambiguous (race 65: silently order-dependent
+        /// wrong start times). Fail loudly at authoring time instead.
+        /// </summary>
+        private async Task<bool> RaceConfigRemainsValidAsync(
+            int eventId,
+            int raceId,
+            IEnumerable<Checkpoint> addedOrChanged,
+            int? excludeCheckpointId = null)
+        {
+            var checkpointRepo = _repository.GetRepository<Checkpoint>();
+            var active = await checkpointRepo.GetQuery(c =>
+                    c.EventId == eventId &&
+                    c.RaceId == raceId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var wouldBe = active
+                .Where(c => !excludeCheckpointId.HasValue || c.Id != excludeCheckpointId.Value)
+                .Concat(addedOrChanged)
+                .ToList();
+
+            var violations = CheckpointConfigValidator.Validate(wouldBe);
+            if (violations.Count == 0)
+                return true;
+
+            ErrorMessage = "Checkpoint configuration would become invalid: " + string.Join(" | ", violations);
+            _logger.LogWarning(
+                "Checkpoint save rejected for EventId: {EventId}, RaceId: {RaceId} — {Violations}",
+                eventId, raceId, ErrorMessage);
+            return false;
         }
 
         /// <summary>

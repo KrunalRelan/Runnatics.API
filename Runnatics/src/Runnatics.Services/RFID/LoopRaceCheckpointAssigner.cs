@@ -283,7 +283,8 @@ namespace Runnatics.Services.RFID
         /// <summary>
         /// Orders a device's checkpoints by DistanceFromStart (tiebreak: Name, then Id) and
         /// projects them to CheckpointSlots. Distance is authoritative for ordinal position;
-        /// equal distances are warned (ordinal order between them is ambiguous).
+        /// equal distances HARD-FAIL (the ordinal order between them is undefined — a silent
+        /// guess produces order-dependent wrong assignments; see CheckpointConfigValidator (d)).
         /// </summary>
         private List<CheckpointSlot> OrderCheckpointsByDistance(IEnumerable<Checkpoint> cps, int deviceId)
         {
@@ -297,10 +298,11 @@ namespace Runnatics.Services.RFID
             {
                 if (ordered[i].DistanceFromStart == ordered[i - 1].DistanceFromStart)
                 {
-                    _logger.LogWarning(
-                        "Device {DeviceId}: Checkpoints '{Cp1}' and '{Cp2}' have the same distance ({Dist}km). " +
-                        "Pass-ordinal assignment between them may be incorrect. Fix DistanceFromStart.",
-                        deviceId, ordered[i - 1].Name, ordered[i].Name, ordered[i].DistanceFromStart);
+                    throw new InvalidOperationException(
+                        $"Checkpoint configuration invalid: device {deviceId} has two checkpoints at the same " +
+                        $"distance ({ordered[i].DistanceFromStart} KM) — " +
+                        $"'{ordered[i - 1].Name}' (Id {ordered[i - 1].Id}) and '{ordered[i].Name}' (Id {ordered[i].Id}). " +
+                        "Pass-ordinal assignment between them is undefined. Fix DistanceFromStart.");
                 }
             }
 

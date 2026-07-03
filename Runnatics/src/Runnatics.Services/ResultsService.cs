@@ -12,6 +12,7 @@ using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Models.Data.Constants;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
+using Runnatics.Services.RFID;
 using Runnatics.Services.Helpers;
 using Runnatics.Services.Interface;
 using ResultsSplitTimeInfo = Runnatics.Models.Client.Responses.Results.SplitTimeInfo;
@@ -1703,6 +1704,52 @@ namespace Runnatics.Services
                 {
                     ErrorMessage = $"Calculated chip time {chipTimeMs}ms is invalid (exceeds 24 hours). Check the entered time.";
                     return null;
+                }
+
+                // ============================================================
+                // #2 SEQUENCE VALIDATION (2026-07-03, client rule): a TYPED manual edit of
+                // checkpoint N must be STRICTLY after checkpoint N−1's crossing and STRICTLY
+                // before N+1's — violation → 400 naming the conflicting checkpoint and time.
+                // Applies to ALL checkpoints. TOGGLED reads (chosenRawReadId) are exempt here —
+                // rule #1 accepts them and validates on processing instead.
+                // ============================================================
+                if (string.IsNullOrEmpty(chosenRawReadId))
+                {
+                    var otherCrossings = (await _repository.GetRepository<ReadNormalized>().GetQuery(rn =>
+                            rn.ParticipantId == decryptedParticipantId &&
+                            rn.CheckpointId != decryptedCheckpointId &&
+                            !rn.AuditProperties.IsDeleted)
+                        .Select(rn => new { rn.CheckpointId, rn.ChipTime })
+                        .ToListAsync())
+                        .Select(rn =>
+                        {
+                            var cp = raceCheckpoints.FirstOrDefault(c => c.Id == rn.CheckpointId);
+                            return cp == null
+                                ? null
+                                : new CrossingNeighbor
+                                {
+                                    Name = cp.Name ?? $"CP {cp.DistanceFromStart}",
+                                    Distance = cp.DistanceFromStart,
+                                    ChipTime = rn.ChipTime
+                                };
+                        })
+                        .Where(c => c != null)
+                        .Select(c => c!)
+                        .ToList();
+
+                    var violation = CrossingSequence.FindViolation(
+                        editedCheckpoint.DistanceFromStart, crossingUtc, otherCrossings);
+
+                    if (violation != null)
+                    {
+                        var editedLocal = TimeZoneInfo.ConvertTimeFromUtc(crossingUtc, eventTz);
+                        var conflictLocal = TimeZoneInfo.ConvertTimeFromUtc(violation.ConflictTime, eventTz);
+                        var editedName = editedCheckpoint.Name ?? $"CP {editedCheckpoint.DistanceFromStart}";
+                        ErrorMessage = violation.MustBeBefore
+                            ? $"{editedName} time {editedLocal:HH:mm:ss} must be before {violation.ConflictName}'s {conflictLocal:HH:mm:ss}."
+                            : $"{editedName} time {editedLocal:HH:mm:ss} must be after {violation.ConflictName}'s {conflictLocal:HH:mm:ss}.";
+                        return null;
+                    }
                 }
 
                 if (isStart)

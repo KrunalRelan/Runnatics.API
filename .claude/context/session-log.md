@@ -1252,3 +1252,15 @@ Branch: `bugfix/testing-round-1`.
 **Phase 2 rewired:** pre-computed chain per participant replaces the inline bestReading; unselected gates produce NO normalized row (discarded reads are not data); monotonic guard retained as no-op safety net. `readingsWithMergedCheckpoints`→gates keyed on merged (parent) checkpoint ids; start gate = CheckpointGates.Start id.
 
 **Tests 120/120:** 12 new selector tests incl. the 5km-loop 2100s example (30min discarded → 36min finish; only-30min → DNF), sequence discard/equal-time, uninhabited-gate chaining, greedy pins, placeholder anchor, missing-start-gate, per-pair min-segment; PassCollapse settings test updated (frozen constant + pass-gap only). NOT pushed.
+
+---
+
+## 2026-07-03 (4) — RULE PASS commit (c): #2 sequence validation on manual time edits
+
+**Rule:** a TYPED manual edit of checkpoint N must be STRICTLY after N−1''s crossing and STRICTLY before N+1''s (equal timestamps violate). Violation → HTTP 400 with a message naming the conflicting checkpoint + its event-local time ("Start time 05:45:34 must be before 2.5 KM''s 05:42:01"). All checkpoints. Gap-tolerant: when the adjacent gate has no crossing, the nearest existing crossing on that side is the bound; the closest offender is the one named.
+
+**Code:** new pure `CrossingSequence.FindViolation` (Runnatics.Services/RFID); wired into `RecordManualTimeAsync` after the 24h sanity check, BEFORE the start-window branch. TOGGLED reads (chosenRawReadId non-null) are EXEMPT from the 400 — rule #1 (commit d) accepts them and validates at processing. Controller 400 phrase-map extended with "must be before"/"must be after". The OFFLINE half of #2 (discard out-of-order reading, next candidate, DNF if none) already landed in commit (b)''s SequentialGateSelector.
+
+**Not enforced (noted):** min-segment (#6) on typed manual edits — the client spec''s #2 lists sequence only; flag if they want the min-segment 400 too.
+
+**Tests 127/127:** 7 new CrossingSequence tests incl. the client''s exact example, strict-equality violation, gap tolerance, closest-offender naming. NOT pushed.

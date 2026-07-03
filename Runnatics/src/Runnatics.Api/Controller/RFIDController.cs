@@ -432,11 +432,14 @@ namespace Runnatics.Api.Controller
                 if (_resultsService.ErrorMessage?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true)
                     return NotFound(response);
 
-                // Validation rejections — chosen-read checks (bad id, wrong checkpoint, wrong participant)
-                // and the typed-time checks — are all client errors → clean 400, never a 500.
+                // Validation rejections — chosen-read checks (bad id, wrong checkpoint, wrong participant),
+                // the typed-time checks and the #2 SEQUENCE violations ("must be before/after …") —
+                // are all client errors → clean 400, never a 500.
                 if (_resultsService.ErrorMessage?.Contains("invalid", StringComparison.OrdinalIgnoreCase) == true ||
                     _resultsService.ErrorMessage?.Contains("after race start", StringComparison.OrdinalIgnoreCase) == true ||
                     _resultsService.ErrorMessage?.Contains("before the race start", StringComparison.OrdinalIgnoreCase) == true ||
+                    _resultsService.ErrorMessage?.Contains("must be before", StringComparison.OrdinalIgnoreCase) == true ||
+                    _resultsService.ErrorMessage?.Contains("must be after", StringComparison.OrdinalIgnoreCase) == true ||
                     _resultsService.ErrorMessage?.Contains("EPC", StringComparison.OrdinalIgnoreCase) == true ||
                     _resultsService.ErrorMessage?.Contains("Selected read", StringComparison.OrdinalIgnoreCase) == true)
                     return BadRequest(response);

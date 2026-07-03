@@ -211,6 +211,21 @@ RemoveManualTimeAsync, ComputeParticipantStatusAsync).
 Reprocessing old events (30/36/38) WILL flip some previously-Finished runners to DNF — the new
 rule working, not a regression.
 
+---
+
+## UI REFRESH CONTRACT after recalc (#3 — API side complete 2026-07-03; UI work gated)
+
+- **Per-participant edit / toggle save** (`POST …/manual-time` → `ManualTimeResponse`): the
+  response is the COMPLETE post-recalc result, reloaded AFTER the transaction + re-rank —
+  display `Status` (OK/DNF/DNS/DSQ), STORED `GunTimeMs`/`NetTimeMs` (+ formatted twins),
+  `OverallRank`/`GenderRank`/`CategoryRank` (null when unranked: DNF/DNS/DSQ), `TotalFinishers`,
+  and the acceptance `Warning` (#1). The UI re-renders the chip-time header card AND the edited
+  participant's grid row from this payload without a second fetch. Caveat: the re-rank is
+  RACE-WIDE — other rows' ranks may have shifted, so a background grid refresh remains correct
+  practice after a batch of edits.
+- **Bulk Process Result** (`ProcessCompleteWorkflowAsync`): returns phase counts only, by
+  design — the UI re-fetches the participants grid on completion (existing behavior, unchanged).
+
 **Edge cases handled:** shared start/finish mat cross-reads (gun window); multiple reads at a mat
 (dedup LAST/EARLIEST); out-and-back via turnaround/pass-ordinal; pre-gun early-line starters (window
 pre-side + gun-clamp).

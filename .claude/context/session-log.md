@@ -1292,3 +1292,15 @@ Branch: `bugfix/testing-round-1`.
 **Un-DSQ path NOT specified by client — not implemented** (RunStatus accepts only DSQ; reverting a DSQ currently requires a direct data fix). Flagged for follow-up.
 
 **Tests 134/134:** +7 (ToDisplay mapping, IsDsq spellings, canonical "DQ" pin, computed-only rejection, DSQ+reason matrix). NOT pushed.
+
+---
+
+## 2026-07-03 (7) — RULE PASS commit (f): #3 Save & Process response completeness — RULE PASS COMPLETE
+
+**Gap:** `ManualTimeResponse` ranks/TotalFinishers were reloaded only when computedStatus==Finished, and stored Gun/Net times were never returned — the UI needed a second fetch for the header card and couldn''t reflect demotions.
+
+**Fix:** reload the COMPLETE post-recalc result on EVERY edit (after transaction + re-rank): new DTO fields GunTimeMs/GunTime/NetTimeMs/NetTime (stored, formatted); Overall/Gender/Category ranks now from the reloaded row (null for DNF/DNS/DSQ — a demotion correctly clears the header); TotalFinishers always. Finished-only guard now scopes ONLY the completion notification. FinishTimeMs/FinishTime keep edited-value semantics (finish edits only).
+
+**UI contract documented in the spec** (UI work gated): per-edit → re-render header card + edited grid row from the response, race-wide rank shifts still warrant a background grid refresh; bulk Process Result → counts only, UI re-fetches (existing behavior).
+
+**Tests 134/134, build 0 errors. RULE PASS (a)–(f) COMPLETE — six commits, NOTHING pushed:** 6ee034d (#7), ef417c7 (#6), aa7ba0a (#2), 01727b9 (#1), a85ef01 (#4+#5), + this. Prod verification before push: reprocess flips Finished→DNF on old events (tell Punit FIRST); 5km-loop min-segment example; sequence 400s; out-of-window toggle → DNF+warning; DSQ → rerank/sort/label on all surfaces incl. public; DDL shows computed status; header card re-renders from edit response.

@@ -2225,8 +2225,6 @@ namespace Runnatics.Services
                     await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                 });
 
-                int? overallRank = null, genderRank = null, categoryRank = null, totalFinishers = null;
-
                 if (computedStatus == ResultStatus.Finished)
                 {
                     // Fire-and-forget completion notification. MUST run on its OWN DI scope: the
@@ -2251,27 +2249,27 @@ namespace Runnatics.Services
                                 notifyParticipantId);
                         }
                     });
-
-                    var updatedResult = await resultsRepo.GetQuery(r =>
-                        r.ParticipantId == decryptedParticipantId &&
-                        r.EventId == decryptedEventId &&
-                        r.RaceId == decryptedRaceId &&
-                        r.AuditProperties.IsActive &&
-                        !r.AuditProperties.IsDeleted)
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync();
-
-                    var count = await resultsRepo.CountAsync(r =>
-                        r.RaceId == decryptedRaceId &&
-                        r.Status == ResultStatus.Finished &&
-                        r.AuditProperties.IsActive &&
-                        !r.AuditProperties.IsDeleted);
-
-                    overallRank = updatedResult?.OverallRank;
-                    genderRank = updatedResult?.GenderRank;
-                    categoryRank = updatedResult?.CategoryRank;
-                    totalFinishers = count;
                 }
+
+                // #3 (2026-07-03): reload the COMPLETE updated result — times, status, ranks — on
+                // EVERY edit (previously finish/Finished-only), AFTER the transaction + re-rank,
+                // so the response is the post-recalc truth the UI re-renders from (chip-time
+                // header card + grid row) without a second fetch. Ranks are null for
+                // DNF/DNS/DSQ — that too is the truth (e.g. a demotion clears the header ranks).
+                var updatedResult = await resultsRepo.GetQuery(r =>
+                    r.ParticipantId == decryptedParticipantId &&
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                var totalFinishers = await resultsRepo.CountAsync(r =>
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == ResultStatus.Finished &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted);
 
                 _logger.LogInformation(
                     "Manual time recorded for participant {ParticipantId} at checkpoint {CheckpointId} ({CheckpointName}): {ChipTimeMs}ms",
@@ -2292,9 +2290,14 @@ namespace Runnatics.Services
                     IsManual = true,
                     FinishTimeMs = isFinish ? chipTimeMs : null,
                     FinishTime = isFinish ? FormatTime(chipTimeMs) : null,
-                    OverallRank = overallRank,
-                    GenderRank = genderRank,
-                    CategoryRank = categoryRank,
+                    // #3: the complete post-recalc result on EVERY edit (stored times + ranks).
+                    GunTimeMs = updatedResult?.GunTime,
+                    GunTime = updatedResult?.GunTime is { } g ? FormatTime(g) : null,
+                    NetTimeMs = updatedResult?.NetTime,
+                    NetTime = updatedResult?.NetTime is { } n ? FormatTime(n) : null,
+                    OverallRank = updatedResult?.OverallRank,
+                    GenderRank = updatedResult?.GenderRank,
+                    CategoryRank = updatedResult?.CategoryRank,
                     TotalFinishers = totalFinishers,
                     Status = ResultStatus.ToDisplay(computedStatus), // #7: "Finished" renders as "OK"
                     // #1: accepted-but-invalid crossings (out-of-window start / sequence /

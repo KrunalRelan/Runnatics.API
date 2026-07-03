@@ -1752,24 +1752,28 @@ namespace Runnatics.Services
                     }
                 }
 
+                string? acceptanceWarning = null;
+
                 if (isStart)
                 {
-                    // Apply the valid-start window (gun − EarlyStartCutOff … gun + LateStartCutOff) — the
-                    // SAME rule as the pipeline. A start in the window is valid (even slightly before the
-                    // gun); a start OUTSIDE it is not a valid start.
-                    var startInWindow = crossingUtc >= validStartFloor && crossingUtc <= validStartCeiling;
+                    // #1 + Decision 2 (2026-07-03) — SUPERSEDES the discard-and-warn rule (46ec16d):
+                    // an out-of-window start (TYPED or TOGGLED) is ACCEPTED and stored; #7 then
+                    // classifies the runner — invalid start data → DNF when other mandatory gates
+                    // have valid data, DNS when it was their only data. One rule for both UI paths:
+                    // "discard → DNS" vs "accept → DNF" depending on which control the operator
+                    // used was incoherent. The consequence is visible and revertable.
+                    var startInWindow = StartWindow.Contains(crossingUtc, validStartFloor, validStartCeiling);
                     if (!startInWindow)
                     {
-                        // Out-of-window (e.g. a pre-floor stray) → NOT a valid start → discard it and flag
-                        // the runner DNS (mirrors the pipeline's early-start rule). Succeeds with a warning;
-                        // NEVER a hard error.
-                        return await DiscardOutOfWindowStartAsync(
-                            decryptedEventId, decryptedRaceId, decryptedParticipantId, decryptedCheckpointId,
-                            participantId, participant.BibNumber ?? string.Empty, participant.FullName,
-                            editedCheckpoint.Name, crossingUtc, eventTz);
+                        var localCrossing = TimeZoneInfo.ConvertTimeFromUtc(crossingUtc, eventTz);
+                        acceptanceWarning =
+                            $"Start crossing {localCrossing:HH:mm:ss} is outside the valid-start window " +
+                            "(gun − EarlyStartCutOff … gun + LateStartCutOff) — accepted, but it does not " +
+                            "count as valid start data; the runner's status is computed accordingly.";
                     }
-                    // A legit slightly-early start (crossing in [floor, gun)) has chipTimeMs < 0 → clamp the
-                    // baseline up to the gun (BUG-27 gun clamp) so downstream Gun/Net/Split times aren't negative.
+                    // A pre-gun crossing has chipTimeMs < 0 → clamp the baseline up to the gun
+                    // (BUG-27 gun clamp) so downstream Gun/Net/Split times aren't negative. Applies
+                    // to accepted out-of-window EARLY starts too (the true crossing stays in ChipTime).
                     if (chipTimeMs < 0)
                         chipTimeMs = 0;
                 }
@@ -1810,9 +1814,69 @@ namespace Runnatics.Services
                     .Select(rn => new { rn.CheckpointId, rn.ChipTime })
                     .ToListAsync();
 
-                // Add the checkpoint being recorded now to the covered set (in-memory, before DB write)
+                // #1: the edited/toggled crossing counts as VALID data at its gate only when it
+                // satisfies the SEQUENCE rule (#2) and the MINIMUM-SEGMENT rule (#6, when ON)
+                // against the runner's other crossings. TYPED sequence violations were already
+                // 400-rejected above; this check covers TOGGLED reads (accepted per rule #1) and
+                // min-segment for both paths. Invalid ⇒ stored, but the gate stays UNCOVERED and
+                // #7 classifies the runner accordingly. (Start-gate validity is the window check
+                // below — not this.)
+                var editedGateDataValid = true;
+                if (!isStart)
+                {
+                    var allOtherRows = await rnRepo.GetQuery(rn =>
+                            rn.ParticipantId == decryptedParticipantId &&
+                            rn.CheckpointId != decryptedCheckpointId &&
+                            !rn.AuditProperties.IsDeleted)
+                        .Select(rn => new { rn.CheckpointId, rn.ChipTime })
+                        .ToListAsync();
+
+                    var neighbors = allOtherRows
+                        .Select(rn =>
+                        {
+                            var cp = raceCheckpoints.FirstOrDefault(c => c.Id == rn.CheckpointId);
+                            return cp == null
+                                ? null
+                                : new CrossingNeighbor
+                                {
+                                    Name = cp.Name ?? $"CP {cp.DistanceFromStart}",
+                                    Distance = cp.DistanceFromStart,
+                                    ChipTime = rn.ChipTime
+                                };
+                        })
+                        .Where(c => c != null)
+                        .Select(c => c!)
+                        .ToList();
+
+                    if (CrossingSequence.FindViolation(editedCheckpoint.DistanceFromStart, crossingUtc, neighbors) != null)
+                        editedGateDataValid = false;
+
+                    var minSegmentSecondsManual = PassCollapseSettings.MinSegmentSeconds(race.RaceSettings?.DedUpSeconds);
+                    if (editedGateDataValid && minSegmentSecondsManual.HasValue)
+                    {
+                        var previousCrossing = neighbors
+                            .Where(c => c.Distance < editedCheckpoint.DistanceFromStart)
+                            .OrderByDescending(c => c.ChipTime)
+                            .FirstOrDefault();
+                        if (previousCrossing != null &&
+                            (crossingUtc - previousCrossing.ChipTime).TotalSeconds < minSegmentSecondsManual.Value)
+                            editedGateDataValid = false;
+                    }
+
+                    if (!editedGateDataValid)
+                    {
+                        var invalidGateName = editedCheckpoint.Name ?? $"CP {editedCheckpoint.DistanceFromStart}";
+                        acceptanceWarning = (acceptanceWarning == null ? string.Empty : acceptanceWarning + " ") +
+                            $"{invalidGateName}'s crossing violates the sequence/minimum-segment rule — accepted, " +
+                            "but it does not count as valid data; the runner's status is computed accordingly.";
+                    }
+                }
+
+                // Add the checkpoint being recorded now to the covered set (in-memory, before DB
+                // write) — only when its data is VALID (#1/#7).
                 var coveredCheckpointIds = existingDetections.Select(d => d.CheckpointId).Distinct().ToHashSet();
-                coveredCheckpointIds.Add(decryptedCheckpointId);
+                if (editedGateDataValid)
+                    coveredCheckpointIds.Add(decryptedCheckpointId);
 
                 // #7 start-gate validity: the edit itself when it IS the start (in-window — an
                 // out-of-window start was discarded above), else the earliest existing start row.
@@ -2210,7 +2274,10 @@ namespace Runnatics.Services
                     GenderRank = genderRank,
                     CategoryRank = categoryRank,
                     TotalFinishers = totalFinishers,
-                    Status = ResultStatus.ToDisplay(computedStatus) // #7: "Finished" renders as "OK"
+                    Status = ResultStatus.ToDisplay(computedStatus), // #7: "Finished" renders as "OK"
+                    // #1: accepted-but-invalid crossings (out-of-window start / sequence /
+                    // min-segment) succeed WITH a warning naming the consequence.
+                    Warning = acceptanceWarning
                 };
             }
             catch (Exception ex)
@@ -2221,74 +2288,10 @@ namespace Runnatics.Services
             }
         }
 
-        /// <summary>
-        /// A manually-entered START crossing that falls OUTSIDE the valid-start window is not a valid
-        /// start: discard it (soft-delete any manual override / normalized / split row at the start
-        /// checkpoint), flag the runner DNS (mirrors the pipeline's pre-floor early-start rule), re-rank,
-        /// and return a SUCCESS response with a warning — never a hard error.
-        /// </summary>
-        private async Task<ManualTimeResponse?> DiscardOutOfWindowStartAsync(
-            int eventId, int raceId, int participantId, int checkpointId,
-            string encParticipantId, string bib, string fullName, string? checkpointName,
-            DateTime crossingUtc, TimeZoneInfo eventTz)
-        {
-            var userId = _userContext.UserId;
-            var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
-            var rnRepo = _repository.GetRepository<ReadNormalized>();
-            var splitRepo = _repository.GetRepository<SplitTimes>();
-            var resultsRepo = _repository.GetRepository<Results>();
-
-            await _repository.ExecuteInTransactionAsync(async () =>
-            {
-                // Do NOT record this invalid start — soft-delete any manual override / normalized / split
-                // row at the start checkpoint (key off participant+checkpoint, like RemoveManualTimeAsync).
-                var overrides = await overrideRepo.GetQuery(o =>
-                    o.ParticipantId == participantId && o.CheckpointId == checkpointId && !o.AuditProperties.IsDeleted).ToListAsync();
-                foreach (var o in overrides) { o.AuditProperties.IsDeleted = true; o.AuditProperties.IsActive = false; o.AuditProperties.UpdatedBy = userId; o.AuditProperties.UpdatedDate = DateTime.UtcNow; }
-                if (overrides.Count > 0) await overrideRepo.UpdateRangeAsync(overrides);
-
-                var rns = await rnRepo.GetQuery(rn =>
-                    rn.ParticipantId == participantId && rn.CheckpointId == checkpointId && !rn.AuditProperties.IsDeleted).ToListAsync();
-                foreach (var rn in rns) { rn.AuditProperties.IsDeleted = true; rn.AuditProperties.IsActive = false; rn.AuditProperties.UpdatedBy = userId; rn.AuditProperties.UpdatedDate = DateTime.UtcNow; }
-                if (rns.Count > 0) await rnRepo.UpdateRangeAsync(rns);
-
-                var splits = await splitRepo.GetQuery(s =>
-                    s.ParticipantId == participantId && s.CheckpointId == checkpointId && !s.AuditProperties.IsDeleted).ToListAsync();
-                foreach (var s in splits) { s.AuditProperties.IsDeleted = true; s.AuditProperties.IsActive = false; s.AuditProperties.UpdatedBy = userId; s.AuditProperties.UpdatedDate = DateTime.UtcNow; }
-                if (splits.Count > 0) await splitRepo.UpdateRangeAsync(splits);
-
-                // Force DNS — a start outside the valid window invalidates the whole run (pipeline case-2).
-                var result = await resultsRepo.GetQuery(r =>
-                    r.ParticipantId == participantId && r.EventId == eventId && r.RaceId == raceId).FirstOrDefaultAsync();
-                if (result != null)
-                {
-                    result.Status = ResultStatus.DNS;
-                    result.FinishTime = null; result.GunTime = null; result.NetTime = null;
-                    result.OverallRank = null; result.GenderRank = null; result.CategoryRank = null;
-                    result.IsManual = true;
-                    result.AuditProperties.UpdatedBy = userId; result.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                    await resultsRepo.UpdateAsync(result);
-                }
-                await _repository.SaveChangesAsync();
-            });
-
-            // Re-rank the race (DNS excluded) via the shared RankCalculator.
-            await CalculateResultRankingsAsync(eventId, raceId, userId);
-
-            var localCrossing = TimeZoneInfo.ConvertTimeFromUtc(crossingUtc, eventTz);
-            return new ManualTimeResponse
-            {
-                ParticipantId = encParticipantId,
-                Bib = bib,
-                FullName = fullName,
-                CheckpointId = checkpointId,
-                CheckpointName = checkpointName,
-                IsManual = true,
-                Status = ResultStatus.DNS,
-                Warning = $"Start crossing {localCrossing:HH:mm:ss} is outside the valid-start window " +
-                          "(gun − EarlyStartCutOff … gun + LateStartCutOff); not recorded — runner flagged DNS (did not validly start)."
-            };
-        }
+        // DiscardOutOfWindowStartAsync was REMOVED 2026-07-03 (rule #1 + decision 2): an
+        // out-of-window start — typed or toggled — is now ACCEPTED and stored, and #7
+        // classification decides the consequence (DNF/DNS). The discard-and-warn behavior
+        // (46ec16d) was incoherent once toggles accepted the same physical situation.
 
         public async Task<bool> RemoveManualTimeAsync(
             string eventId,

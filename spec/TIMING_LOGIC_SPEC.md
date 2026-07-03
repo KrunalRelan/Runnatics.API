@@ -200,6 +200,14 @@ RemoveManualTimeAsync, ComputeParticipantStatusAsync).
 - *Late-only-finisher keep* — start past the ceiling + finish data was Finished; now DNF.
 - *Early-taint DNS* — pre-floor start + finish data was DNS; now DNF (early read = invalid data,
   not a taint); DNS only when the invalid read was their only data.
+- *Manual-start discard-and-warn* (46ec16d) — an out-of-window MANUAL start used to be
+  discarded (rows soft-deleted) with the runner force-flagged DNS. Now (#1 + decision 2) an
+  out-of-window start — TYPED or TOGGLED — is **accepted and stored**, and #7 classification
+  decides the consequence (DNF when other mandatory gates have valid data, DNS otherwise).
+  Reason: the same physical situation must not produce "discard → DNS" via one UI control and
+  "accept → DNF" via another; one rule everywhere, visible and revertable. Likewise a toggled
+  mid/finish read violating the sequence or minimum-segment rule is accepted-but-invalid: the
+  gate stays uncovered and the save succeeds with a warning naming the consequence.
 Reprocessing old events (30/36/38) WILL flip some previously-Finished runners to DNF — the new
 rule working, not a regression.
 

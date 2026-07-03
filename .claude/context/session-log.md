@@ -1264,3 +1264,15 @@ Branch: `bugfix/testing-round-1`.
 **Not enforced (noted):** min-segment (#6) on typed manual edits — the client spec''s #2 lists sequence only; flag if they want the min-segment 400 too.
 
 **Tests 127/127:** 7 new CrossingSequence tests incl. the client''s exact example, strict-equality violation, gap tolerance, closest-offender naming. NOT pushed.
+
+---
+
+## 2026-07-03 (5) — RULE PASS commit (d): #1 toggle/manual acceptance (accept → classify)
+
+**SUPERSEDES discard-and-warn (46ec16d), decision 2:** an out-of-window START — TYPED or TOGGLED — is now ACCEPTED and stored (override + normalized row persist; BUG-27 gun clamp extended to accepted early starts); #7 classification decides the consequence (start data invalid → DNF with other valid gates, DNS when only data). `DiscardOutOfWindowStartAsync` DELETED (tombstone comment at the site). Save succeeds WITH a warning naming the consequence (ManualTimeResponse.Warning).
+
+**Toggled/typed mid+finish gates:** the edited crossing counts as VALID data at its gate only if it passes the SEQUENCE rule and the MINIMUM-SEGMENT rule (#6, when DedUpSeconds set) against the runner''s other crossings — computed at save/processing in RecordManualTimeAsync (typed sequence violations still 400 first, commit c). Invalid ⇒ stored but gate UNCOVERED → #7 DNF path + warning.
+
+**Persistence:** ChosenRawReadId infra unchanged — toggles survive clear+reprocess via Phase 2.4; on reprocess Phase 3 re-applies the same #7 window check to the override row → consistent classification by construction.
+
+**Spec:** discard-and-warn added to the DELIBERATELY REMOVED list with the incoherence reason. **Tests 127/127** (pure pieces — Contains, CrossingSequence, MinSegmentSeconds — already pinned; the accept-path itself is EF-heavy → prod/integration verification: toggle an out-of-window start → runner DNF + warning, revert → recompute). NOT pushed.

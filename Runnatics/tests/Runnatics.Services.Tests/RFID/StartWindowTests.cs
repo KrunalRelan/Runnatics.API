@@ -113,5 +113,115 @@ namespace Runnatics.Services.Tests.RFID
 
             Assert.AreEqual(new DateTime(2026, 6, 28, 23, 58, 0, DateTimeKind.Utc), floor);
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // SelectStartRead — START SELECTION INVARIANT (client-confirmed, historical):
+        // start = LAST read of the FIRST in-window pass. Changing this rule requires
+        // explicit client sign-off.
+        // ─────────────────────────────────────────────────────────────────
+
+        private sealed record TimedRead(int Id, DateTime T);
+
+        private static readonly DateTime Floor30 = Gun.AddSeconds(-30);
+        private static readonly DateTime Ceiling1200 = Gun.AddSeconds(1200);
+        private const int PassGap = 300;
+
+        private static TimedRead? Select(DateTime floor, params TimedRead[] reads) =>
+            StartWindow.SelectStartRead(reads, r => r.T, floor, Ceiling1200, PassGap);
+
+        [TestMethod]
+        public void SelectStartRead_InWindowCluster_LastReadWins()
+        {
+            // The screenshot chip (race 65, 44E0014498A0): cluster 05:32:50 → 05:33:33 IST
+            // (gun 05:33:00), next checkpoint 05:42:00 → start = 05:33:33.
+            var reads = new[]
+            {
+                new TimedRead(1, Gun.AddSeconds(-10)), // 05:32:50
+                new TimedRead(2, Gun.AddSeconds(-6)),  // 05:32:54
+                new TimedRead(3, Gun.AddSeconds(-1)),  // 05:32:59
+                new TimedRead(4, Gun.AddSeconds(13)),  // 05:33:13
+                new TimedRead(5, Gun.AddSeconds(16)),  // 05:33:16
+                new TimedRead(6, Gun.AddSeconds(20)),  // 05:33:20
+                new TimedRead(7, Gun.AddSeconds(26)),  // 05:33:26
+                new TimedRead(8, Gun.AddSeconds(30)),  // 05:33:30
+                new TimedRead(9, Gun.AddSeconds(33))   // 05:33:33 ← the start
+            };
+
+            var selected = Select(Floor30, reads);
+
+            Assert.AreEqual(9, selected!.Id, "start = LAST read of the first in-window pass, not the earliest");
+        }
+
+        [TestMethod]
+        public void SelectStartRead_SecondInWindowPass_IsNotTheStart()
+        {
+            // A separate in-window blip past the pass gap is a DIFFERENT pass (the next
+            // crossing), never the start.
+            var reads = new[]
+            {
+                new TimedRead(1, Gun.AddSeconds(10)),
+                new TimedRead(2, Gun.AddSeconds(20)),   // last of FIRST pass ← the start
+                new TimedRead(3, Gun.AddSeconds(400))   // gap 380s > 300s → second pass (still in-window)
+            };
+
+            var selected = Select(Floor30, reads);
+
+            Assert.AreEqual(2, selected!.Id);
+        }
+
+        [TestMethod]
+        public void SelectStartRead_PreFloorNeverAnchorsOrChains()
+        {
+            // Client regression 06:07:29 / 06:08:05: the pre-floor read is 36s from the
+            // in-window one (well under the pass gap) — it must neither win nor anchor.
+            var reads = new[]
+            {
+                new TimedRead(1, Gun.AddSeconds(-31)),  // pre-floor (floor = gun − 30s)
+                new TimedRead(2, Gun.AddSeconds(5))     // the only in-window read ← the start
+            };
+
+            var selected = Select(Floor30, reads);
+
+            Assert.AreEqual(2, selected!.Id, "unchanged vs the old rule — single in-window read");
+        }
+
+        [TestMethod]
+        public void SelectStartRead_SamePassReadPastCeiling_ExtendsButCannotWin()
+        {
+            var reads = new[]
+            {
+                new TimedRead(1, Ceiling1200.AddSeconds(-10)),  // in-window ← the start
+                new TimedRead(2, Ceiling1200.AddSeconds(15))    // same pass (gap 25s) but PAST the ceiling
+            };
+
+            var selected = Select(Floor30, reads);
+
+            Assert.AreEqual(1, selected!.Id, "a same-pass read past the ceiling is not eligible");
+        }
+
+        [TestMethod]
+        public void SelectStartRead_NoInWindowRead_ReturnsNull()
+        {
+            Assert.IsNull(Select(Floor30, new TimedRead(1, Gun.AddSeconds(-120))), "pre-floor only");
+            Assert.IsNull(Select(Floor30, new TimedRead(1, Ceiling1200.AddSeconds(60))), "post-ceiling only");
+            Assert.IsNull(StartWindow.SelectStartRead(
+                Array.Empty<TimedRead>(), r => r.T, Floor30, Ceiling1200, PassGap), "no reads");
+        }
+
+        [TestMethod]
+        public void SelectStartRead_SingleInWindowRead_Bib5176_Unchanged()
+        {
+            // Bib 5176: only in-window start-cluster read is 05:33:34; the finish reads are a
+            // separate pass (gap ≫ 300s) → start unchanged by the LAST-read rule.
+            var reads = new[]
+            {
+                new TimedRead(1, Gun.AddSeconds(34)),    // his real start
+                new TimedRead(2, Gun.AddSeconds(1133))   // finish crossing — separate pass
+            };
+
+            var selected = Select(Gun.AddSeconds(-1), reads);
+
+            Assert.AreEqual(1, selected!.Id);
+        }
     }
 }

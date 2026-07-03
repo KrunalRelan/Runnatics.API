@@ -9,10 +9,12 @@ namespace Runnatics.Services.Tests.RFID
     /// ceiling 00:23:00.
     ///
     /// Input contract (documented on the classifier): earliestStartRead is the participant's
-    /// earliest NORMALIZED start-gate row. Phase 2 keeps the earliest VALID in-window read when
-    /// one exists (else the earliest available as an INVALID placeholder) — so row l
+    /// earliest NORMALIZED start-gate row. Phase 2 stores the SELECTED valid start read (START
+    /// SELECTION INVARIANT — LAST read of the first in-window pass, StartWindow.SelectStartRead)
+    /// when one exists (else the earliest available as an INVALID placeholder) — so row l
     /// ("early + in-window → in-window wins") holds because the early read never reaches the
-    /// classifier when an in-window read exists.
+    /// classifier when an in-window read exists. The truth table itself is selection-agnostic:
+    /// validity is "≥1 in-window read"; only WHICH read wins changed in the LAST-read revert.
     /// </summary>
     [TestClass]
     public class ResultClassifierTests
@@ -132,9 +134,9 @@ namespace Runnatics.Services.Tests.RFID
         [TestMethod]
         public void RowL_EarlyAndInWindowReads_InWindowWins_Finished()
         {
-            // Phase 2 keeps the earliest VALID in-window read as THE normalized start row when
-            // one exists — the pre-floor read never reaches the classifier. What arrives here
-            // is the in-window read.
+            // Phase 2 stores the SELECTED valid in-window read (LAST of the first in-window
+            // pass) as THE normalized start row when one exists — the pre-floor read never
+            // reaches the classifier. What arrives here is the in-window read.
             var normalizedStart = Gun.AddSeconds(34);
             Assert.AreEqual(ParticipantOutcome.Finished, Classify(normalizedStart, covered: true));
         }

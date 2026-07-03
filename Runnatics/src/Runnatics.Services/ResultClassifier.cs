@@ -16,11 +16,13 @@ namespace Runnatics.Services
     /// table is unit-testable row by row; Phase 3 calls this per participant.
     ///
     /// Inputs (all derived by the caller from normalized data):
-    ///   earliestStartRead   — the participant's EARLIEST normalized start-gate crossing
-    ///                         (Phase 2 keeps the earliest VALID in-window read when one
+    ///   earliestStartRead   — the participant's EARLIEST normalized start-gate crossing.
+    ///                         Phase 2 stores ONE start row per participant: the SELECTED
+    ///                         valid start (START SELECTION INVARIANT — the LAST read of the
+    ///                         first in-window pass, StartWindow.SelectStartRead) when one
     ///                         exists, else the earliest available read as an INVALID
     ///                         placeholder — so "early + in-window both present" resolves
-    ///                         to the in-window read BEFORE this classifier runs);
+    ///                         to the in-window read BEFORE this classifier runs;
     ///   validStartFloor / validStartCeiling — [gun − EarlyStartCutOff, gun + LateStartCutOff]
     ///                         via StartWindow (null when the race has no gun — fall back
     ///                         to "any read is a valid start");

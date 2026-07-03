@@ -355,11 +355,13 @@ namespace Runnatics.Services.RFID
         ///
         /// INVARIANT (race-65 fix): the pass-collapse must NEVER merge reads across the valid-start
         /// floor — a pre-floor read and an in-window read are categorically different and cannot
-        /// share a pass. The start is therefore chosen from RAW reads FIRST: the EARLIEST read in
-        /// [validStartFloor, validStartCeiling] per start-bound group (same StartWindow rule as
-        /// Phase 2/3 and display). Reads BEFORE the chosen start are pre-gun cross-reads /
-        /// pre-start noise → excluded entirely (never assigned). The chosen start is PINNED as its
-        /// pass-0 representative (the dedup-window keep-LAST rule never displaces it). Race 65: the
+        /// share a pass. The start is therefore chosen from RAW reads FIRST via the START SELECTION
+        /// INVARIANT (StartWindow.SelectStartRead): the LAST read of the FIRST in-window pass in
+        /// [validStartFloor, validStartCeiling] — the runner LEAVING the mat (historical
+        /// client-confirmed rule; same helper as Phase 2). Reads BEFORE the chosen start (pre-floor
+        /// noise AND the earlier reads of the same start cluster) are excluded entirely (never
+        /// assigned — one crossing, one read). The chosen start is PINNED as its pass-0
+        /// representative (the dedup-window keep-LAST rule never displaces it). Race 65: the
         /// pre-gun cluster ended 57s before the real start — under the 300s pass gap — so the
         /// collapse used to merge them and keep a pre-floor representative, swallowing the true
         /// start; a late finish-area read then won the window and was normalized as the "start".
@@ -397,7 +399,8 @@ namespace Runnatics.Services.RFID
                 var sorted = epcGroup.OrderBy(r => r.ReadTimeUtc).ToList();
 
                 // ── GUN-ANCHORED START SELECTION (pre-collapse) ──
-                // Earliest RAW read in [floor, ceiling] per start-bound group. See invariant above.
+                // START SELECTION INVARIANT (StartWindow.SelectStartRead): the LAST read of the
+                // FIRST in-window pass per start-bound group. See invariant above.
                 var chosenStartByGroup = new Dictionary<string, ReadingInput>();
                 foreach (var grp in sorted
                     .Where(r => deviceToGroup.ContainsKey(r.DeviceId))
@@ -406,10 +409,8 @@ namespace Runnatics.Services.RFID
                     if (!startBoundGroupKeys.Contains(grp.Key))
                         continue;
 
-                    var startRead = grp
-                        .Where(r => r.ReadTimeUtc >= validStartFloor && r.ReadTimeUtc <= validStartCeiling)
-                        .OrderBy(r => r.ReadTimeUtc)
-                        .FirstOrDefault();
+                    var startRead = StartWindow.SelectStartRead(
+                        grp, r => r.ReadTimeUtc, validStartFloor, validStartCeiling, passGapThresholdSeconds);
 
                     if (startRead != null)
                         chosenStartByGroup[grp.Key] = startRead;
@@ -458,8 +459,9 @@ namespace Runnatics.Services.RFID
                                     var isFirstPass = completedPassCountByGroup.GetValueOrDefault(groupKey, 0) == 0;
                                     // Keep-LAST applies only when NO valid start was chosen for
                                     // the group: with a chosen start the first-pass representative
-                                    // is PINNED (start = EARLIEST in-window read; a later same-pass
-                                    // read must not displace it).
+                                    // is PINNED (start = LAST read of the first IN-WINDOW pass; a
+                                    // later same-pass read — necessarily past the ceiling — must
+                                    // not displace it).
                                     if (isStartBound && isFirstPass && !chosenStartByGroup.ContainsKey(groupKey))
                                         collapsedReadings[lastAddedIndexByGroup[groupKey]] = reading;
                                 }

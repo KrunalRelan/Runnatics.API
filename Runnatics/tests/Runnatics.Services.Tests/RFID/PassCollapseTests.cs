@@ -62,6 +62,9 @@ namespace Runnatics.Services.Tests.RFID
         private PassCollapseResult Collapse(params ReadingInput[] reads) =>
             CollapseIntoPasses(reads, _shared, Floor, Ceiling, Dedup, PassGap);
 
+        private PassCollapseResult CollapseWithFloor(DateTime floor, params ReadingInput[] reads) =>
+            CollapseIntoPasses(reads, _shared, floor, Ceiling, Dedup, PassGap);
+
         // ─── 3a: the bib-5176 case, end to end through collapse → assign → dedup ───
 
         [TestMethod]
@@ -104,22 +107,99 @@ namespace Runnatics.Services.Tests.RFID
             Assert.AreEqual(TimeSpan.FromSeconds(1099), finish.ReadTimeUtc - start.ReadTimeUtc);
         }
 
-        // ─── 3b: in-window start cluster → EARLIEST wins (pinned representative) ───
+        // ─── In-window start cluster → LAST read of the first pass wins (START SELECTION
+        //     INVARIANT — historical client rule; the runner LEAVING the mat) ───
 
         [TestMethod]
-        public void InWindowStartCluster_RepresentativeIsEarliest()
+        public void InWindowStartCluster_RepresentativeIsLastOfFirstPass()
         {
             var result = Collapse(
-                Read(1, 2, Gun.AddSeconds(34)),   // :34 ← must win
-                Read(2, 2, Gun.AddSeconds(36)),   // :36 (same pass, within dedup window)
-                Read(3, 2, Gun.AddSeconds(40)));  // :40 (old keep-LAST would have picked this)
+                Read(1, 2, Gun.AddSeconds(34)),   // :34 (queued on the mat)
+                Read(2, 2, Gun.AddSeconds(36)),   // :36
+                Read(3, 2, Gun.AddSeconds(40)));  // :40 ← the start (last of the cluster)
 
             var reps = result.ReadingsByEpc["E1"];
             Assert.AreEqual(1, reps.Count);
-            Assert.AreEqual(Gun.AddSeconds(34), reps[0].ReadTimeUtc,
-                "start = EARLIEST raw in-window read; keep-LAST must not displace the pinned start");
+            Assert.AreEqual(Gun.AddSeconds(40), reps[0].ReadTimeUtc,
+                "START SELECTION INVARIANT: LAST read of the first in-window pass");
             Assert.AreEqual(0, reps[0].PassIndexOverride);
-            Assert.AreEqual(0, result.PreStartReadsExcluded);
+            Assert.AreEqual(2, result.PreStartReadsExcluded,
+                "the earlier cluster reads are the same crossing — excluded, never assigned");
+        }
+
+        // ─── The screenshot chip (race 65, 44E0014498A0): cluster 05:32:50 → 05:33:33,
+        //     next checkpoint 05:42:00 → start = 05:33:33 ───
+
+        [TestMethod]
+        public void ScreenshotChip_InWindowCluster_StartIsLastRead_053333()
+        {
+            // Wider early cutoff (30s → floor 05:32:30 IST) so the whole cluster is in-window.
+            var floor30 = Gun.AddSeconds(-30);
+            var result = CollapseWithFloor(floor30,
+                Read(1, 2, Gun.AddSeconds(-10)),   // 05:32:50 ┐
+                Read(2, 2, Gun.AddSeconds(-6)),    // 05:32:54 │
+                Read(3, 2, Gun.AddSeconds(-1)),    // 05:32:59 │
+                Read(4, 2, Gun.AddSeconds(13)),    // 05:33:13 ├ one pass on the mat
+                Read(5, 2, Gun.AddSeconds(16)),    // 05:33:16 │
+                Read(6, 2, Gun.AddSeconds(20)),    // 05:33:20 │
+                Read(7, 2, Gun.AddSeconds(26)),    // 05:33:26 │
+                Read(8, 2, Gun.AddSeconds(30)),    // 05:33:30 ┘
+                Read(9, 2, Gun.AddSeconds(33)),    // 05:33:33 ← the start (leaving the mat)
+                Read(10, 1, Gun.AddSeconds(1080))); // finish area — separate pass
+
+            Assert.AreEqual(8, result.PreStartReadsExcluded, "the eight earlier cluster reads excluded");
+            var reps = result.ReadingsByEpc["E1"];
+            Assert.AreEqual(2, reps.Count);
+            Assert.AreEqual(Gun.AddSeconds(33), reps[0].ReadTimeUtc, "start = 05:33:33, not 05:32:50");
+            Assert.AreEqual(0, reps[0].PassIndexOverride);
+            Assert.AreEqual(1, reps[1].PassIndexOverride);
+
+            // Chain through Step 4: the start lands on the primary start checkpoint.
+            var assigned = _assigner.AssignAllCheckpoints(
+                result.ReadingsByEpc, turnaroundConfig: null, _shared,
+                new Dictionary<string, DateTime>(), medianTurnaround: null,
+                new Dictionary<int, List<Checkpoint>>());
+            var start = assigned.Single(a => a.DistanceFromStart == 0m);
+            Assert.AreEqual(396, start.CheckpointId);
+            Assert.AreEqual(Gun.AddSeconds(33), start.ReadTimeUtc);
+        }
+
+        // ─── A SECOND in-window pass (gap > passGapThreshold) is the next crossing, not the start ───
+
+        [TestMethod]
+        public void SecondInWindowPass_StartIsLastOfFirstPass()
+        {
+            var result = Collapse(
+                Read(1, 2, Gun.AddSeconds(10)),    // first pass ┐
+                Read(2, 2, Gun.AddSeconds(20)),    // first pass ┘ ← the start (last of FIRST pass)
+                Read(3, 2, Gun.AddSeconds(400)));  // gap 380s > 300s → SECOND pass (in-window) = next crossing
+
+            Assert.AreEqual(1, result.PreStartReadsExcluded, "only the :10 read (same crossing as the start)");
+            var reps = result.ReadingsByEpc["E1"];
+            Assert.AreEqual(2, reps.Count);
+            Assert.AreEqual(Gun.AddSeconds(20), reps[0].ReadTimeUtc, "start = last of the FIRST in-window pass");
+            Assert.AreEqual(0, reps[0].PassIndexOverride);
+            Assert.AreEqual(Gun.AddSeconds(400), reps[1].ReadTimeUtc, "second pass survives as the next crossing");
+            Assert.AreEqual(1, reps[1].PassIndexOverride);
+        }
+
+        // ─── Client regression: pre-floor read + single in-window read → unchanged ───
+
+        [TestMethod]
+        public void PreFloorPlusSingleInWindow_Regression_StartUnchanged()
+        {
+            // 06:07:29 pre-floor + 06:08:05 in-window → 06:08:05 (both rules agree; the pre-floor
+            // read is 36s away — under the pass gap — but must never anchor or chain).
+            var floor30 = Gun.AddSeconds(-30);
+            var result = CollapseWithFloor(floor30,
+                Read(1, 2, Gun.AddSeconds(-31)),    // 06:07:29-class pre-floor read
+                Read(2, 2, Gun.AddSeconds(5)),      // 06:08:05-class in-window read ← the start
+                Read(3, 1, Gun.AddSeconds(1100)));  // finish
+
+            Assert.AreEqual(1, result.PreStartReadsExcluded);
+            var reps = result.ReadingsByEpc["E1"];
+            Assert.AreEqual(Gun.AddSeconds(5), reps[0].ReadTimeUtc);
+            Assert.AreEqual(0, reps[0].PassIndexOverride);
         }
 
         // ─── 3c: no valid start in group → placeholder survives (DNS path), keep-LAST intact ───

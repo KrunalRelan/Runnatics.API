@@ -139,11 +139,42 @@ For **start-bound shared groups** (`SharedDeviceMapping.StartsAtZero`):
 - **No in-window candidate** → falls through to chronological (unchanged behavior; any resulting
   negative is caught downstream).
 
-⚠️ **Inconsistency to note:** start selection now lives in **three** places with **different rules** —
-Phase 1.5 pass-ordinal (gun-window nearest-gun, NEW), Phase 1.5 Step-5 dedup (LAST), and Phase 2
-normalize (`MAX` at start + gun-clamp). They compose for the shared case but are not a single rule.
-For **simple-device** races the Phase 1.5 gun-window does **not** run; the only protection is Phase 2's
-`MAX`+gun-clamp, which rejects *earlier* strays but **not a *later* stray** assigned to the start.
+~~⚠️ **Inconsistency to note:** start selection now lives in **three** places with **different rules**~~
+**RESOLVED (2026-07-03):** start selection is now a SINGLE implementation —
+`StartWindow.SelectStartRead` — consumed by Phase 1.5 (`CollapseIntoPasses`) and Phase 2
+(NetTime baseline + start-row normalization). See **NAMED INVARIANTS** below. The window itself is
+settings-driven via `StartWindow` (`EarlyStartCutOff`/`LateStartCutOff`, SECONDS, defaults 300/1200),
+not the −5/+15 min constants described above (historical).
+
+---
+
+## NAMED INVARIANTS — start selection & dedup (DO NOT DRIFT)
+
+**START SELECTION INVARIANT (client-confirmed, historical rule):**
+start = **LAST read of the FIRST in-window pass**, where:
+- window = `[gun − EarlyStartCutOff, gun + LateStartCutOff]` via `StartWindow` (SECONDS,
+  defaults 300/1200);
+- pass boundary = `PassGapThresholdSeconds` (default 300s) — a later in-window blip past the
+  gap is a DIFFERENT pass (e.g. the finish crossing on a shared mat), never the start;
+- a same-pass read PAST the ceiling extends the pass but is not eligible to win;
+- pre-floor reads never anchor/extend the first in-window pass; their exclusion and the DNS
+  truth table are unchanged (validity is still "≥1 in-window read" — only WHICH read wins is
+  this rule).
+Implemented ONCE: `StartWindow.SelectStartRead`. Consumers: Phase 1.5
+`LoopRaceCheckpointAssigner.CollapseIntoPasses` (shared devices), Phase 2
+`DeduplicateAndNormalizeAsync` (NetTime baseline `participantStartTimes` + start-row
+`bestReading`). Example (race 65, chip 44E0014498A0): in-window cluster 05:32:50→05:33:33,
+next checkpoint 05:42:00 → start = **05:33:33**.
+**Changing this rule requires explicit client sign-off.**
+(History: round-2 rule was always LAST; an earliest-in-window selection introduced with the
+race-65 collapse fix on 2026-07-02 was a drift, reverted 2026-07-03. The collapse fix's window
+handling — pre-floor exclusion, invalid-placeholder retention — stays.)
+
+**DEDUP INVARIANTS (round-2 originals, named):**
+- **START checkpoint keeps LAST** (the runner leaving the mat).
+- **ALL OTHER checkpoints (incl. Finish) keep EARLIEST** (first crossing of the gate).
+These are the same rules as §3 above (`DeduplicateAssignedReadings`, Phase 2 `bestReading`
+for non-start gates) — named here so they cannot drift independently of the selection rule.
 
 **Edge cases handled:** shared start/finish mat cross-reads (gun window); multiple reads at a mat
 (dedup LAST/EARLIEST); out-and-back via turnaround/pass-ordinal; pre-gun early-line starters (window

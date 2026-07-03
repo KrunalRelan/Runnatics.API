@@ -1187,3 +1187,40 @@ Branch: `bugfix/testing-round-1`.
 **Tests:** +10 `SplitBaselineTests` (defaulting trap, validity gate, bib-5176 math incl. Finish==NetTime invariant and Gun=Net+offset reconciliation, late-only == gun-clamped NetTime, clamps). 97/97 green; build 0 errors.
 
 **Prod verify pending:** bib 5176 → Start 0/0, 2.5K ≈ 8:26 net, Finish cumulative 18:19 == NetTime; a late-start finisher → cumulative == gun-clamped NetTime; C1–C5 all show identical numbers; Excel matches screens. NOT committed — sits alone in the working tree (prior work already pushed), ready to be its own commit.
+
+---
+
+## 2026-07-02 (4) — UI: page-level busy lock on Process Result / Clear Processed Result
+
+**Ask:** while Clear Processed Result runs, Process Result and every other button on the participants page must be unclickable — and vice versa.
+
+**Change (UI repo, `ViewParticipants.tsx`):** derived `resultsBusy = processingResults || clearingResults` and applied it page-wide. Previously each button only disabled ITSELF, so a clear and a process could race each other server-side.
+- Toolbar: Add Participant / Add Range / Bulk Upload / Update by Bib / Export CSV / Columns / Process Result / Export Results (Excel) / Clear Processed Result — all `disabled` while busy; Process↔Clear get mutual-exclusion tooltips ("Wait for … to finish").
+- Grid row actions (View/Edit/Delete IconButtons) disabled; the clickable bib link made inert (`if (resultsBusy) return`).
+- Filter Reset button disabled. Filters/pagination left active (read-only fetches, harmless).
+
+**Caveat (noted, not fixed):** the lock is client-side state — a page refresh mid-run re-enables the buttons while the server job continues. A durable lock needs a server-side "processing in progress" flag/endpoint; flag if it bites.
+
+**Build:** `npm run build` ✓ (31s, 0 errors; pre-existing chunk-size warnings). UI repo working tree, not committed.
+
+---
+
+## 2026-07-03 — START SELECTION reverted to the historical LAST-read rule (single shared selector)
+
+**Client-confirmed final rule:** among IN-WINDOW start reads, start = LAST read of the FIRST in-window pass (the runner LEAVING the mat) — bounded by the pass gap (`PassGapThresholdSeconds`, default 300s). The earliest-in-window selection introduced with the race-65 collapse fix (2026-07-02) was a DRIFT; the window handling from that fix (pre-floor exclusion, invalid-placeholder retention, DNS truth table) stays exactly as-is. Screenshot case (race 65, chip 44E0014498A0): cluster 05:32:50→05:33:33, next checkpoint 05:42:00 → start = 05:33:33 (was wrongly 05:32:50).
+
+**One implementation — `StartWindow.SelectStartRead<T>`** (in StartWindow.cs, beside the window): anchors at the first in-window read; chains by pass gap; a same-pass read PAST the ceiling extends the pass but cannot win; later in-window passes (gap exceeded) are the next crossing, never the start; pre-floor reads never anchor/chain; null when no in-window read.
+
+**Consumers flipped together (no divergence possible):**
+- P1.5 shared path — `LoopRaceCheckpointAssigner.CollapseIntoPasses` chosen-start (pin/exclusion mechanics unchanged; earlier cluster reads excluded as the same crossing).
+- P2 simple path — `DeduplicateAndNormalizeAsync`: `participantStartTimes` NetTime baseline (gun-clamp BUG-27 kept) AND the start-row `bestReading` (placeholder branch unchanged). P2 now reads `PassCollapseSettings.PassGapSeconds` too.
+- Manual-edit + display: validity checks untouched (no selection there — they consume the stored row).
+- Phase 3 / ResultClassifier: UNCHANGED (validity still "≥1 in-window read"); SplitBaseline UNCHANGED (baseline = the stored row''s offset, whichever rule selected it).
+
+**Spec:** `spec/TIMING_LOGIC_SPEC.md` — the three-way divergence note marked RESOLVED; new "NAMED INVARIANTS" section: START SELECTION INVARIANT (LAST of first in-window pass; changing requires explicit client sign-off) + the round-2 DEDUP INVARIANTS (start=LAST, others=EARLIEST).
+
+**Tests (106/106):** 6 new `SelectStartRead` unit tests (9-read cluster → :33:33; second in-window pass ≠ start; pre-floor never anchors/chains (06:07:29/06:08:05 regression); post-ceiling same-pass read extends-but-cannot-win; null cases; bib-5176 single-read). 3 new/1 flipped collapse tests (cluster → LAST + excluded count; screenshot chip end-to-end → CP396 @ +33s; second-pass = ordinal 1; pre-floor+single-in-window). Bib-5176 regression, truth-table (19), SplitBaseline (10) all pass UNCHANGED.
+
+**IMPACT (for prod verification):** reprocess shifts starts LATER for any runner with an in-window start cluster → NetTimes SHORTEN, standings can shift. That is the correction, not a regression. Single-in-window-read runners (e.g. bib 5176) unchanged.
+
+**Build 0 errors. NOT committed — sits alone in the working tree for its own commit.**

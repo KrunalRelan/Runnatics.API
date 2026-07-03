@@ -2120,13 +2120,16 @@ namespace Runnatics.Services
 
                 // VALID START WINDOW (Phase 2) — same rule as Phase 1.5: [gun - EarlyStartCutOff,
                 // gun + LateStartCutOff] (SECONDS; defaults 300/1200). Only a start-checkpoint read
-                // inside this window is a valid start. The NetTime baseline is the EARLIEST valid
-                // in-window read (gun-clamped — BUG-27), else the gun itself (out-of-window / no valid
-                // start → baseline = gun, so a kept late finisher nets from the gun). Start VALIDITY
-                // and the DNS consequence are decided in Phase 3 (CalculateRaceResultsAsync).
+                // inside this window is a valid start. The NetTime baseline is the SELECTED valid
+                // start read per the START SELECTION INVARIANT (StartWindow.SelectStartRead): the
+                // LAST read of the FIRST in-window pass — the runner leaving the mat (gun-clamped —
+                // BUG-27), else the gun itself (out-of-window / no valid start → baseline = gun, so
+                // a kept late finisher nets from the gun). Start VALIDITY and the DNS consequence
+                // are decided in Phase 3 (CalculateRaceResultsAsync).
                 var raceSettingsP2 = race.RaceSettings;
                 var (validStartFloorP2, validStartCeilingP2) =
                     StartWindow.For(raceStartTime, raceSettingsP2?.EarlyStartCutOff, raceSettingsP2?.LateStartCutOff);
+                var passGapP2 = PassCollapseSettings.PassGapSeconds(raceSettingsP2?.PassGapThresholdSeconds);
 
                 if (raceStartTime.HasValue)
                 {
@@ -2137,15 +2140,15 @@ namespace Runnatics.Services
 
                     foreach (var g in startGroups)
                     {
-                        var earliestValid = g
-                            .Where(r => r.Reading.ReadTimeUtc >= validStartFloorP2!.Value &&
-                                        r.Reading.ReadTimeUtc <= validStartCeilingP2!.Value)
-                            .OrderBy(r => r.Reading.ReadTimeUtc)
-                            .Select(r => (DateTime?)r.Reading.ReadTimeUtc)
-                            .FirstOrDefault();
+                        var selectedStart = StartWindow.SelectStartRead(
+                            g.OrderBy(r => r.Reading.ReadTimeUtc),
+                            r => r.Reading.ReadTimeUtc,
+                            validStartFloorP2!.Value,
+                            validStartCeilingP2!.Value,
+                            passGapP2);
 
-                        DateTime baseline = earliestValid.HasValue
-                            ? (gunP2 > earliestValid.Value ? gunP2 : earliestValid.Value)
+                        DateTime baseline = selectedStart != null
+                            ? (gunP2 > selectedStart.Reading.ReadTimeUtc ? gunP2 : selectedStart.Reading.ReadTimeUtc)
                             : gunP2;
                         participantStartTimes[g.Key] = baseline;
                     }
@@ -2159,10 +2162,12 @@ namespace Runnatics.Services
                 var normalizedReadings = grouped.Select(group =>
                 {
                     // ==========================================================
-                    // START checkpoint: pick the EARLIEST VALID read in [floor, ceiling]; if none is
-                    //   in-window, keep the earliest available read as an INVALID placeholder so Phase 3
+                    // START checkpoint: START SELECTION INVARIANT (StartWindow.SelectStartRead) —
+                    //   the LAST read of the FIRST in-window pass in [floor, ceiling] (the runner
+                    //   leaving the mat; historical client-confirmed rule). If none is in-window,
+                    //   keep the earliest available read as an INVALID placeholder so Phase 3
                     //   and the display can see it (early → DNS / "not found"; late → finisher-safe).
-                    // All other checkpoints: EARLIEST entry.
+                    // All other checkpoints: EARLIEST entry (their historical rule).
                     // ==========================================================
                     var isStartCheckpoint = group.Key.CheckpointId == startCheckpointId;
 
@@ -2174,12 +2179,14 @@ namespace Runnatics.Services
                         : (validStartFloorP2.HasValue && group.Any(r =>
                                 r.Reading.ReadTimeUtc >= validStartFloorP2.Value &&
                                 r.Reading.ReadTimeUtc <= validStartCeilingP2!.Value)
-                            ? group
-                                .Where(r => r.Reading.ReadTimeUtc >= validStartFloorP2.Value &&
-                                            r.Reading.ReadTimeUtc <= validStartCeilingP2!.Value)
-                                .OrderBy(r => r.Reading.TimestampMs)         // earliest VALID in-window
-                                .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
-                                .First()
+                            ? StartWindow.SelectStartRead(
+                                group
+                                    .OrderBy(r => r.Reading.TimestampMs)     // time order; tiebreak strongest RSSI
+                                    .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue),
+                                r => r.Reading.ReadTimeUtc,
+                                validStartFloorP2.Value,
+                                validStartCeilingP2!.Value,
+                                passGapP2)!                                  // non-null: guarded by Any(in-window)
                             : group
                                 .OrderBy(r => r.Reading.TimestampMs)         // earliest available (out-of-window placeholder)
                                 .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)

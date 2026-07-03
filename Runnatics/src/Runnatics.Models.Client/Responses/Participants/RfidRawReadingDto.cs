@@ -31,5 +31,12 @@ namespace Runnatics.Models.Client.Responses.Participants
         public bool IsDuplicate { get; set; }
         public bool IsNormalized { get; set; }
         public bool IsMultipleEpc { get; set; }
+        /// <summary>
+        /// ASSIGN-THEN-CHOOSE: for an UNASSIGNED read, the candidate gates it may be chosen
+        /// for (the read's device's checkpoints in this race — same resolution the server
+        /// enforces when the choice is saved). Null for assigned reads; empty when the
+        /// device is not mapped in this race (read is not choosable).
+        /// </summary>
+        public List<ChoosableCheckpointDto>? ChoosableCheckpoints { get; set; }
     }
 }

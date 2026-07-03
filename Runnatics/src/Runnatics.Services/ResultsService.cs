@@ -1256,6 +1256,34 @@ namespace Runnatics.Services
                 .GroupBy(c => c.DistanceFromStart)
                 .ToDictionary(g => g.Key, g => g.First().Name!);
 
+            // ASSIGN-THEN-CHOOSE (UI contract): for UNASSIGNED reads, surface the candidate gates
+            // the read may be chosen for — the read's device's checkpoints in this race, resolved
+            // exactly like RecordManualTimeAsync validates (batch serial first, then the read's
+            // own, via the ONE DeviceSerialResolver map). One candidate → the UI auto-targets it;
+            // several (shared mat) → inline picker; none → the toggle stays locked.
+            var hasUnassigned = readings.Any(r => !r.ReadingCheckpointAssignments
+                .Any(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted));
+            var deviceLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var checkpointsByDeviceId = new Dictionary<int, List<Checkpoint>>();
+            if (hasUnassigned)
+            {
+                var devices = await _repository.GetRepository<Device>()
+                    .GetQuery(d => d.AuditProperties.IsActive && !d.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync();
+                deviceLookup = DeviceSerialResolver.BuildLookup(devices);
+
+                checkpointsByDeviceId = (await checkpointRepo.GetQuery(c =>
+                    c.RaceId == raceId &&
+                    c.EventId == eventId &&
+                    c.AuditProperties.IsActive &&
+                    !c.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .ToListAsync())
+                    .GroupBy(c => c.DeviceId)
+                    .ToDictionary(g => g.Key, g => g.OrderBy(c => c.DistanceFromStart).ToList());
+            }
+
             TimeZoneInfo timeZone;
             try
             {
@@ -1288,6 +1316,38 @@ namespace Runnatics.Services
                         checkpointDisplay = $"{name} ({dist:0.##} km)";
                 }
 
+                // Candidate gates for an unassigned read (assign-then-choose) — null for
+                // assigned reads, empty when the device is not mapped in this race.
+                List<ChoosableCheckpointDto>? choosable = null;
+                if (assignment == null)
+                {
+                    var batchSerial = r.UploadBatch?.DeviceId;
+                    var resolvedDeviceId = 0;
+                    if (!string.IsNullOrEmpty(batchSerial) && deviceLookup.TryGetValue(batchSerial, out var byBatch))
+                        resolvedDeviceId = byBatch;
+                    else if (!string.IsNullOrEmpty(r.DeviceId) && deviceLookup.TryGetValue(r.DeviceId, out var byRead))
+                        resolvedDeviceId = byRead;
+
+                    choosable = resolvedDeviceId != 0
+                        && checkpointsByDeviceId.TryGetValue(resolvedDeviceId, out var candidateCps)
+                        ? candidateCps
+                            .Select(cp =>
+                            {
+                                var candidateName = string.IsNullOrEmpty(cp.Name)
+                                    ? namedByDistance.GetValueOrDefault(cp.DistanceFromStart)
+                                    : cp.Name;
+                                return new ChoosableCheckpointDto
+                                {
+                                    Id = _encryptionService.Encrypt(cp.Id.ToString()),
+                                    Name = candidateName != null
+                                        ? $"{candidateName} ({cp.DistanceFromStart:0.##} km)"
+                                        : $"CP ({cp.DistanceFromStart:0.##} km)"
+                                };
+                            })
+                            .ToList()
+                        : new List<ChoosableCheckpointDto>();
+                }
+
                 result.Add(new RfidRawReadingDto
                 {
                     Id = r.Id.ToString(),
@@ -1311,7 +1371,8 @@ namespace Runnatics.Services
                     IsManual = r.IsManualEntry,
                     IsDuplicate = r.ProcessResult == "Duplicate" || r.DuplicateOfReadingId.HasValue,
                     IsNormalized = isNormalized,
-                    IsMultipleEpc = r.IsMultipleEpc
+                    IsMultipleEpc = r.IsMultipleEpc,
+                    ChoosableCheckpoints = choosable
                 });
             }
 

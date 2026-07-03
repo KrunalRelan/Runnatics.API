@@ -225,6 +225,14 @@ rule working, not a regression.
   practice after a batch of edits.
 - **Bulk Process Result** (`ProcessCompleteWorkflowAsync`): returns phase counts only, by
   design — the UI re-fetches the participants grid on completion (existing behavior, unchanged).
+- **REVERT** (`DELETE …/manual-time` — 2026-07-03 rewrite): removing a manual time / chosen-read
+  toggle RESTORES the automated timing (the gate's crossing is re-selected from raw via the full
+  pipeline under LOCKED anchors — byte-identical to a fresh reprocess), and the response is the
+  same full post-revert `ManualTimeResponse` snapshot. When the gate has NO automated reading it
+  stays empty (#7 → DNF/DNS) and the response carries
+  `Warning: "No automated reading exists for this checkpoint — reverting leaves it empty…"`.
+  **UI (gated queue): render this warning on revert** — the client-side `hasRawRead` pre-warning
+  remains, but the server response is now the authoritative source.
 
 **Edge cases handled:** shared start/finish mat cross-reads (gun window); multiple reads at a mat
 (dedup LAST/EARLIEST); out-and-back via turnaround/pass-ordinal; pre-gun early-line starters (window

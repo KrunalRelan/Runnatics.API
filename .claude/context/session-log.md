@@ -1320,3 +1320,17 @@ Branch: `bugfix/testing-round-1`.
 - **#3 refresh contract**: the detail page keeps the re-fetch model (refreshParticipant + fetchDetections after every save) — permitted by the spec contract; the response-driven render remains available for a later optimization.
 
 **NOT wired (flagged):** public ResultsPage does not currently render a status column — `PublicResultDto.Status` is available whenever that page adds one; un-DSQ path still unspecified. Both repos in working tree, NOT committed.
+
+---
+
+## 2026-07-03 (9) — REVERT restores automated timing (locked anchors + pipeline funnel)
+
+**Was:** revert soft-deleted override + gate''s RN/split rows and recomputed status from REMAINING rows — never re-selected from raw → empty gate → #7 DNF (screenshot: manual start 05:29:23 reverted to a blank row).
+
+**Now (`RemoveManualTimeAsync` rewrite, Task<bool>→Task<ManualTimeResponse?>):** delete override + gate rows + NEXT gate''s split (Gap B — one gate provably sufficient: SegmentTime[i] references only crossings i,i−1; cumulative is gun-based) → funnel through `ProcessCompleteWorkflowAsync` (the same call ProcessParticipantResultAsync trusts; no hand-rolled second selection) → snapshot response (commit-f contract) + WARNING when the gate stayed empty (post-workflow row check = direct truth, covers no-reads AND all-discarded). One path serves typed overrides + toggles. Workflow-failure shape = race-move''s (override gone, gate empty, Process Result recovers). IsManualTiming clearing kept; old in-method status/rank recompute deleted (pipeline owns both; DSQ preserved by Phase 3).
+
+**Gap A — LOCKED ANCHORS (SequentialGateSelector + Phase 2):** `GateInput.LockedCrossingTime`; Phase 2 injects the participant''s EXISTING normalized crossings as locked gates (query per race). Locked gates emit no selection, anchor the chain, and UPPER-BOUND earlier non-locked gates (strictly-before next locked + min-segment on BOTH sides — fresh-reprocess equivalence). Bonus fixes: late-batch one-gate-no-anchor hole AND incremental duplicate-row creation at already-normalized gates (locked wins; new candidates stay unselected until revert/full reprocess).
+
+**Controller:** DELETE manual-time returns `ResponseBase<ManualTimeResponse>`; UI ignores body today (re-fetches) — revert-warning rendering added to the gated UI queue (spec updated).
+
+**Tests 139/139:** +5 locked-anchor tests (no-emit+anchor, later-locked upper bound, min-segment both sides, start-past-locked uninhabited, reverted-start re-selected by the START INVARIANT under a locked finish). **Prod-verify:** race 65 manual start 05:29:23 → revert → system-selected start returns, byte-identical to fresh reprocess; revert-without-raw → warning + #7 status; toggle revert same path. NOT pushed.

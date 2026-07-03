@@ -452,14 +452,16 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
-        /// Remove a manual-time override for a participant at a checkpoint. Soft-deletes the durable
-        /// override and its manual derived rows, recomputes status, and re-ranks the race. The checkpoint
-        /// reverts to its automatic read on the next reprocess (or goes empty — possibly Finished→DNF —
-        /// if it was manual-only). This is the only way an override is removed.
+        /// REVERT a manual-time override (typed or chosen-read toggle): removes the override and
+        /// RESTORES the automated timing — the crossing is re-selected from raw reads via the full
+        /// pipeline (start LAST-read rule / sequential gate selection with locked anchors), splits
+        /// rebuilt, status reclassified (#7) and the race re-ranked. Returns the full post-revert
+        /// snapshot; when the gate has no automated reading it stays empty and the response WARNS
+        /// (runner classified DNF/DNS). This is the only way an override is removed.
         /// </summary>
         [HttpDelete("{eventId}/{raceId}/participant/{participantId}/manual-time")]
         [Authorize(Roles = "SuperAdmin,Admin")]
-        [ProducesResponseType(typeof(ResponseBase<string>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ResponseBase<ManualTimeResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -476,12 +478,12 @@ namespace Runnatics.Api.Controller
                 string.IsNullOrEmpty(participantId) || string.IsNullOrEmpty(checkpointId))
                 return BadRequest(new { error = "Event ID, Race ID, Participant ID, and Checkpoint ID are required." });
 
-            var response = new ResponseBase<string>();
-            var ok = await _resultsService.RemoveManualTimeAsync(eventId, raceId, participantId, checkpointId, cancellationToken);
+            var response = new ResponseBase<ManualTimeResponse>();
+            var result = await _resultsService.RemoveManualTimeAsync(eventId, raceId, participantId, checkpointId, cancellationToken);
 
-            if (_resultsService.HasError || !ok)
+            if (_resultsService.HasError || result == null)
             {
-                response.Error = new ResponseBase<string>.ErrorData
+                response.Error = new ResponseBase<ManualTimeResponse>.ErrorData
                 {
                     Message = _resultsService.ErrorMessage ?? "Failed to remove manual time."
                 };
@@ -493,7 +495,7 @@ namespace Runnatics.Api.Controller
                 return StatusCode((int)HttpStatusCode.InternalServerError, response);
             }
 
-            response.Message = "Manual time override removed.";
+            response.Message = result;
             return Ok(response);
         }
 

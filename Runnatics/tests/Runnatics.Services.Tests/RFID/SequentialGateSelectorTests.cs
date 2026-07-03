@@ -182,6 +182,94 @@ namespace Runnatics.Services.Tests.RFID
             Assert.AreEqual(30, chain[3]);
         }
 
+        // ─── LOCKED ANCHORS (incremental normalization — manual-time revert / late batches) ───
+
+        private static GateInput Locked(int id, DateTime t, bool isStart = false) =>
+            new() { GateId = id, IsStartGate = isStart, LockedCrossingTime = t };
+
+        [TestMethod]
+        public void LockedGate_EmitsNoSelection_AndAnchorsTheChain()
+        {
+            // The revert shape: start already normalized (locked), the reverted mid gate
+            // re-selects against it — a candidate before the locked start is discarded.
+            var start = Locked(1, Gun.AddSeconds(30), isStart: true);
+            var mid = Gate(2, isStart: false,
+                C(20, Gun.AddSeconds(10)),    // before the locked start crossing → discard
+                C(21, Gun.AddSeconds(90)));   // valid
+
+            var chain = Select(null, start, mid);
+
+            Assert.IsFalse(chain.ContainsKey(1), "locked gates never emit a selection");
+            Assert.AreEqual(21, chain[2], "selection anchors on the locked crossing");
+        }
+
+        [TestMethod]
+        public void LockedLaterGate_UpperBoundsEarlierSelection()
+        {
+            // A mid-gate revert with the FINISH already normalized: the rebuilt mid crossing must
+            // be STRICTLY BEFORE the locked finish — otherwise a fresh reprocess could never have
+            // produced the combined state.
+            var start = Locked(1, Gun.AddSeconds(10), isStart: true);
+            var finish = Locked(3, Gun.AddSeconds(400));
+
+            var midTooLate = Gate(2, isStart: false, C(20, Gun.AddSeconds(500))); // ≥ locked finish
+            Assert.IsFalse(Select(null, start, midTooLate, finish).ContainsKey(2),
+                "a candidate past the locked next crossing is discarded → gate uninhabited");
+
+            var midOk = Gate(2, isStart: false, C(21, Gun.AddSeconds(200)));
+            Assert.AreEqual(21, Select(null, start, midOk, finish)[2]);
+        }
+
+        [TestMethod]
+        public void LockedNeighbors_MinSegmentAppliesOnBothSides()
+        {
+            // Locked start at gun+0 and locked finish at gun+1000, min segment 300s: the rebuilt
+            // mid crossing must be ≥ start+300 AND ≤ finish−300 — both sides, like a fresh run.
+            var start = Locked(1, Gun, isStart: true);
+            var finish = Locked(3, Gun.AddSeconds(1000));
+            var mid = Gate(2, isStart: false,
+                C(20, Gun.AddSeconds(200)),   // only 200s after the locked start → discard
+                C(21, Gun.AddSeconds(800)),   // only 200s before the locked finish → discard
+                C(22, Gun.AddSeconds(400)));  // candidates are TIME-ORDERED in real input — see below
+
+            // Time-ordered input (200, 400, 800): 400 is the first candidate satisfying both sides.
+            var midOrdered = Gate(2, isStart: false,
+                C(20, Gun.AddSeconds(200)),
+                C(22, Gun.AddSeconds(400)),
+                C(21, Gun.AddSeconds(800)));
+
+            Assert.AreEqual(22, Select(300, start, midOrdered, finish)[2]);
+            _ = mid; // documents the unordered shape; the selector contract requires time order
+        }
+
+        [TestMethod]
+        public void StartGate_CandidatePastLockedLaterCrossing_Uninhabited()
+        {
+            // Reverted START with a locked mid crossing at gun+200: a "start" selected at/after
+            // the mid crossing is an order violation a fresh reprocess could never produce.
+            var start = Gate(1, isStart: true, C(10, Gun.AddSeconds(300)));   // after the locked mid
+            var mid = Locked(2, Gun.AddSeconds(200));
+
+            var chain = Select(null, start, mid);
+
+            Assert.IsFalse(chain.ContainsKey(1), "start past the locked next crossing → uninhabited");
+        }
+
+        [TestMethod]
+        public void RevertedStart_ReSelectedByStartInvariant_UnderLockedFinish()
+        {
+            // The screenshot case: manual start reverted; raw start cluster re-enters selection
+            // (LAST of first in-window pass) with the finish already normalized (locked).
+            var start = Gate(1, isStart: true,
+                C(10, Gun.AddSeconds(10)),
+                C(11, Gun.AddSeconds(20)));    // LAST of the first in-window pass ← restored start
+            var finish = Locked(2, Gun.AddSeconds(1100));
+
+            var chain = Select(null, start, finish);
+
+            Assert.AreEqual(11, chain[1], "the automated start selection returns on revert");
+        }
+
         [TestMethod]
         public void MinSegment_AppliesBetweenEveryConsecutiveSelectedPair()
         {

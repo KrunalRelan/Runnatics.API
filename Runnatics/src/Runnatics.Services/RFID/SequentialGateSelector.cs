@@ -13,6 +13,15 @@ namespace Runnatics.Services.RFID
         public int GateId { get; init; }
         public bool IsStartGate { get; init; }
         public IReadOnlyList<GateCandidate> Candidates { get; init; } = Array.Empty<GateCandidate>();
+
+        /// <summary>
+        /// LOCKED ANCHOR (incremental normalization — revert / late batch): this gate ALREADY has
+        /// a normalized crossing at this time. No selection is emitted for a locked gate; the
+        /// chain anchors on it, and it also UPPER-BOUNDS earlier non-locked gates (a candidate
+        /// selected between two locked crossings must fit strictly between them, honoring the
+        /// minimum segment on BOTH sides — exactly what a fresh full reprocess would produce).
+        /// </summary>
+        public DateTime? LockedCrossingTime { get; init; }
     }
 
     /// <summary>
@@ -54,7 +63,8 @@ namespace Runnatics.Services.RFID
     /// </summary>
     public static class SequentialGateSelector
     {
-        /// <summary>Returns GateId → chosen candidate Key. A gate absent from the result is uninhabited.</summary>
+        /// <summary>Returns GateId → chosen candidate Key. A gate absent from the result is uninhabited
+        /// (or LOCKED — locked gates never emit a selection; their crossing already exists).</summary>
         public static Dictionary<int, long> SelectChain(
             IReadOnlyList<GateInput> gatesInCourseOrder,
             DateTime? validStartFloor,
@@ -65,14 +75,46 @@ namespace Runnatics.Services.RFID
             var selected = new Dictionary<int, long>();
             DateTime? anchor = null;
 
-            foreach (var gate in gatesInCourseOrder)
+            // Upper bound for each gate = the NEXT locked crossing after it (a candidate must fit
+            // STRICTLY before it — #2's "before N+1's crossing" — and honor the minimum segment on
+            // that side too, when ON). Later NON-locked gates impose no bound: forward greedy
+            // adapts them, exactly as a fresh reprocess would.
+            var nextLockedAfter = new DateTime?[gatesInCourseOrder.Count];
+            DateTime? runningNextLocked = null;
+            for (var i = gatesInCourseOrder.Count - 1; i >= 0; i--)
             {
+                nextLockedAfter[i] = runningNextLocked;
+                if (gatesInCourseOrder[i].LockedCrossingTime.HasValue)
+                    runningNextLocked = gatesInCourseOrder[i].LockedCrossingTime;
+            }
+
+            for (var gateIndex = 0; gateIndex < gatesInCourseOrder.Count; gateIndex++)
+            {
+                var gate = gatesInCourseOrder[gateIndex];
+
+                // LOCKED gate: the crossing already exists — anchor the chain on it, emit nothing.
+                // (Any unnormalized candidates at a locked gate stay unselected; the existing row
+                // is THE crossing until it is reverted or the race is fully reprocessed.)
+                if (gate.LockedCrossingTime.HasValue)
+                {
+                    anchor = gate.LockedCrossingTime;
+                    continue;
+                }
+
                 if (gate.Candidates.Count == 0)
                     continue;
 
+                var upperBound = nextLockedAfter[gateIndex];
+
+                bool FitsUpperBound(GateCandidate c) =>
+                    !upperBound.HasValue ||
+                    (c.Time < upperBound.Value &&
+                     (!(minSegmentSeconds > 0) ||
+                      (upperBound.Value - c.Time).TotalSeconds >= minSegmentSeconds!.Value));
+
                 if (gate.IsStartGate)
                 {
-                    GateCandidate chosen;
+                    GateCandidate? chosen;
                     if (validStartFloor.HasValue)
                     {
                         chosen = StartWindow.SelectStartRead(
@@ -88,6 +130,11 @@ namespace Runnatics.Services.RFID
                         chosen = gate.Candidates[0]; // no window (no gun) → historical earliest
                     }
 
+                    // A start crossing at/after a later LOCKED crossing can't stand (order violation
+                    // a fresh reprocess could never produce) → leave the gate uninhabited instead.
+                    if (!FitsUpperBound(chosen))
+                        continue;
+
                     selected[gate.GateId] = chosen.Key;
                     anchor = chosen.Time;
                     continue;
@@ -95,10 +142,11 @@ namespace Runnatics.Services.RFID
 
                 var minTime = anchor;
                 var candidate = gate.Candidates.FirstOrDefault(c =>
-                    !minTime.HasValue ||
-                    (c.Time > minTime.Value &&
-                     (!(minSegmentSeconds > 0) ||
-                      (c.Time - minTime.Value).TotalSeconds >= minSegmentSeconds!.Value)));
+                    (!minTime.HasValue ||
+                     (c.Time > minTime.Value &&
+                      (!(minSegmentSeconds > 0) ||
+                       (c.Time - minTime.Value).TotalSeconds >= minSegmentSeconds!.Value))) &&
+                    FitsUpperBound(c));
 
                 if (candidate == null)
                     continue; // gate uninhabited — chain continues from the last selected crossing

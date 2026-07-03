@@ -52,13 +52,16 @@ namespace Runnatics.Services.Interface
             string? chosenRawReadId = null);
 
         /// <summary>
-        /// Removes a manual-time override for a participant+checkpoint: soft-deletes the durable
-        /// override row and its manual ReadNormalized/SplitTimes rows, then recomputes the
-        /// participant's status and re-ranks the race. The checkpoint reverts to its automatic read
-        /// on the next reprocess (or goes empty — possibly flipping Finished→DNF — if it was manual-only).
+        /// REVERT: removes a manual-time override (typed OR chosen-read toggle) for a
+        /// participant+checkpoint and RESTORES the automated timing — soft-deletes the durable
+        /// override + the gate's derived rows, then funnels through the full pipeline so the
+        /// crossing is re-selected from raw reads under the normal rules (start LAST-read rule;
+        /// sequential gate selection with locked anchors), splits rebuilt, #7 reclassified and the
+        /// race re-ranked. Returns the full post-revert snapshot (times/ranks/status) with a
+        /// WARNING when the gate has no automated reading (stays empty → DNF/DNS).
         /// This is the ONLY way an override disappears; clear/reprocess never silently drop it.
         /// </summary>
-        Task<bool> RemoveManualTimeAsync(
+        Task<Models.Client.Responses.RFID.ManualTimeResponse?> RemoveManualTimeAsync(
             string eventId,
             string raceId,
             string participantId,

@@ -2178,22 +2178,63 @@ namespace Runnatics.Services
                 var minSegmentSeconds = PassCollapseSettings.MinSegmentSeconds(raceSettingsP2?.DedUpSeconds);
                 var distanceByCheckpointId = allCheckpoints.ToDictionary(cp => cp.Id, cp => cp.DistanceFromStart);
 
+                // LOCKED ANCHORS (incremental correctness — manual-time REVERT / late batches):
+                // the participant's EXISTING normalized crossings join the chain as LOCKED gates,
+                // so a rebuilt gate is selected against its real neighbors — strictly after the
+                // previous crossing AND strictly before the next locked one, honoring the minimum
+                // segment on BOTH sides — exactly what a fresh full reprocess would produce. A
+                // locked gate also suppresses duplicate-row creation when new raw candidates
+                // arrive at an already-normalized gate (the existing row IS the crossing until
+                // reverted or fully reprocessed).
+                var existingCrossings = await normalizedRepo.GetQuery(n =>
+                        n.EventId == decryptedEventId &&
+                        n.Participant.RaceId == decryptedRaceId &&
+                        n.AuditProperties.IsActive &&
+                        !n.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(n => new { n.ParticipantId, n.CheckpointId, n.ChipTime })
+                    .ToListAsync();
+                var lockedByParticipant = existingCrossings
+                    .GroupBy(c => c.ParticipantId)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.GroupBy(c => c.CheckpointId)
+                              .ToDictionary(cg => cg.Key, cg => cg.Min(c => c.ChipTime)));
+
                 var chosenReadByGate = new Dictionary<(int ParticipantId, int CheckpointId), long>();
                 foreach (var participantGates in readingsWithMergedCheckpoints.GroupBy(r => r.ParticipantId))
                 {
-                    var gates = participantGates
+                    var locked = lockedByParticipant.GetValueOrDefault(participantGates.Key);
+
+                    var candidateGates = participantGates
                         .GroupBy(r => r.CheckpointId)
-                        .OrderBy(g => distanceByCheckpointId.GetValueOrDefault(g.Key, decimal.MaxValue))
                         .Select(g => new GateInput
                         {
                             GateId = g.Key,
                             IsStartGate = g.Key == startCheckpointId,
+                            LockedCrossingTime = locked != null && locked.TryGetValue(g.Key, out var lockedTime)
+                                ? lockedTime
+                                : null,
                             Candidates = g
                                 .OrderBy(r => r.Reading.TimestampMs)
                                 .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
                                 .Select(r => new GateCandidate { Key = r.RawReadId, Time = r.Reading.ReadTimeUtc })
                                 .ToList()
-                        })
+                        });
+
+                    // Gates that exist ONLY as existing crossings (no new candidates) still anchor.
+                    var anchorOnlyGates = (locked ?? new Dictionary<int, DateTime>())
+                        .Where(kvp => !participantGates.Any(r => r.CheckpointId == kvp.Key))
+                        .Select(kvp => new GateInput
+                        {
+                            GateId = kvp.Key,
+                            IsStartGate = kvp.Key == startCheckpointId,
+                            LockedCrossingTime = kvp.Value
+                        });
+
+                    var gates = candidateGates
+                        .Concat(anchorOnlyGates)
+                        .OrderBy(g => distanceByCheckpointId.GetValueOrDefault(g.GateId, decimal.MaxValue))
                         .ToList();
 
                     var chain = SequentialGateSelector.SelectChain(
@@ -2220,8 +2261,9 @@ namespace Runnatics.Services
                     if (!chosenReadByGate.TryGetValue((group.Key.ParticipantId, group.Key.CheckpointId), out var chosenRawReadId))
                     {
                         _logger.LogDebug(
-                            "Participant {ParticipantId} at Checkpoint {CheckpointId}: all {Count} candidate reading(s) " +
-                            "discarded (sequence / min-segment) — gate left uninhabited.",
+                            "Participant {ParticipantId} at Checkpoint {CheckpointId}: {Count} candidate reading(s) " +
+                            "produced no selection (discarded by sequence / min-segment, or the gate is " +
+                            "already normalized/LOCKED) — no new row.",
                             group.Key.ParticipantId, group.Key.CheckpointId, group.Count());
                         return null;
                     }

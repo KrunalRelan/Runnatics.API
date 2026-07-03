@@ -2318,7 +2318,18 @@ namespace Runnatics.Services
         // classification decides the consequence (DNF/DNS). The discard-and-warn behavior
         // (46ec16d) was incoherent once toggles accepted the same physical situation.
 
-        public async Task<bool> RemoveManualTimeAsync(
+        /// <summary>
+        /// REVERT (2026-07-03 rewrite): removing a manual time / chosen-read toggle RESTORES the
+        /// automated timing — it does NOT leave the gate empty. Remove the override + the gate's
+        /// derived rows, then funnel through the SAME full pipeline the single-runner reprocess
+        /// trusts (ProcessCompleteWorkflowAsync: raw → selection → normalize → Phase 2.4 overrides
+        /// → splits → #7 classify → ranks). Phase 2's LOCKED-ANCHOR selection rebuilds exactly the
+        /// crossing a fresh reprocess would pick (sequence + min-segment against the runner's
+        /// other crossings). One path serves typed overrides AND toggles. When the gate has no raw
+        /// reads, it stays empty, #7 classifies (DNF/DNS) and the response WARNS.
+        /// Returns the full post-revert snapshot (commit-f contract).
+        /// </summary>
+        public async Task<ManualTimeResponse?> RemoveManualTimeAsync(
             string eventId,
             string raceId,
             string participantId,
@@ -2343,11 +2354,9 @@ namespace Runnatics.Services
                 if (existingOverride == null)
                 {
                     ErrorMessage = "No manual override found for this checkpoint.";
-                    return false;
+                    return null;
                 }
 
-                // Race checkpoints for the per-DISTANCE mandatory-gate status recompute (mirrors
-                // RecordManualTimeAsync / CalculateRaceResultsAsync).
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 var raceCheckpoints = await checkpointRepo.GetQuery(c =>
                     c.RaceId == decryptedRaceId &&
@@ -2357,28 +2366,35 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync(ct);
 
-                var isFinishCheckpoint = raceCheckpoints.Count > 0
-                    && raceCheckpoints[raceCheckpoints.Count - 1].Id == decryptedCheckpointId;
+                var editedCheckpoint = raceCheckpoints.FirstOrDefault(c => c.Id == decryptedCheckpointId);
+                if (editedCheckpoint == null)
+                {
+                    ErrorMessage = "Checkpoint not found for this race.";
+                    return null;
+                }
 
-                // BUG-26 + #7: shared mandatory set ({START gate, implicitly} ∪ {IsMandatory} ∪
-                // {finish fallback}); start-gate validity = in-window crossing.
-                var mandatoryDistances = ResultClassifier.MandatoryDistances(raceCheckpoints);
-                var startGateDistanceForStatus = raceCheckpoints.Min(c => c.DistanceFromStart);
+                // The gate = ALL checkpoints at the edited distance (parent + children — BUG-26).
+                var gateCheckpointIds = raceCheckpoints
+                    .Where(c => c.DistanceFromStart == editedCheckpoint.DistanceFromStart)
+                    .Select(c => c.Id)
+                    .ToHashSet();
 
-                var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
-                    d => d,
-                    d => raceCheckpoints.Where(c => c.DistanceFromStart == d).Select(c => c.Id).ToHashSet());
-                var mandatoryGateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
-
-                var raceForStatusWindow = await _repository.GetRepository<Race>()
-                    .GetQuery(r => r.Id == decryptedRaceId && r.EventId == decryptedEventId)
-                    .Include(r => r.RaceSettings)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(ct);
-                var (statusWindowFloor, statusWindowCeiling) = StartWindow.For(
-                    raceForStatusWindow?.StartTime,
-                    raceForStatusWindow?.RaceSettings?.EarlyStartCutOff,
-                    raceForStatusWindow?.RaceSettings?.LateStartCutOff);
+                // GAP B: the NEXT gate's split must re-chain off the restored crossing — delete it
+                // so Phase 2.5 rebuilds it. ONE gate is provably sufficient: SegmentTime[i]
+                // references only crossing[i] − crossing[i−1], so a change at gate k affects
+                // segment k (rebuilt with the gate) and segment k+1 (deleted here → rebuilt);
+                // gates ≥ k+2 reference unchanged crossings. Cumulative (SplitTimeMs) is GUN-based
+                // and never depended on the changed crossing.
+                var nextGateDistances = raceCheckpoints
+                    .Select(c => c.DistanceFromStart)
+                    .Where(d => d > editedCheckpoint.DistanceFromStart)
+                    .ToList();
+                var nextGateCheckpointIds = nextGateDistances.Count == 0
+                    ? new HashSet<int>()
+                    : raceCheckpoints
+                        .Where(c => c.DistanceFromStart == nextGateDistances.Min())
+                        .Select(c => c.Id)
+                        .ToHashSet();
 
                 var rnRepo = _repository.GetRepository<ReadNormalized>();
                 var splitRepo = _repository.GetRepository<SplitTimes>();
@@ -2397,10 +2413,9 @@ namespace Runnatics.Services
                     // 2. Soft-delete the ReadNormalized row(s) at this checkpoint.
                     //    Key off (participant, checkpoint) — NOT IsManualEntry. A CHOSEN-READ override
                     //    writes IsManualEntry=false, so filtering on the flag would skip it and leave a
-                    //    stale crossing after "revert" (the same lookup-by-flag class of bug as the old
-                    //    STEP A0 duplicate). At an override checkpoint there is exactly one normalized row
-                    //    (Phase 2 skip + STEP A0/Phase 2.4 collapse guarantee it), so deleting by key is
-                    //    correct and flag-independent.
+                    //    stale crossing after "revert". Deleting the row also unblocks its raw reads in
+                    //    Phase 2 (they leave existingNormalizedReadIds), which is what lets the pipeline
+                    //    re-select the automated crossing.
                     var manualRns = await rnRepo.GetQuery(rn =>
                         rn.ParticipantId == decryptedParticipantId &&
                         rn.CheckpointId == decryptedCheckpointId &&
@@ -2416,146 +2431,135 @@ namespace Runnatics.Services
                     if (manualRns.Count > 0)
                         await rnRepo.UpdateRangeAsync(manualRns);
 
-                    // 3. Soft-delete the SplitTimes row(s) at this checkpoint. Same reasoning as (2):
-                    //    key off (participant, checkpoint), NOT s.IsManual — a chosen-read split is
-                    //    IsManual=false and would otherwise survive the revert.
-                    var manualSplits = await splitRepo.GetQuery(s =>
+                    // 3. Soft-delete the SplitTimes row(s) at this checkpoint AND at the NEXT gate
+                    //    (GAP B — its SegmentTime chains off this gate's crossing). Key off
+                    //    (participant, checkpoint), NOT s.IsManual.
+                    var affectedSplitCheckpointIds = new HashSet<int> { decryptedCheckpointId };
+                    foreach (var id in nextGateCheckpointIds)
+                        affectedSplitCheckpointIds.Add(id);
+
+                    var affectedSplits = await splitRepo.GetQuery(s =>
                         s.ParticipantId == decryptedParticipantId &&
-                        s.CheckpointId == decryptedCheckpointId &&
+                        s.CheckpointId.HasValue &&
+                        affectedSplitCheckpointIds.Contains(s.CheckpointId.Value) &&
                         !s.AuditProperties.IsDeleted)
                         .ToListAsync();
-                    foreach (var s in manualSplits)
+                    foreach (var s in affectedSplits)
                     {
                         s.AuditProperties.IsDeleted = true;
                         s.AuditProperties.IsActive = false;
                         s.AuditProperties.UpdatedBy = userId;
                         s.AuditProperties.UpdatedDate = DateTime.UtcNow;
                     }
-                    if (manualSplits.Count > 0)
-                        await splitRepo.UpdateRangeAsync(manualSplits);
+                    if (affectedSplits.Count > 0)
+                        await splitRepo.UpdateRangeAsync(affectedSplits);
 
                     await _repository.SaveChangesAsync();
-
-                    // 4. Recompute status (#7) from the REMAINING (non-deleted) detections at the
-                    //    mandatory gates — start gate valid only with an in-window crossing.
-                    var remainingDetections = await rnRepo.GetQuery(rn =>
-                        rn.ParticipantId == decryptedParticipantId &&
-                        mandatoryGateIds.Contains(rn.CheckpointId) &&
-                        !rn.AuditProperties.IsDeleted)
-                        .Select(rn => new { rn.CheckpointId, rn.ChipTime })
-                        .ToListAsync();
-                    var coveredCheckpointIds = remainingDetections.Select(d => d.CheckpointId).Distinct().ToHashSet();
-
-                    var startGateIdsForStatus = idsByMandatoryDistance[startGateDistanceForStatus];
-                    var startChipForStatus = remainingDetections
-                        .Where(d => startGateIdsForStatus.Contains(d.CheckpointId))
-                        .OrderBy(d => d.ChipTime)
-                        .Select(d => (DateTime?)d.ChipTime)
-                        .FirstOrDefault();
-
-                    var validGatesForStatus = 0;
-                    foreach (var d in mandatoryDistances)
-                    {
-                        var gateValid = d == startGateDistanceForStatus
-                            ? startChipForStatus.HasValue &&
-                              StartWindow.Contains(startChipForStatus.Value, statusWindowFloor, statusWindowCeiling)
-                            : idsByMandatoryDistance[d].Overlaps(coveredCheckpointIds);
-                        if (gateValid)
-                            validGatesForStatus++;
-                    }
-
-                    var computedStatus = ResultClassifier.Classify(validGatesForStatus, mandatoryDistances.Count) switch
-                    {
-                        ParticipantOutcome.Finished => ResultStatus.Finished,
-                        ParticipantOutcome.DNF => ResultStatus.DNF,
-                        _ => ResultStatus.DNS
-                    };
-
-                    var existingResult = await resultsRepo.GetQuery(r =>
-                        r.ParticipantId == decryptedParticipantId &&
-                        r.EventId == decryptedEventId &&
-                        r.RaceId == decryptedRaceId)
-                        .FirstOrDefaultAsync();
-
-                    if (existingResult != null)
-                    {
-                        if (existingResult.Status != ResultStatus.DQ) // #5: DSQ survives recompute
-                            existingResult.Status = computedStatus;
-
-                        if (isFinishCheckpoint)
-                        {
-                            // Finish reverted: pull the finish time from the remaining AUTO read at the
-                            // finish checkpoint (if any) — else clear (truly empty → DNF). Next full
-                            // reprocess re-derives everything else from raw.
-                            var autoFinish = await rnRepo.GetQuery(rn =>
-                                rn.ParticipantId == decryptedParticipantId &&
-                                rn.CheckpointId == decryptedCheckpointId &&
-                                !rn.AuditProperties.IsDeleted)
-                                .OrderBy(rn => rn.ChipTime)
-                                .FirstOrDefaultAsync();
-
-                            if (autoFinish != null && computedStatus == ResultStatus.Finished)
-                            {
-                                existingResult.FinishTime = autoFinish.GunTime;
-                                existingResult.GunTime = autoFinish.GunTime;
-                                existingResult.NetTime = autoFinish.NetTime;
-                                existingResult.ManualFinishTimeMs = null;
-                            }
-                            else
-                            {
-                                existingResult.FinishTime = null;
-                                existingResult.GunTime = null;
-                                existingResult.NetTime = null;
-                                existingResult.ManualFinishTimeMs = null;
-                            }
-                        }
-                        // Intermediate checkpoint revert: finish fields unchanged; status may still flip via gates.
-
-                        // IsManual reflects whether ANY active override remains for this participant.
-                        existingResult.IsManual = await overrideRepo.GetQuery(o =>
-                            o.ParticipantId == decryptedParticipantId &&
-                            !o.AuditProperties.IsDeleted)
-                            .AnyAsync();
-                        existingResult.AuditProperties.UpdatedBy = userId;
-                        existingResult.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        await resultsRepo.UpdateAsync(existingResult);
-                        await _repository.SaveChangesAsync();
-                    }
-
-                    // 5. Re-rank the whole race (cheap; BulkUpdate over the Finished set, tracker-bypass).
-                    await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                 });
 
-                // Clear the participant's manual-timing flag if no active overrides remain.
+                // 4. FUNNEL through the proven pipeline (same call ProcessParticipantResultAsync
+                //    trusts): Phase 2 re-selects this gate's crossing from raw under the LOCKED
+                //    anchors of the runner's other crossings; Phase 2.4 re-applies the REMAINING
+                //    overrides; Phase 2.5 rebuilds the deleted splits (correctly chained); Phase 3
+                //    reclassifies (#7, DSQ preserved) and ApplyStoredRanksAsync re-ranks.
+                //    Failure here is recoverable exactly like the race-move path: the override is
+                //    gone, the gate is temporarily empty, and Process Result rebuilds it.
+                var workflow = await _rfidImportService.ProcessCompleteWorkflowAsync(eventId, raceId);
+                if (workflow.Status == "Failed")
+                {
+                    ErrorMessage = (workflow.Errors.FirstOrDefault() ?? "Reprocessing failed.") +
+                                   " The manual time was removed — run Process Result to rebuild the automated timing.";
+                    return null;
+                }
+
+                // 5. Clear the participant's manual-timing flag if no active overrides remain.
                 var hasRemainingOverrides = await overrideRepo.GetQuery(o =>
                     o.ParticipantId == decryptedParticipantId &&
                     !o.AuditProperties.IsDeleted)
                     .AnyAsync(ct);
                 if (!hasRemainingOverrides)
                 {
-                    var participantRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
-                    var participant = await participantRepo.GetQuery(p => p.Id == decryptedParticipantId)
+                    var flagRepo = _repository.GetRepository<Models.Data.Entities.Participant>();
+                    var flagParticipant = await flagRepo.GetQuery(p => p.Id == decryptedParticipantId)
                         .FirstOrDefaultAsync(ct);
-                    if (participant != null && participant.IsManualTiming)
+                    if (flagParticipant != null && flagParticipant.IsManualTiming)
                     {
-                        participant.IsManualTiming = false;
-                        participant.AuditProperties.UpdatedBy = userId;
-                        participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                        await participantRepo.UpdateAsync(participant);
+                        flagParticipant.IsManualTiming = false;
+                        flagParticipant.AuditProperties.UpdatedBy = userId;
+                        flagParticipant.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        await flagRepo.UpdateAsync(flagParticipant);
                         await _repository.SaveChangesAsync();
                     }
                 }
 
+                // 6. SNAPSHOT (commit-f contract): the restored crossing (if any), the stored
+                //    post-recalc result times/ranks/status — and the no-raw WARNING when the gate
+                //    stayed empty (the direct truth, covering both "no reads" and "all discarded").
+                var restoredRow = await rnRepo.GetQuery(rn =>
+                        rn.ParticipantId == decryptedParticipantId &&
+                        gateCheckpointIds.Contains(rn.CheckpointId) &&
+                        rn.AuditProperties.IsActive &&
+                        !rn.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .OrderBy(rn => rn.ChipTime)
+                    .FirstOrDefaultAsync(ct);
+
+                var updatedResult = await resultsRepo.GetQuery(r =>
+                        r.ParticipantId == decryptedParticipantId &&
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(ct);
+
+                var totalFinishers = await resultsRepo.CountAsync(r =>
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == ResultStatus.Finished &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted);
+
+                var revertParticipant = await _repository.GetRepository<Models.Data.Entities.Participant>()
+                    .GetQuery(p => p.Id == decryptedParticipantId)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(ct);
+
                 _logger.LogInformation(
-                    "Manual time override removed for participant {ParticipantId} at checkpoint {CheckpointId}",
-                    decryptedParticipantId, decryptedCheckpointId);
-                return true;
+                    "Manual time reverted for participant {ParticipantId} at checkpoint {CheckpointId} — " +
+                    "automated crossing {Restored}",
+                    decryptedParticipantId, decryptedCheckpointId,
+                    restoredRow != null ? $"restored at {restoredRow.ChipTime:HH:mm:ss} UTC" : "NOT available (gate empty)");
+
+                return new ManualTimeResponse
+                {
+                    ParticipantId = participantId,
+                    Bib = revertParticipant?.BibNumber ?? string.Empty,
+                    FullName = revertParticipant?.FullName ?? string.Empty,
+                    CheckpointId = decryptedCheckpointId,
+                    CheckpointName = editedCheckpoint.Name,
+                    ChipTimeMs = restoredRow?.GunTime ?? 0,
+                    CumulativeTimeMs = restoredRow?.GunTime ?? 0,
+                    SplitTimeMs = 0,
+                    IsManual = false, // the gate is back on automated timing
+                    GunTimeMs = updatedResult?.GunTime,
+                    GunTime = updatedResult?.GunTime is { } g ? FormatTime(g) : null,
+                    NetTimeMs = updatedResult?.NetTime,
+                    NetTime = updatedResult?.NetTime is { } n ? FormatTime(n) : null,
+                    OverallRank = updatedResult?.OverallRank,
+                    GenderRank = updatedResult?.GenderRank,
+                    CategoryRank = updatedResult?.CategoryRank,
+                    TotalFinishers = totalFinishers,
+                    Status = ResultStatus.ToDisplay(updatedResult?.Status),
+                    Warning = restoredRow == null
+                        ? "No automated reading exists for this checkpoint — reverting leaves it empty and the runner's status is computed accordingly (DNF/DNS)."
+                        : null
+                };
             }
             catch (Exception ex)
             {
                 ErrorMessage = $"Error removing manual time: {ex.Message}";
                 _logger.LogError(ex, "Error removing manual time for participant {ParticipantId}", participantId);
-                return false;
+                return null;
             }
         }
 

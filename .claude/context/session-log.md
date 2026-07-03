@@ -1304,3 +1304,19 @@ Branch: `bugfix/testing-round-1`.
 **UI contract documented in the spec** (UI work gated): per-edit → re-render header card + edited grid row from the response, race-wide rank shifts still warrant a background grid refresh; bulk Process Result → counts only, UI re-fetches (existing behavior).
 
 **Tests 134/134, build 0 errors. RULE PASS (a)–(f) COMPLETE — six commits, NOTHING pushed:** 6ee034d (#7), ef417c7 (#6), aa7ba0a (#2), 01727b9 (#1), a85ef01 (#4+#5), + this. Prod verification before push: reprocess flips Finished→DNF on old events (tell Punit FIRST); 5km-loop min-segment example; sequence 400s; out-of-window toggle → DNF+warning; DSQ → rerank/sort/label on all surfaces incl. public; DDL shows computed status; header card re-renders from edit response.
+
+---
+
+## 2026-07-03 (8) — UI for the rule pass (+1 API mapper guard)
+
+**API-side prerequisite discovered while wiring the UI:** BOTH UI editors call `participants/{id}/edit-participant` (plain `ParticipantRequest` → AutoMapper onto the entity) — NOT the extended endpoint commit (e) hardened. The mapper convention-mapped `Status` onto `Participant.Status` (bypassing DSQ validation/normalization/rerank; a client omitting the field would have NULLED it). Fix: `.ForMember(Status, Ignore())` on ParticipantRequest→Participant — status is unwritable via the plain edit (computed-only, #4); DSQ goes through `PUT api/races/{raceId}/participants/{participantId}`. API 134/134 green.
+
+**UI (Runnatics.Ui), build green:**
+- `ServiceUrls.updateParticipantStatus` + `ParticipantService.disqualifyParticipant(raceId, participantId, reason)` — the one status-writing call.
+- **#4/#5 Run Status DDL** (ParticipantDetail edit dialog + EditParticipant grid modal): shows the COMPUTED status ("<status> (computed)"); "DSQ (Disqualify)" is the only selectable change; reason field required (client-side guard + server 400 backstop); plain edit payloads NO LONGER send status; DSQ applied via the dedicated endpoint after the scalar save (its failure surfaces with a retry-able message).
+- **#7/#5 labels**: StatusBadge + grid statusConfig + VALID_STATUSES + Participant.status union extended with OK/DSQ (DSQ styled distinct: white-on-red).
+- **#1 toggle batching** (ParticipantDetail reads panel): switches now mutate LOCAL `pendingCrossings` only (pending = warning-colored); "Save & Process Result (n)" + "Discard changes" buttons; >1 read ON at one checkpoint = named conflict, save disabled; on save, per changed gate → chosen-read override or revert-to-auto, ONE refresh at the end; response `warning`s surfaced in the snackbar (severity warning). Auto-pick can still not be turned off directly (info toast).
+- **#1/#3 warnings**: typed manual-time saves surface the response Warning (accepted-but-invalid → runner classified) instead of a blank success.
+- **#3 refresh contract**: the detail page keeps the re-fetch model (refreshParticipant + fetchDetections after every save) — permitted by the spec contract; the response-driven render remains available for a later optimization.
+
+**NOT wired (flagged):** public ResultsPage does not currently render a status column — `PublicResultDto.Status` is available whenever that page adds one; un-DSQ path still unspecified. Both repos in working tree, NOT committed.

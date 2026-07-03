@@ -324,6 +324,12 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dst => dst.TenantId, opt => opt.Ignore()) // Set by service
                 .ForMember(dst => dst.EventId, opt => opt.Ignore()) // Set by service
                 .ForMember(dst => dst.RaceId, opt => opt.Ignore()) // Set by service
+                // #4 (2026-07-03): run status is COMPUTED-ONLY — the plain edit-participant path
+                // must never write it (convention mapping wrote request.Status onto the entity,
+                // bypassing the DSQ validation/normalization/re-rank of the extended endpoint —
+                // and a client omitting the field would have NULLED it). DSQ is set via
+                // PUT api/races/{raceId}/participants/{participantId} (UpdateParticipantRequest).
+                .ForMember(dst => dst.Status, opt => opt.Ignore())
                 .ForMember(dst => dst.BibNumber, opt => opt.MapFrom(src => src.BibNumber))
                 .ForMember(dst => dst.FirstName, opt => opt.MapFrom(src => src.FirstName))
                 .ForMember(dst => dst.LastName, opt => opt.MapFrom(src => src.LastName))

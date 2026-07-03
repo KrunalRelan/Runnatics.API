@@ -86,16 +86,18 @@ namespace Runnatics.Services.Tests.RFID
         }
 
         [TestMethod]
-        public void Cumulative_LateOnlyFinisher_MatchesGunClampedNetTime()
+        public void Cumulative_LateOnlyStart_GunBaselineForDisplay()
         {
             // Start row 25 min after the gun (past the ceiling) → baseline gun.
+            // MEANING CHANGE (#7, 2026-07-03): this runner used to be a KEPT finisher
+            // (finisher-safe, netting from the gun) — they are now DNF (invalid start data).
+            // The gun-fallback baseline REMAINS the display rule for their split table.
             var baseline = SplitBaseline.BaselineMs(1_500_000L, null);
             Assert.AreEqual(0L, baseline);
 
-            // Their NetTime nets from the gun (finisher-safe rule) → cumulative must equal it.
             var finishGunMs = 3_600_000L;
             Assert.AreEqual(finishGunMs, SplitBaseline.CumulativeMs(finishGunMs, baseline),
-                "late-only finisher: cumulative == gun-based NetTime");
+                "late-only start: displayed cumulative measures from the gun");
         }
 
         [TestMethod]

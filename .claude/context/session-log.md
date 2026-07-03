@@ -1224,3 +1224,17 @@ Branch: `bugfix/testing-round-1`.
 **IMPACT (for prod verification):** reprocess shifts starts LATER for any runner with an in-window start cluster → NetTimes SHORTEN, standings can shift. That is the correction, not a regression. Single-in-window-read runners (e.g. bib 5176) unchanged.
 
 **Build 0 errors. NOT committed — sits alone in the working tree for its own commit.**
+
+---
+
+## 2026-07-03 (2) — RULE PASS commit (a): #7 status definitions (truth-table rewrite)
+
+**New model (client-confirmed):** per mandatory gate, is there VALID data? all → OK/Finished · some → DNF · none → DNS. Invalid reads are not data. Mandatory set = {START gate, implicitly (decision 1)} ∪ {IsMandatory} ∪ {finish fallback}. Start-gate validity = in-window crossing (`StartWindow.Contains`, inclusive). Negative finish = invalid finish data.
+
+**KILLED (deliberate, client sign-off):** finisher-safe/Row-5 keep (no-valid-start finisher was Finished → now DNF); late-only-finisher keep (→ DNF); early-taint DNS (pre-floor + finish data was DNS → now DNF; DNS only when invalid was the only data). Reprocessing events 30/36/38 WILL flip some Finished → DNF — tell Punit BEFORE reprocessing.
+
+**Code:** `ResultClassifier` rewritten (Classify(valid,total) + MandatoryDistances helper — distance-keyed, shared-mat safe); `StartWindow.Contains` added (THE window membership test); `ResultStatus.ToDisplay` ("Finished"→"OK", display only). Rewired: RFIDImportService Phase 3; ResultsService CalculateResultsAsync (+race/window load — was window-blind), RecordManualTimeAsync, RemoveManualTimeAsync (+window load), ComputeParticipantStatusAsync (full entity load — was anonymous-type). Display mapping applied: ParticipantResultResponse, ManualTimeResponse, participants Excel (:1833), results Excel. Public site never renders status (filter-only) — nothing to map. Grid status display lands with commit (e)''s DDL fix (same surface).
+
+**Tests 107/107.** MEANING CHANGES (for spec honesty): RowG late-only Finished→DNF; RowI no-start-finisher Finished→DNF; RowC-late+covered Finished→DNF; RowE/RowK early+covered DNS→DNF; classifier signature now gate-coverage counts; SplitBaseline late-only test re-premised (runner now DNF; gun-fallback stays the split display rule). Unchanged rows asserted: valid-start+coverage, valid-start+gaps, invalid-only DNS, boundary inclusivity, midnight-crossing window.
+
+**Spec:** STATUS DEFINITIONS section added with removed-rules history. NOT pushed.

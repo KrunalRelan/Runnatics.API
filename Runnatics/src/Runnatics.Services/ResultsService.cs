@@ -318,18 +318,28 @@ namespace Runnatics.Services
                     return response;
                 }
 
-                // BUG-26: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two devices
-                // at the same DistanceFromStart are ONE logical gate — a detection at ANY checkpoint
-                // at that distance satisfies it. Fall back to the highest distance if none flagged.
-                // Mirrors RFIDImportService.CalculateRaceResultsAsync.
-                var mandatoryCheckpoints = allCheckpoints.Where(c => c.IsMandatory).ToList();
-                var mandatoryDistances = mandatoryCheckpoints.Count > 0
-                    ? mandatoryCheckpoints.Select(c => c.DistanceFromStart).Distinct().ToList()
-                    : new List<decimal> { allCheckpoints.First().DistanceFromStart }; // already sorted descending
+                // BUG-26 + #7: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two
+                // devices at the same DistanceFromStart are ONE logical gate — a detection at ANY
+                // checkpoint at that distance satisfies it. The mandatory SET comes from the shared
+                // ResultClassifier.MandatoryDistances ({START gate, implicitly} ∪ {IsMandatory} ∪
+                // {finish fallback}). Mirrors RFIDImportService.CalculateRaceResultsAsync.
+                var mandatoryDistances = ResultClassifier.MandatoryDistances(allCheckpoints);
+                var startGateDistance = allCheckpoints.Min(c => c.DistanceFromStart);
 
                 var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
                     d => d,
                     d => allCheckpoints.Where(c => c.DistanceFromStart == d).Select(c => c.Id).ToHashSet());
+
+                // #7 start-gate validity needs the valid-start window (StartWindow.Contains).
+                var raceForStatus = await _repository.GetRepository<Race>().GetQuery(r =>
+                        r.Id == decryptedRaceId && r.EventId == decryptedEventId)
+                    .Include(r => r.RaceSettings)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+                var (validStartFloor, validStartCeiling) = StartWindow.For(
+                    raceForStatus?.StartTime,
+                    raceForStatus?.RaceSettings?.EarlyStartCutOff,
+                    raceForStatus?.RaceSettings?.LateStartCutOff);
 
                 // Finish gate = ALL checkpoints at the highest mandatory distance — finish time and
                 // status must come from the same rule.
@@ -369,21 +379,40 @@ namespace Runnatics.Services
                     participantIds.Contains(rn.ParticipantId) &&
                     mandatoryGateIdList.Contains(rn.CheckpointId) &&
                     !rn.AuditProperties.IsDeleted)
-                    .Select(rn => new { rn.ParticipantId, rn.CheckpointId })
+                    .Select(rn => new { rn.ParticipantId, rn.CheckpointId, rn.ChipTime })
                     .ToListAsync();
 
                 var detectionsByParticipant = allDetections
                     .GroupBy(d => d.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.Select(d => d.CheckpointId).ToHashSet());
 
-                // Finisher = every mandatory DISTANCE satisfied by a detection at ANY checkpoint
-                // at that distance
-                var finisherIds = allParticipants
-                    .Where(p =>
+                // Start-gate crossing per participant (earliest normalized row at the start gate) —
+                // its window membership decides start-gate validity under #7.
+                var startGateIds = idsByMandatoryDistance[startGateDistance];
+                var earliestStartChipByParticipant = allDetections
+                    .Where(d => startGateIds.Contains(d.CheckpointId))
+                    .GroupBy(d => d.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.Min(d => d.ChipTime));
+
+                // #7: all mandatory gates valid → Finished(OK) · some → DNF · none → DNS.
+                ParticipantOutcome OutcomeFor(int pid)
+                {
+                    var covered = detectionsByParticipant.GetValueOrDefault(pid, []);
+                    var valid = 0;
+                    foreach (var d in mandatoryDistances)
                     {
-                        var covered = detectionsByParticipant.GetValueOrDefault(p.Id, []);
-                        return mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
-                    })
+                        var gateValid = d == startGateDistance
+                            ? earliestStartChipByParticipant.TryGetValue(pid, out var chip) &&
+                              StartWindow.Contains(chip, validStartFloor, validStartCeiling)
+                            : idsByMandatoryDistance[d].Overlaps(covered);
+                        if (gateValid)
+                            valid++;
+                    }
+                    return ResultClassifier.Classify(valid, mandatoryDistances.Count);
+                }
+
+                var finisherIds = allParticipants
+                    .Where(p => OutcomeFor(p.Id) == ParticipantOutcome.Finished)
                     .Select(p => p.Id)
                     .ToHashSet();
 
@@ -420,10 +449,15 @@ namespace Runnatics.Services
                     foreach (var participant in allParticipants)
                     {
                         var pSplits = splitsByParticipant.GetValueOrDefault(participant.Id, []);
-                        var covered = detectionsByParticipant.GetValueOrDefault(participant.Id, []);
-                        bool isFinisher = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
+                        var outcome = OutcomeFor(participant.Id);
+                        bool isFinisher = outcome == ParticipantOutcome.Finished;
 
-                        string status = isFinisher ? ResultStatus.Finished : ResultStatus.DNF;
+                        string status = outcome switch
+                        {
+                            ParticipantOutcome.Finished => ResultStatus.Finished,
+                            ParticipantOutcome.DNF => ResultStatus.DNF,
+                            _ => ResultStatus.DNS
+                        };
                         long? finishTime = null;
 
                         if (isFinisher)
@@ -807,7 +841,7 @@ namespace Runnatics.Services
                         OverallRank = result.OverallRank,
                         GenderRank = result.GenderRank,
                         CategoryRank = result.CategoryRank,
-                        Status = result.Status,
+                        Status = ResultStatus.ToDisplay(result.Status), // #7: "Finished" renders as "OK"
                         DisqualificationReason = result.DisqualificationReason,
                         IsOfficial = result.IsOfficial,
                         CertificateGenerated = result.CertificateGenerated
@@ -1705,15 +1739,14 @@ namespace Runnatics.Services
                 var rnRepo = _repository.GetRepository<ReadNormalized>();
                 var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
 
-                // BUG-26: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two devices
-                // at the same DistanceFromStart are ONE logical gate — a detection at ANY checkpoint
-                // at that distance satisfies it. Mirrors RFIDImportService.CalculateRaceResultsAsync
-                // and ComputeParticipantStatusAsync. (raceCheckpoints already holds all active
+                // BUG-26 + #7: mandatory evaluation is per-DISTANCE via the shared
+                // ResultClassifier.MandatoryDistances ({START gate, implicitly} ∪ {IsMandatory} ∪
+                // {finish fallback}); the START gate counts only with an IN-WINDOW crossing.
+                // Mirrors RFIDImportService.CalculateRaceResultsAsync and
+                // ComputeParticipantStatusAsync. (raceCheckpoints already holds all active
                 // checkpoints for this race — no extra query needed.)
-                var mandatoryDistances = raceCheckpoints.Any(c => c.IsMandatory)
-                    ? raceCheckpoints.Where(c => c.IsMandatory).Select(c => c.DistanceFromStart).Distinct().ToList()
-                    // Fallback: the highest distance acts as the mandatory finish gate
-                    : new List<decimal> { raceCheckpoints.Max(c => c.DistanceFromStart) };
+                var mandatoryDistances = ResultClassifier.MandatoryDistances(raceCheckpoints);
+                var startGateDistanceForStatus = raceCheckpoints.Min(c => c.DistanceFromStart);
 
                 var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
                     d => d,
@@ -1722,21 +1755,46 @@ namespace Runnatics.Services
                 var mandatoryGateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
 
                 // Existing ReadNormalized detections at the mandatory gates for this participant
-                var existingDetectedIds = await rnRepo.GetQuery(rn =>
+                // (ChipTime needed for #7 start-gate window validity)
+                var existingDetections = await rnRepo.GetQuery(rn =>
                     rn.ParticipantId == decryptedParticipantId &&
                     mandatoryGateIds.Contains(rn.CheckpointId) &&
                     !rn.AuditProperties.IsDeleted)
-                    .Select(rn => rn.CheckpointId)
-                    .Distinct()
+                    .Select(rn => new { rn.CheckpointId, rn.ChipTime })
                     .ToListAsync();
 
                 // Add the checkpoint being recorded now to the covered set (in-memory, before DB write)
-                var coveredCheckpointIds = existingDetectedIds.ToHashSet();
+                var coveredCheckpointIds = existingDetections.Select(d => d.CheckpointId).Distinct().ToHashSet();
                 coveredCheckpointIds.Add(decryptedCheckpointId);
 
-                var computedStatus = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(coveredCheckpointIds))
-                    ? ResultStatus.Finished
-                    : ResultStatus.DNF;
+                // #7 start-gate validity: the edit itself when it IS the start (in-window — an
+                // out-of-window start was discarded above), else the earliest existing start row.
+                var startGateIdsForStatus = idsByMandatoryDistance[startGateDistanceForStatus];
+                DateTime? startChipForStatus = isStart
+                    ? crossingUtc
+                    : existingDetections
+                        .Where(d => startGateIdsForStatus.Contains(d.CheckpointId))
+                        .OrderBy(d => d.ChipTime)
+                        .Select(d => (DateTime?)d.ChipTime)
+                        .FirstOrDefault();
+
+                var validGatesForStatus = 0;
+                foreach (var d in mandatoryDistances)
+                {
+                    var gateValid = d == startGateDistanceForStatus
+                        ? startChipForStatus.HasValue &&
+                          StartWindow.Contains(startChipForStatus.Value, validStartFloor, validStartCeiling)
+                        : idsByMandatoryDistance[d].Overlaps(coveredCheckpointIds);
+                    if (gateValid)
+                        validGatesForStatus++;
+                }
+
+                var computedStatus = ResultClassifier.Classify(validGatesForStatus, mandatoryDistances.Count) switch
+                {
+                    ParticipantOutcome.Finished => ResultStatus.Finished,
+                    ParticipantOutcome.DNF => ResultStatus.DNF,
+                    _ => ResultStatus.DNS
+                };
 
                 // Try to find existing SplitTimes row (not required — will upsert below)
                 var existingSplitForSegment = await splitRepo.GetQuery(s =>
@@ -2105,7 +2163,7 @@ namespace Runnatics.Services
                     GenderRank = genderRank,
                     CategoryRank = categoryRank,
                     TotalFinishers = totalFinishers,
-                    Status = computedStatus
+                    Status = ResultStatus.ToDisplay(computedStatus) // #7: "Finished" renders as "OK"
                 };
             }
             catch (Exception ex)
@@ -2227,14 +2285,25 @@ namespace Runnatics.Services
                 var isFinishCheckpoint = raceCheckpoints.Count > 0
                     && raceCheckpoints[raceCheckpoints.Count - 1].Id == decryptedCheckpointId;
 
-                var mandatoryDistances = raceCheckpoints.Any(c => c.IsMandatory)
-                    ? raceCheckpoints.Where(c => c.IsMandatory).Select(c => c.DistanceFromStart).Distinct().ToList()
-                    : new List<decimal> { raceCheckpoints.Max(c => c.DistanceFromStart) };
+                // BUG-26 + #7: shared mandatory set ({START gate, implicitly} ∪ {IsMandatory} ∪
+                // {finish fallback}); start-gate validity = in-window crossing.
+                var mandatoryDistances = ResultClassifier.MandatoryDistances(raceCheckpoints);
+                var startGateDistanceForStatus = raceCheckpoints.Min(c => c.DistanceFromStart);
 
                 var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
                     d => d,
                     d => raceCheckpoints.Where(c => c.DistanceFromStart == d).Select(c => c.Id).ToHashSet());
                 var mandatoryGateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
+
+                var raceForStatusWindow = await _repository.GetRepository<Race>()
+                    .GetQuery(r => r.Id == decryptedRaceId && r.EventId == decryptedEventId)
+                    .Include(r => r.RaceSettings)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(ct);
+                var (statusWindowFloor, statusWindowCeiling) = StartWindow.For(
+                    raceForStatusWindow?.StartTime,
+                    raceForStatusWindow?.RaceSettings?.EarlyStartCutOff,
+                    raceForStatusWindow?.RaceSettings?.LateStartCutOff);
 
                 var rnRepo = _repository.GetRepository<ReadNormalized>();
                 var splitRepo = _repository.GetRepository<SplitTimes>();
@@ -2292,19 +2361,40 @@ namespace Runnatics.Services
 
                     await _repository.SaveChangesAsync();
 
-                    // 4. Recompute status from the REMAINING (non-deleted) detections at the mandatory gates.
-                    var remainingDetectedIds = await rnRepo.GetQuery(rn =>
+                    // 4. Recompute status (#7) from the REMAINING (non-deleted) detections at the
+                    //    mandatory gates — start gate valid only with an in-window crossing.
+                    var remainingDetections = await rnRepo.GetQuery(rn =>
                         rn.ParticipantId == decryptedParticipantId &&
                         mandatoryGateIds.Contains(rn.CheckpointId) &&
                         !rn.AuditProperties.IsDeleted)
-                        .Select(rn => rn.CheckpointId)
-                        .Distinct()
+                        .Select(rn => new { rn.CheckpointId, rn.ChipTime })
                         .ToListAsync();
-                    var coveredCheckpointIds = remainingDetectedIds.ToHashSet();
+                    var coveredCheckpointIds = remainingDetections.Select(d => d.CheckpointId).Distinct().ToHashSet();
 
-                    var computedStatus = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(coveredCheckpointIds))
-                        ? ResultStatus.Finished
-                        : ResultStatus.DNF;
+                    var startGateIdsForStatus = idsByMandatoryDistance[startGateDistanceForStatus];
+                    var startChipForStatus = remainingDetections
+                        .Where(d => startGateIdsForStatus.Contains(d.CheckpointId))
+                        .OrderBy(d => d.ChipTime)
+                        .Select(d => (DateTime?)d.ChipTime)
+                        .FirstOrDefault();
+
+                    var validGatesForStatus = 0;
+                    foreach (var d in mandatoryDistances)
+                    {
+                        var gateValid = d == startGateDistanceForStatus
+                            ? startChipForStatus.HasValue &&
+                              StartWindow.Contains(startChipForStatus.Value, statusWindowFloor, statusWindowCeiling)
+                            : idsByMandatoryDistance[d].Overlaps(coveredCheckpointIds);
+                        if (gateValid)
+                            validGatesForStatus++;
+                    }
+
+                    var computedStatus = ResultClassifier.Classify(validGatesForStatus, mandatoryDistances.Count) switch
+                    {
+                        ParticipantOutcome.Finished => ResultStatus.Finished,
+                        ParticipantOutcome.DNF => ResultStatus.DNF,
+                        _ => ResultStatus.DNS
+                    };
 
                     var existingResult = await resultsRepo.GetQuery(r =>
                         r.ParticipantId == decryptedParticipantId &&
@@ -2524,24 +2614,23 @@ namespace Runnatics.Services
 
         private async Task<string> ComputeParticipantStatusAsync(int eventId, int raceId, int participantId)
         {
-            // BUG-26: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID. Two devices at
-            // the same DistanceFromStart are ONE logical gate — a detection at ANY checkpoint at
-            // that distance satisfies it. Mirrors RFIDImportService.CalculateRaceResultsAsync.
+            // BUG-26 + #7: mandatory evaluation is per-DISTANCE via the shared
+            // ResultClassifier.MandatoryDistances ({START gate, implicitly} ∪ {IsMandatory} ∪
+            // {finish fallback}); the START gate counts only with an IN-WINDOW crossing
+            // (StartWindow.Contains). all gates valid → Finished · some → DNF · none → DNS.
             var allCheckpoints = await _repository.GetRepository<Checkpoint>()
                 .GetQuery(cp => cp.RaceId == raceId
                              && cp.EventId == eventId
                              && cp.AuditProperties.IsActive
                              && !cp.AuditProperties.IsDeleted)
-                .Select(cp => new { cp.Id, cp.DistanceFromStart, cp.IsMandatory })
+                .AsNoTracking()
                 .ToListAsync();
 
             if (allCheckpoints.Count == 0)
                 return ResultStatus.DNF;
 
-            var mandatoryDistances = allCheckpoints.Any(cp => cp.IsMandatory)
-                ? allCheckpoints.Where(cp => cp.IsMandatory).Select(cp => cp.DistanceFromStart).Distinct().ToList()
-                // Fallback: the highest distance acts as the mandatory finish gate
-                : new List<decimal> { allCheckpoints.Max(cp => cp.DistanceFromStart) };
+            var mandatoryDistances = ResultClassifier.MandatoryDistances(allCheckpoints);
+            var startGateDistance = allCheckpoints.Min(cp => cp.DistanceFromStart);
 
             var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
                 d => d,
@@ -2549,18 +2638,45 @@ namespace Runnatics.Services
 
             var gateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
 
-            var detectedIds = (await _repository.GetRepository<ReadNormalized>()
+            var race = await _repository.GetRepository<Race>()
+                .GetQuery(r => r.Id == raceId && r.EventId == eventId)
+                .Include(r => r.RaceSettings)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+            var (windowFloor, windowCeiling) = StartWindow.For(
+                race?.StartTime, race?.RaceSettings?.EarlyStartCutOff, race?.RaceSettings?.LateStartCutOff);
+
+            var detections = await _repository.GetRepository<ReadNormalized>()
                 .GetQuery(rn => rn.ParticipantId == participantId
                              && gateIds.Contains(rn.CheckpointId)
                              && !rn.AuditProperties.IsDeleted)
-                .Select(rn => rn.CheckpointId)
-                .Distinct()
-                .ToListAsync())
-                .ToHashSet();
+                .Select(rn => new { rn.CheckpointId, rn.ChipTime })
+                .ToListAsync();
 
-            return mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(detectedIds))
-                ? ResultStatus.Finished
-                : ResultStatus.DNF;
+            var detectedIds = detections.Select(d => d.CheckpointId).ToHashSet();
+            var startGateIds = idsByMandatoryDistance[startGateDistance];
+            var startChip = detections
+                .Where(d => startGateIds.Contains(d.CheckpointId))
+                .OrderBy(d => d.ChipTime)
+                .Select(d => (DateTime?)d.ChipTime)
+                .FirstOrDefault();
+
+            var validGates = 0;
+            foreach (var d in mandatoryDistances)
+            {
+                var gateValid = d == startGateDistance
+                    ? startChip.HasValue && StartWindow.Contains(startChip.Value, windowFloor, windowCeiling)
+                    : idsByMandatoryDistance[d].Overlaps(detectedIds);
+                if (gateValid)
+                    validGates++;
+            }
+
+            return ResultClassifier.Classify(validGates, mandatoryDistances.Count) switch
+            {
+                ParticipantOutcome.Finished => ResultStatus.Finished,
+                ParticipantOutcome.DNF => ResultStatus.DNF,
+                _ => ResultStatus.DNS
+            };
         }
     }
 }

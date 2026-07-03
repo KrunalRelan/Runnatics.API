@@ -145,7 +145,7 @@ namespace Runnatics.Services
                 ws1.Cell(row, col++).Value = r.Participant?.FullName  ?? string.Empty;
                 ws1.Cell(row, col++).Value = r.Participant?.Gender    ?? string.Empty;
                 ws1.Cell(row, col++).Value = r.Participant?.AgeCategory ?? string.Empty;
-                ws1.Cell(row, col++).Value = r.Status ?? string.Empty;
+                ws1.Cell(row, col++).Value = Models.Data.Constants.ResultStatus.ToDisplay(r.Status); // #7: "Finished" → "OK"
 
                 // Gun Time
                 ws1.Cell(row, col++).Value = r.GunTime.HasValue

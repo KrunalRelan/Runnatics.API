@@ -2714,16 +2714,14 @@ namespace Runnatics.Services
                     startCheckpoint.Id, startCheckpoint.DistanceFromStart,
                     finishCheckpoint.Id, finishCheckpoint.DistanceFromStart);
 
-                // BUG-05 + BUG-26: "Finished" requires detection at ALL mandatory DISTANCES — not
-                // per checkpoint ID. Two devices at the same DistanceFromStart (e.g. parent +
-                // sibling at the finish line) are ONE logical gate: a detection at ANY checkpoint
-                // at that distance satisfies it. Fall back to the highest-distance checkpoint's
-                // distance when none are flagged mandatory. Mirrors ResultsService
-                // (CalculateResultsAsync / ComputeParticipantStatusAsync / RecordManualTimeAsync).
-                var mandatoryCheckpoints = checkpoints.Where(cp => cp.IsMandatory).ToList();
-                var mandatoryDistances = mandatoryCheckpoints.Count > 0
-                    ? mandatoryCheckpoints.Select(cp => cp.DistanceFromStart).Distinct().ToList()
-                    : new List<decimal> { finishCheckpoint.DistanceFromStart };
+                // BUG-05 + BUG-26 + #7: mandatory evaluation is per-DISTANCE, not per-checkpoint-ID.
+                // Two devices at the same DistanceFromStart are ONE logical gate: a detection at
+                // ANY checkpoint at that distance satisfies it. The mandatory SET is
+                // ResultClassifier.MandatoryDistances = {START gate (implicitly mandatory)} ∪
+                // {IsMandatory} ∪ ({finish} fallback when none flagged) — the one helper shared
+                // with ResultsService (CalculateResultsAsync / RecordManualTimeAsync /
+                // RemoveManualTimeAsync).
+                var mandatoryDistances = ResultClassifier.MandatoryDistances(checkpoints);
 
                 // ALL active checkpoint IDs at each mandatory distance (flagged or not — a reading
                 // on an unflagged sibling/child device at the same distance still satisfies the gate).
@@ -2870,26 +2868,44 @@ namespace Runnatics.Services
                 var dnfParticipantIds = new HashSet<int>();
                 var dnsParticipantIds = new HashSet<int>();
 
+                // #7 STATUS DEFINITIONS (client-confirmed 2026-07-03): per mandatory gate, is there
+                // VALID data? all → Finished(OK) · some → DNF · none → DNS (ResultClassifier).
+                //   START gate: valid iff the selected start crossing is IN-WINDOW
+                //     (StartWindow.Contains — invalid/pre-floor/late reads are NOT data).
+                //   Other gates: valid iff a normalized crossing exists at that distance.
+                //   Negative finish time: INVALID data at the finish gate.
+                // This deliberately removed finisher-safe / late-only-keep / early-taint-DNS —
+                // see ResultClassifier docs.
+                var startGateDistance = startCheckpoint.DistanceFromStart;
+
                 foreach (var participant in allParticipants)
                 {
                     var covered = mandatoryDetectionsByParticipant.GetValueOrDefault(participant.Id, []);
-                    // BUG-26: a mandatory DISTANCE is satisfied by a detection at ANY checkpoint
-                    // at that distance (not every checkpoint ID individually).
-                    bool allMandatoryCovered = mandatoryDistances.All(d => idsByMandatoryDistance[d].Overlaps(covered));
+                    var totalGates = mandatoryDistances.Count;
+                    var validGates = 0;
 
-                    // The start-window truth table (negative-finish → DNF; early → DNS taint;
-                    // in-window → Finished/DNF by coverage; finisher-safe; else DNS) is a single
-                    // pure function — see ResultClassifier for the full table + unit tests.
-                    var outcome = ResultClassifier.Classify(
-                        earliestStartByParticipant.TryGetValue(participant.Id, out var earliestStart)
-                            ? (DateTime?)earliestStart
-                            : null,
-                        validStartFloorP3,
-                        validStartCeilingP3,
-                        allMandatoryCovered,
-                        flaggedNegativeFinishIds.Contains(participant.Id));
+                    foreach (var d in mandatoryDistances)
+                    {
+                        bool gateValid;
+                        if (d == startGateDistance)
+                        {
+                            gateValid = earliestStartByParticipant.TryGetValue(participant.Id, out var startChip) &&
+                                        StartWindow.Contains(startChip, validStartFloorP3, validStartCeilingP3);
+                        }
+                        else
+                        {
+                            gateValid = idsByMandatoryDistance[d].Overlaps(covered);
+                        }
 
-                    switch (outcome)
+                        // Impossible (negative) finish time = invalid data at the finish gate.
+                        if (gateValid && d == finishGateDistance && flaggedNegativeFinishIds.Contains(participant.Id))
+                            gateValid = false;
+
+                        if (gateValid)
+                            validGates++;
+                    }
+
+                    switch (ResultClassifier.Classify(validGates, totalGates))
                     {
                         case ParticipantOutcome.Finished:
                             finishedParticipantIds.Add(participant.Id);

@@ -176,6 +176,33 @@ handling — pre-floor exclusion, invalid-placeholder retention — stays.)
 These are the same rules as §3 above (`DeduplicateAssignedReadings`, Phase 2 `bestReading`
 for non-start gates) — named here so they cannot drift independently of the selection rule.
 
+---
+
+## STATUS DEFINITIONS (#7 — client-confirmed 2026-07-03, REWRITES the old truth table)
+
+Single source: `ResultClassifier` (`Classify` + `MandatoryDistances`), consumed by pipeline
+Phase 3 AND every ResultsService path (CalculateResultsAsync, RecordManualTimeAsync,
+RemoveManualTimeAsync, ComputeParticipantStatusAsync).
+
+- **OK** (display label for stored `"Finished"` — display mapping only, `ResultStatus.ToDisplay`;
+  stored values unchanged, migration is a later pass): VALID data at **ALL** mandatory gates.
+- **DNF**: **ANY** mandatory gate's data missing or invalid (at least one gate valid).
+- **DNS**: **NO** valid data at **ANY** mandatory gate. Invalid reads (pre-floor, out-of-window,
+  discarded) are NOT data — an invalid-reads-only runner is DNS.
+- **Mandatory gate set** = `{START gate (implicitly mandatory, keyed on DISTANCE — shared-mat
+  safe)} ∪ {IsMandatory} ∪ ({finish} fallback when none flagged)`.
+- **Start-gate validity** = the selected start crossing is inside the §NAMED-INVARIANTS window
+  (`StartWindow.Contains`, boundaries inclusive). An impossible (negative) finish time = invalid
+  data at the finish gate.
+
+**DELIBERATELY REMOVED (client sign-off 2026-07-03):**
+- *Finisher-safe / Row-5 keep* — no-valid-start finishers were kept Finished; now DNF.
+- *Late-only-finisher keep* — start past the ceiling + finish data was Finished; now DNF.
+- *Early-taint DNS* — pre-floor start + finish data was DNS; now DNF (early read = invalid data,
+  not a taint); DNS only when the invalid read was their only data.
+Reprocessing old events (30/36/38) WILL flip some previously-Finished runners to DNF — the new
+rule working, not a regression.
+
 **Edge cases handled:** shared start/finish mat cross-reads (gun window); multiple reads at a mat
 (dedup LAST/EARLIEST); out-and-back via turnaround/pass-ordinal; pre-gun early-line starters (window
 pre-side + gun-clamp).

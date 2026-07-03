@@ -1,7 +1,9 @@
+using Runnatics.Models.Data.Entities;
+
 namespace Runnatics.Services
 {
     /// <summary>
-    /// Final status of a participant after result calculation (Phase 3).
+    /// Final status of a participant after result calculation.
     /// </summary>
     public enum ParticipantOutcome
     {
@@ -11,72 +13,92 @@ namespace Runnatics.Services
     }
 
     /// <summary>
-    /// SINGLE SOURCE OF TRUTH for the Finished / DNF / DNS decision (the start-window truth
-    /// table). Extracted from RFIDImportService.CalculateRaceResultsAsync (Phase 3) so the
-    /// table is unit-testable row by row; Phase 3 calls this per participant.
+    /// SINGLE SOURCE OF TRUTH for the Finished / DNF / DNS decision.
     ///
-    /// Inputs (all derived by the caller from normalized data):
-    ///   earliestStartRead   — the participant's EARLIEST normalized start-gate crossing.
-    ///                         Phase 2 stores ONE start row per participant: the SELECTED
-    ///                         valid start (START SELECTION INVARIANT — the LAST read of the
-    ///                         first in-window pass, StartWindow.SelectStartRead) when one
-    ///                         exists, else the earliest available read as an INVALID
-    ///                         placeholder — so "early + in-window both present" resolves
-    ///                         to the in-window read BEFORE this classifier runs;
-    ///   validStartFloor / validStartCeiling — [gun − EarlyStartCutOff, gun + LateStartCutOff]
-    ///                         via StartWindow (null when the race has no gun — fall back
-    ///                         to "any read is a valid start");
-    ///   allMandatoryCovered — detection at EVERY mandatory DISTANCE (any checkpoint at the
-    ///                         distance satisfies the gate — BUG-05/BUG-26);
-    ///   hasNegativeFinishTime — finish-gate GunTime &lt; 0 (impossible time, stray read).
+    /// STATUS DEFINITIONS (#7, client-confirmed 2026-07-03 — REWRITES the old truth table):
+    ///   OK  (display label for stored "Finished") — the runner has VALID data at ALL mandatory
+    ///        checkpoints.
+    ///   DNF — ANY mandatory checkpoint's data is missing or invalid (but at least one mandatory
+    ///        checkpoint HAS valid data).
+    ///   DNS — NO valid data at ANY mandatory checkpoint.
+    ///   Invalid reads (pre-floor, out-of-window, discarded by sequence/min-segment rules) do NOT
+    ///   count as data — a runner with ONLY invalid reads is DNS.
     ///
-    /// The table (order matters):
-    ///   1. negative finish time                  → DNF   (never Finished, never 500s the race)
-    ///   2. earliest start BEFORE floor           → DNS   (early taint — even with finish data)
-    ///   3. earliest start in [floor, ceiling]    → Finished if all mandatory covered, else DNF
-    ///   4. no valid start but all covered        → Finished (finisher-safe: late/missing start
-    ///                                              read is not a "did not start"; nets from gun)
-    ///   5. no valid start, not a finisher        → DNS
+    /// What this deliberately KILLED (previous truth-table rows, removed with client sign-off):
+    ///   - FINISHER-SAFE / "Row-5 keep": a runner with no valid start but full finish data used to
+    ///     be kept Finished (netting from the gun). Now: the start gate is mandatory and its data
+    ///     is missing/invalid → DNF.
+    ///   - LATE-ONLY-FINISHER keep: same fate — a start read past the ceiling is invalid → DNF.
+    ///   - EARLY-TAINT DNS: a pre-floor start with finish data used to be DNS for the whole run.
+    ///     Now the early read is simply "invalid data at the start gate" → DNF when other mandatory
+    ///     gates have valid data; DNS only when the invalid read was their only data.
+    ///   Expect reprocessed old events to flip some previously-Finished runners to DNF — that is
+    ///   the new rule working, not a regression.
+    ///
+    /// Gate VALIDITY is the caller's job (this method only counts):
+    ///   - START gate: valid iff the selected start crossing is inside
+    ///     [gun − EarlyStartCutOff, gun + LateStartCutOff] (StartWindow.Contains; boundaries
+    ///     inclusive; no-gun fallback = any read valid).
+    ///   - Other mandatory gates: valid iff a normalized crossing exists at that DISTANCE
+    ///     (any checkpoint at the distance — BUG-05/BUG-26), surviving sequence/min-segment rules.
+    ///   - An impossible (negative) finish time = INVALID data at the finish gate.
+    ///
+    /// DSQ is NOT decided here — it is a manual override applied on top of the computed status.
     /// </summary>
     public static class ResultClassifier
     {
-        public static ParticipantOutcome Classify(
-            DateTime? earliestStartRead,
-            DateTime? validStartFloor,
-            DateTime? validStartCeiling,
-            bool allMandatoryCovered,
-            bool hasNegativeFinishTime)
+        /// <summary>
+        /// The three-way rule: all mandatory gates valid → Finished; some → DNF; none → DNS.
+        /// </summary>
+        public static ParticipantOutcome Classify(int validMandatoryGates, int totalMandatoryGates)
         {
-            // Row 1: reached the finish gate with an impossible (negative) time → DNF.
-            if (hasNegativeFinishTime)
-                return ParticipantOutcome.DNF;
-
-            // Row 2: start crossing BEFORE the valid-start floor (too early) → illegitimate
-            // start → DNS for the WHOLE run, even if mandatory checkpoints / finish are present.
-            if (validStartFloor.HasValue &&
-                earliestStartRead.HasValue &&
-                earliestStartRead.Value < validStartFloor.Value)
-            {
-                return ParticipantOutcome.DNS;
-            }
-
-            // Row 3: valid start = an in-window read (boundaries INCLUSIVE). When the window
-            // can't be computed (no gun — shouldn't happen post-validation), any read counts.
-            bool hasValidStart = earliestStartRead.HasValue &&
-                (!validStartFloor.HasValue ||
-                 (earliestStartRead.Value >= validStartFloor.Value &&
-                  earliestStartRead.Value <= validStartCeiling!.Value));
-
-            if (hasValidStart)
-                return allMandatoryCovered ? ParticipantOutcome.Finished : ParticipantOutcome.DNF;
-
-            // Row 4: no valid start (late-only, or no start read), but the runner covered every
-            // mandatory distance → they demonstrably ran → keep Finished (finisher-safe).
-            if (allMandatoryCovered)
+            if (totalMandatoryGates > 0 && validMandatoryGates >= totalMandatoryGates)
                 return ParticipantOutcome.Finished;
 
-            // Row 5: no valid start AND not a finisher → Did Not Start.
+            if (validMandatoryGates > 0)
+                return ParticipantOutcome.DNF;
+
             return ParticipantOutcome.DNS;
+        }
+
+        /// <summary>
+        /// The MANDATORY gate set (as DISTANCES — two devices at one distance are ONE logical gate):
+        ///   { START gate } ∪ { IsMandatory-flagged distances } ∪ ({ finish } when none are flagged).
+        ///
+        /// The START gate (lowest DistanceFromStart) is IMPLICITLY mandatory always — the client
+        /// rule "missing valid start = DNF" is meaningless otherwise, and most race configs do not
+        /// flag it. Keyed on DISTANCE, never on device: on a shared start/finish mat the start gate
+        /// is the distance-0 checkpoint, not whichever primary a device lookup lands on.
+        /// </summary>
+        public static List<decimal> MandatoryDistances(IReadOnlyCollection<Checkpoint> activeCheckpoints)
+        {
+            if (activeCheckpoints.Count == 0)
+                return new List<decimal>();
+
+            var distances = new SortedSet<decimal>
+            {
+                // Start gate — implicitly mandatory (decision confirmed 2026-07-03).
+                activeCheckpoints.Min(cp => cp.DistanceFromStart)
+            };
+
+            var flagged = activeCheckpoints
+                .Where(cp => cp.IsMandatory)
+                .Select(cp => cp.DistanceFromStart)
+                .ToList();
+
+            if (flagged.Count > 0)
+            {
+                foreach (var d in flagged)
+                    distances.Add(d);
+            }
+            else
+            {
+                // No flagged checkpoints → the finish (highest distance) is the fallback gate,
+                // exactly as before — now alongside the implicit start.
+                distances.Add(activeCheckpoints.Max(cp => cp.DistanceFromStart));
+            }
+
+            return distances.ToList();
         }
     }
 }

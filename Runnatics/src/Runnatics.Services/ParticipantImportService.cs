@@ -1830,7 +1830,7 @@ namespace Runnatics.Services
                     ws.Cell(row, 4).Value = p.Email ?? string.Empty;
                     ws.Cell(row, 5).Value = p.Gender ?? string.Empty;
                     ws.Cell(row, 6).Value = p.AgeCategory ?? string.Empty;
-                    ws.Cell(row, 7).Value = result?.Status ?? p.Status;
+                    ws.Cell(row, 7).Value = MapResultStatus(result?.Status ?? p.Status); // #7: "Finished" → "OK"
                     ws.Cell(row, 8).Value = result?.GunTime.HasValue == true ? FormatDuration(result.GunTime!.Value) : string.Empty;
                     ws.Cell(row, 9).Value = result?.NetTime.HasValue == true ? FormatDuration(result.NetTime!.Value) : string.Empty;
 

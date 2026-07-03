@@ -31,6 +31,15 @@ namespace Runnatics.Services
         }
 
         /// <summary>
+        /// Is a start crossing INSIDE the valid-start window? Boundaries are INCLUSIVE.
+        /// A null window (no gun — shouldn't happen post-validation) treats any read as valid,
+        /// matching the historical fallback. This is THE membership test used by classification
+        /// (#7 start-gate validity) and display — never re-implement the comparison inline.
+        /// </summary>
+        public static bool Contains(DateTime read, DateTime? floor, DateTime? ceiling)
+            => !floor.HasValue || (read >= floor.Value && read <= ceiling!.Value);
+
+        /// <summary>
         /// START SELECTION INVARIANT (client-confirmed, HISTORICAL rule — changing it requires
         /// explicit client sign-off): among IN-WINDOW start reads, the start is the
         /// <b>LAST read of the FIRST in-window pass</b> — the runner LEAVING the mat, not the

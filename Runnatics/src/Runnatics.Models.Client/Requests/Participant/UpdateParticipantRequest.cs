@@ -20,12 +20,14 @@ namespace Runnatics.Models.Client.Requests.Participant
         public DateTime? DateOfBirth { get; set; }
 
         /// <summary>
-        /// Run status: OK, DNF, Disqualified, DNS
+        /// #4/#5 (2026-07-03): run status is COMPUTED from timing data (OK/DNF/DNS — #7 rules);
+        /// the ONLY manually settable value is DSQ (accepted spellings: "DSQ" / "DQ" /
+        /// "Disqualified" — normalized to the stored "DQ"). Any other value → 400.
         /// </summary>
         public string? RunStatus { get; set; }
 
         /// <summary>
-        /// Required when RunStatus is "Disqualified"
+        /// MANDATORY when RunStatus is DSQ.
         /// </summary>
         public string? DisqualificationReason { get; set; }
 
@@ -52,19 +54,20 @@ namespace Runnatics.Models.Client.Requests.Participant
         {
             if (RunStatus != null)
             {
-                var validStatuses = new[] { "OK", "DNF", "Disqualified", "DNS" };
-                if (!validStatuses.Contains(RunStatus, StringComparer.OrdinalIgnoreCase))
+                // #4 (2026-07-03): OK/DNF/DNS are COMPUTED-ONLY (#7 gate-coverage rules) — the
+                // sole manual override is DSQ.
+                var dsqSpellings = new[] { "DSQ", "DQ", "Disqualified" };
+                if (!dsqSpellings.Contains(RunStatus, StringComparer.OrdinalIgnoreCase))
                 {
                     yield return new ValidationResult(
-                        "RunStatus must be one of: OK, DNF, Disqualified, DNS",
+                        "Run status is computed from timing data — only DSQ can be set manually.",
                         new[] { nameof(RunStatus) });
                 }
-
-                if (string.Equals(RunStatus, "Disqualified", StringComparison.OrdinalIgnoreCase)
-                    && string.IsNullOrWhiteSpace(DisqualificationReason))
+                else if (string.IsNullOrWhiteSpace(DisqualificationReason))
                 {
+                    // #5: the reason is MANDATORY for a disqualification.
                     yield return new ValidationResult(
-                        "DisqualificationReason is required when RunStatus is Disqualified",
+                        "DisqualificationReason is required when setting DSQ.",
                         new[] { nameof(DisqualificationReason) });
                 }
             }

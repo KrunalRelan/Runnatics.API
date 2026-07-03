@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Requests.RFID;
 using Runnatics.Models.Client.Responses.RFID;
+using Runnatics.Models.Data.Constants;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -2906,6 +2907,19 @@ namespace Runnatics.Services
                 var dnfParticipantIds = new HashSet<int>();
                 var dnsParticipantIds = new HashSet<int>();
 
+                // #5: DSQ is a MANUAL override — it SURVIVES reprocess. DSQ'd runners keep their
+                // row (Status="DQ", reason, null ranks) and are excluded from classification and
+                // ranking entirely (RankCalculator loads Status=="Finished" only).
+                var dsqParticipantIds = (await _repository.GetRepository<Results>().GetQuery(r =>
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == ResultStatus.DQ &&
+                        !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(r => r.ParticipantId)
+                    .ToListAsync())
+                    .ToHashSet();
+
                 // #7 STATUS DEFINITIONS (client-confirmed 2026-07-03): per mandatory gate, is there
                 // VALID data? all → Finished(OK) · some → DNF · none → DNS (ResultClassifier).
                 //   START gate: valid iff the selected start crossing is IN-WINDOW
@@ -2918,6 +2932,9 @@ namespace Runnatics.Services
 
                 foreach (var participant in allParticipants)
                 {
+                    if (dsqParticipantIds.Contains(participant.Id))
+                        continue; // #5: DSQ preserved — not reclassified, not ranked
+
                     var covered = mandatoryDetectionsByParticipant.GetValueOrDefault(participant.Id, []);
                     var totalGates = mandatoryDistances.Count;
                     var validGates = 0;

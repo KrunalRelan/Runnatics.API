@@ -1,4 +1,4 @@
-namespace Runnatics.Models.Client.Public
+﻿namespace Runnatics.Models.Client.Public
 {
     public class PublicResultDto
     {
@@ -30,5 +30,10 @@ namespace Runnatics.Models.Client.Public
         public int? GenderRank { get; set; }
 
         public List<PublicSplitDto>? Splits { get; set; }
+
+        // #5/#7: DISPLAY status ("OK" / "DNF" / "DNS" / "DSQ") — DSQ runners are visible on the
+        // public site with the DSQ label, null ranks, sorted last.
+        public string? Status { get; set; }
     }
 }
+

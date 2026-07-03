@@ -76,7 +76,9 @@ namespace Runnatics.Services
                             r.RaceId  == raceId &&
                             r.AuditProperties.IsActive &&
                             !r.AuditProperties.IsDeleted)
-                .OrderBy(r => r.OverallRank ?? int.MaxValue)
+                // #7/#5 sort: ranked (OK) first, then DNF, DNS, DSQ LAST
+                .OrderBy(r => r.Status == "Finished" ? 0 : r.Status == "DNF" ? 1 : r.Status == "DNS" ? 2 : r.Status == "DQ" ? 3 : 4)
+                .ThenBy(r => r.OverallRank ?? int.MaxValue)
                 .AsNoTracking()
                 .ToListAsync(cancellationToken);
 

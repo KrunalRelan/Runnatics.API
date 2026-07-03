@@ -1133,8 +1133,12 @@ namespace Runnatics.Services
 
                 var totalCount = await query.CountAsync();
 
+                // #7/#5 sort: ranked (OK) first by rank, then DNF, DNS, DSQ LAST. The bare
+                // OrderBy(OverallRank) put SQL NULLs FIRST — DSQ/DNF rows would have floated to
+                // the TOP of the public leaderboard.
                 var items = await query
-                    .OrderBy(r => r.OverallRank)
+                    .OrderBy(r => r.Status == "Finished" ? 0 : r.Status == "DNF" ? 1 : r.Status == "DNS" ? 2 : r.Status == "DQ" ? 3 : 4)
+                    .ThenBy(r => r.OverallRank ?? int.MaxValue)
                     .Skip((page - 1) * pageSize)
                     .Take(pageSize)
                     .ToListAsync();
@@ -1178,6 +1182,8 @@ namespace Runnatics.Services
                 OverallRank = r.OverallRank,
                 CategoryRank = r.CategoryRank,
                 GenderRank = r.GenderRank,
+                // #5/#7 display status — DSQ visible with its label, null ranks, sorted last.
+                Status = Models.Data.Constants.ResultStatus.ToDisplay(r.Status),
                 Splits = r.Participant?.SplitTimes?
                     .OrderBy(st => st.ToCheckpoint?.DistanceFromStart)
                     .Select(st => new PublicSplitDto

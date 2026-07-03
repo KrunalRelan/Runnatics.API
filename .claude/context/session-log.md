@@ -1276,3 +1276,19 @@ Branch: `bugfix/testing-round-1`.
 **Persistence:** ChosenRawReadId infra unchanged — toggles survive clear+reprocess via Phase 2.4; on reprocess Phase 3 re-applies the same #7 window check to the override row → consistent classification by construction.
 
 **Spec:** discard-and-warn added to the DELIBERATELY REMOVED list with the incoherence reason. **Tests 127/127** (pure pieces — Contains, CrossingSequence, MinSegmentSeconds — already pinned; the accept-path itself is EF-heavy → prod/integration verification: toggle an out-of-window start → runner DNF + warning, revert → recompute). NOT pushed.
+
+---
+
+## 2026-07-03 (6) — RULE PASS commit (e): #4 status DDL + #5 DSQ (rerank, preservation, sort)
+
+**#4 root cause:** grid/DDL got RAW stored "Finished" (`PopulateCheckpointTimesAsync :649`) which matched no DDL option → control fell back to stale Participant.Status ("Registered"). Fix: grid Status = `MapResultStatus(result.Status)` (display form OK/DNF/DNS/DSQ). RunStatus is now COMPUTED-ONLY at the request boundary: `UpdateParticipantRequest.Validate` rejects OK/DNF/DNS ("only DSQ can be set manually" → 400); reason MANDATORY for DSQ.
+
+**#5 DSQ:** boundary normalization to the ONE stored value "DQ" (`ResultStatus.IsDsq` accepts DSQ/DQ/Disqualified any-case — enum-vs-string trap pinned by test); display label "DSQ" (`ToDisplay`). On DSQ save (`UpdateParticipantExtendedAsync`): Status="DQ" + reason, ranks NULLED, missing Results row CREATED (grid/public visibility), then `RankCalculator.ApplyStoredRanksAsync` re-ranks in memory (loads Finished only → everyone below steps up, gender+category included; NOT an RFID reprocess).
+
+**DSQ survives every recompute path:** Phase 3 (skip-classify + keep row), `ResultsService.CalculateResultsAsync` (force-recalc never deletes DQ rows; no new row created), `ReprocessParticipantInternalAsync`, `RecordManualTimeAsync`, `RemoveManualTimeAsync` (all guard `Status != DQ` before overwriting).
+
+**Sort (ranked OK → DNF → DNS → DSQ LAST) on every surface:** participants grid StatusOrder (:467), participants Excel export, admin leaderboard (all three rankBy branches), public results list (also fixes the EF `OrderBy(OverallRank)` SQL-NULLs-FIRST bug that would have floated DSQ/DNF to the TOP of the public leaderboard), results Excel export. `PublicResultDto.Status` added (display form) so the public site can render the DSQ label.
+
+**Un-DSQ path NOT specified by client — not implemented** (RunStatus accepts only DSQ; reverting a DSQ currently requires a direct data fix). Flagged for follow-up.
+
+**Tests 134/134:** +7 (ToDisplay mapping, IsDsq spellings, canonical "DQ" pin, computed-only rejection, DSQ+reason matrix). NOT pushed.

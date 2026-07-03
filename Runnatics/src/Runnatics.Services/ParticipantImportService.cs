@@ -8,6 +8,7 @@ using Runnatics.Models.Client.Requests.Participant;
 using Runnatics.Models.Client.Responses.Export;
 using Runnatics.Models.Client.Responses.Participants;
 using Runnatics.Models.Client.Responses.Races;
+using Runnatics.Models.Data.Constants;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -463,11 +464,13 @@ namespace Runnatics.Services
                             Status = r != null ? r.Status : null,
                             OverallRank = r != null ? r.OverallRank : (int?)null,
                             GunTime = r != null ? r.GunTime : (long?)null,
-                            // Sort priority: Finished=0, DNF=1, DNS=2, No result=3
-                            StatusOrder = r == null ? 3 :
+                            // #7/#5 sort priority: OK(Finished)=0, DNF=1, DNS=2, DSQ=3 (LAST of the
+                            // statuses), no result=4
+                            StatusOrder = r == null ? 4 :
                                 r.Status == "Finished" ? 0 :
                                 r.Status == "DNF" ? 1 :
-                                r.Status == "DNS" ? 2 : 3
+                                r.Status == "DNS" ? 2 :
+                                r.Status == "DQ" ? 3 : 4
                         });
 
                 // Apply sorting: Status priority first, then by GunTime asc within each group, then by Bib
@@ -645,8 +648,10 @@ namespace Runnatics.Services
                     // ========== POPULATE RESULTS DATA ==========
                     if (results.TryGetValue(participantId, out var result))
                     {
-                        // Status from results
-                        participant.Status = result.Status;
+                        // #4: the grid / Run-Status DDL shows the COMPUTED result status in its
+                        // DISPLAY form (OK/DNF/DNS/DSQ) — the raw stored "Finished" matched no DDL
+                        // option and the control fell back to the stale Participant.Status.
+                        participant.Status = MapResultStatus(result.Status);
 
                         // Gun Time (total time from race start)
                         if (result.GunTime.HasValue)
@@ -1960,10 +1965,15 @@ namespace Runnatics.Services
                     smsSentByParticipant = new Dictionary<int, DateTime>();
                 }
 
-                // Sort: Finished first by NetTime ascending, then others by bib number
+                // #7/#5 sort: OK(Finished) first by NetTime, then DNF, DNS, DSQ LAST, no-result
+                // trailing; bib as the stable tiebreak.
                 var ordered = participants
                     .Select(p => (Participant: p, Result: results.TryGetValue(p.Id, out var r) ? r : null))
-                    .OrderBy(x => x.Result?.Status == "Finished" ? 0 : 1)
+                    .OrderBy(x => x.Result == null ? 4 :
+                        x.Result.Status == "Finished" ? 0 :
+                        x.Result.Status == "DNF" ? 1 :
+                        x.Result.Status == "DNS" ? 2 :
+                        x.Result.Status == "DQ" ? 3 : 4)
                     .ThenBy(x => x.Result?.NetTime ?? long.MaxValue)
                     .ThenBy(x => x.Participant.BibNumber == null ? 0 : x.Participant.BibNumber.Length)
                     .ThenBy(x => x.Participant.BibNumber)
@@ -2059,11 +2069,12 @@ namespace Runnatics.Services
             return $"{string.Join("_", parts)}.xlsx";
         }
 
+        // #7/#5 display mapping: "Finished" → "OK", "DQ" → "DSQ" (stored values unchanged).
         private static string MapResultStatus(string? status) => status switch
         {
             "Finished" => "OK",
             "DNF" => "DNF",
-            "DQ" => "DQ",
+            "DQ" => "DSQ",
             "DNS" => "DNS",
             _ => string.Empty
         };
@@ -2104,12 +2115,11 @@ namespace Runnatics.Services
                 if (request.ManualDistance.HasValue) participant.ManualDistance = request.ManualDistance;
                 if (request.LoopCount.HasValue) participant.LoopCount = request.LoopCount;
 
-                // Map RunStatus to Participant.Status
-                if (request.RunStatus != null)
+                // #4/#5 (2026-07-03): only DSQ is manually settable (request validation enforces
+                // it); normalize every spelling to the ONE canonical stored value "DQ".
+                if (request.RunStatus != null && ResultStatus.IsDsq(request.RunStatus))
                 {
-                    participant.Status = request.RunStatus.Equals("OK", StringComparison.OrdinalIgnoreCase)
-                        ? "Registered"
-                        : request.RunStatus;
+                    participant.Status = ResultStatus.DQ;
                 }
 
                 participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
@@ -2132,6 +2142,8 @@ namespace Runnatics.Services
                     }
                 }
 
+                var dsqApplied = false;
+
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
                     await participantRepo.UpdateAsync(participant);
@@ -2145,13 +2157,41 @@ namespace Runnatics.Services
                             r.RaceId == decryptedRaceId)
                             .FirstOrDefaultAsync();
 
+                        // #5: DSQ save — normalize to the stored "DQ", null the ranks (a DSQ'd
+                        // runner is never ranked), keep times for the record, and re-rank the race
+                        // after the transaction. A missing Results row is created so the DSQ is
+                        // visible on the grid/public site.
+                        var settingDsq = request.RunStatus != null && ResultStatus.IsDsq(request.RunStatus);
+
+                        if (result == null && settingDsq)
+                        {
+                            result = new Models.Data.Entities.Results
+                            {
+                                EventId = participant.EventId,
+                                RaceId = decryptedRaceId,
+                                ParticipantId = decryptedParticipantId,
+                                IsOfficial = false,
+                                CertificateGenerated = false,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = userId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            };
+                            await resultsRepo.AddAsync(result);
+                        }
+
                         if (result != null)
                         {
-                            if (request.RunStatus != null)
+                            if (settingDsq)
                             {
-                                result.Status = request.RunStatus.Equals("OK", StringComparison.OrdinalIgnoreCase)
-                                    ? "Finished"
-                                    : request.RunStatus;
+                                result.Status = ResultStatus.DQ;
+                                result.OverallRank = null;
+                                result.GenderRank = null;
+                                result.CategoryRank = null;
+                                dsqApplied = true;
                             }
                             if (request.DisqualificationReason != null)
                                 result.DisqualificationReason = request.DisqualificationReason;
@@ -2164,7 +2204,8 @@ namespace Runnatics.Services
 
                             result.AuditProperties.UpdatedDate = DateTime.UtcNow;
                             result.AuditProperties.UpdatedBy = userId;
-                            await resultsRepo.UpdateAsync(result);
+                            if (result.Id != 0)
+                                await resultsRepo.UpdateAsync(result);
                         }
                     }
 
@@ -2256,6 +2297,18 @@ namespace Runnatics.Services
                         _logger.LogInformation("Saved {Count} manual checkpoint times for Participant {ParticipantId}", request.ManualCheckpointTimes.Count, participantId);
                     }
                 });
+
+                // #5: a DSQ re-ranks the race IN MEMORY (RankCalculator loads Status=="Finished"
+                // only, so the DQ row drops out and everyone below steps up — overall, gender AND
+                // category). Deliberately NOT an RFID reprocess.
+                if (dsqApplied)
+                {
+                    await RankCalculator.ApplyStoredRanksAsync(
+                        _repository, participant.EventId, decryptedRaceId, userId);
+                    _logger.LogInformation(
+                        "Participant {ParticipantId} disqualified — race {RaceId} re-ranked (DSQ excluded).",
+                        participantId, decryptedRaceId);
+                }
 
                 _logger.LogInformation("Participant {ParticipantId} updated successfully by User {UserId}", participantId, userId);
                 return MapToSearchResponse(participant);

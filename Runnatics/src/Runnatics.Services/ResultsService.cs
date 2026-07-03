@@ -422,11 +422,23 @@ namespace Runnatics.Services
 
                 // Delete existing results if force recalculation
                 var resultsRepo = _repository.GetRepository<Results>();
+                // #5: DSQ rows are a MANUAL override — they survive force-recalc untouched.
+                var dsqParticipantIds = (await resultsRepo.GetQuery(r =>
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == ResultStatus.DQ &&
+                        !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(r => r.ParticipantId)
+                    .ToListAsync())
+                    .ToHashSet();
+
                 if (request.ForceRecalculation)
                 {
                     var existingResults = await resultsRepo.GetQuery(r =>
                         r.EventId == decryptedEventId &&
-                        r.RaceId == decryptedRaceId)
+                        r.RaceId == decryptedRaceId &&
+                        r.Status != ResultStatus.DQ) // #5: never delete a DSQ row
                         .ToListAsync();
 
                     if (existingResults.Any())
@@ -449,6 +461,9 @@ namespace Runnatics.Services
                 {
                     foreach (var participant in allParticipants)
                     {
+                        if (dsqParticipantIds.Contains(participant.Id))
+                            continue; // #5: DSQ preserved — not reclassified, no new row
+
                         var pSplits = splitsByParticipant.GetValueOrDefault(participant.Id, []);
                         var outcome = OutcomeFor(participant.Id);
                         bool isFinisher = outcome == ParticipantOutcome.Finished;
@@ -643,15 +658,21 @@ namespace Runnatics.Services
                 // Order by the STORED rank column (already computed with the RankOnNet / per-view
                 // basis). The row order therefore matches the displayed rank number. (Was: OrderBy(NetTime)
                 // when RankOnNet=true while showing the gun-based OverallRank — rows and numbers disagreed.)
+                // #7/#5 status priority (ranked OK first, then DNF, DNS, DSQ LAST) applied ahead
+                // of the rank ordering on every branch.
                 query = rankBy switch
                 {
                     "gender" => query
-                        .OrderBy(r => r.Participant.Gender)
+                        .OrderBy(r => r.Status == "Finished" ? 0 : r.Status == "DNF" ? 1 : r.Status == "DNS" ? 2 : r.Status == "DQ" ? 3 : 4)
+                        .ThenBy(r => r.Participant.Gender)
                         .ThenBy(r => r.GenderRank ?? int.MaxValue),
                     "category" => query
-                        .OrderBy(r => r.Participant.AgeCategory)
+                        .OrderBy(r => r.Status == "Finished" ? 0 : r.Status == "DNF" ? 1 : r.Status == "DNS" ? 2 : r.Status == "DQ" ? 3 : 4)
+                        .ThenBy(r => r.Participant.AgeCategory)
                         .ThenBy(r => r.CategoryRank ?? int.MaxValue),
-                    _ => query.OrderBy(r => r.OverallRank ?? int.MaxValue)
+                    _ => query
+                        .OrderBy(r => r.Status == "Finished" ? 0 : r.Status == "DNF" ? 1 : r.Status == "DNS" ? 2 : r.Status == "DQ" ? 3 : 4)
+                        .ThenBy(r => r.OverallRank ?? int.MaxValue)
                 };
 
                 var totalCount = await query.CountAsync();
@@ -2089,7 +2110,8 @@ namespace Runnatics.Services
                             existingResult.NetTime = chipTimeMs;
                             existingResult.ManualFinishTimeMs = chipTimeMs;
                         }
-                        existingResult.Status = computedStatus;
+                        if (existingResult.Status != ResultStatus.DQ) // #5: DSQ survives recompute
+                            existingResult.Status = computedStatus;
                         existingResult.IsManual = true;
                         existingResult.AuditProperties.IsActive = true;
                         existingResult.AuditProperties.IsDeleted = false;
@@ -2454,7 +2476,8 @@ namespace Runnatics.Services
 
                     if (existingResult != null)
                     {
-                        existingResult.Status = computedStatus;
+                        if (existingResult.Status != ResultStatus.DQ) // #5: DSQ survives recompute
+                            existingResult.Status = computedStatus;
 
                         if (isFinishCheckpoint)
                         {
@@ -2650,7 +2673,7 @@ namespace Runnatics.Services
                 !r.AuditProperties.IsDeleted)
                 .FirstOrDefaultAsync();
 
-            if (result != null)
+            if (result != null && result.Status != ResultStatus.DQ) // #5: DSQ survives recompute
             {
                 result.Status = await ComputeParticipantStatusAsync(eventId, raceId, participantId);
                 result.AuditProperties.UpdatedBy = userId;

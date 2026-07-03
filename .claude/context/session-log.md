@@ -1348,3 +1348,20 @@ Branch: `bugfix/testing-round-1`.
 **Tests 144/144:** +5 DeviceSerialResolver pins (variants, case-insensitivity, most-specific-wins suffix collision). EF-heavy → prod-verify: choose-unassigned → reprocess → assignment survives; revert → reprocess → cleaned up; choose at an occupied gate flows through the normal conflict path.
 
 **UI half NOT here (gated on Kunal''s discriminator run):** enable unassigned-row switches, shared-mat inline gate picker, pass target checkpointId in handleSaveCrossings. NOT pushed.
+
+---
+
+## 2026-07-03 (11) - ASSIGN-THEN-CHOOSE complete: DTO addendum (API c0ee4aa) + UI half (UI 30b4beb)
+
+**GO order executed. Nothing pushed - the ordered end-to-end on the test event gates the push.**
+
+**API addendum (c0ee4aa):** the UI half needs to know, per UNASSIGNED read, which gates it may be chosen for (an unassigned row has no checkpointId). `LoadRawRfidReadingsAsync` now emits `ChoosableCheckpoints` (new `ChoosableCheckpointDto`: encrypted id + "Name (dist km)" display form) - resolved EXACTLY like RecordManualTimeAsync validates the save (batch serial -> read serial via the ONE DeviceSerialResolver map, then the device's active checkpoints in the race), loaded lazily (zero extra queries when every read is assigned). Contract: null = assigned; empty = device unmapped (NOT choosable, toggle locked); 1 = UI auto-targets; N = shared mat -> inline picker. Same resolver + same filter as the save validation = the UI can never offer a gate the server would 400. 144/144.
+
+**UI half (30b4beb, ParticipantDetail.tsx + RfidRawReadingDto.ts):**
+- Unassigned rows' switches ENABLED when choosable: 1 candidate -> toggle ON auto-targets (amber-pending); shared mat -> "Crossing at which gate?" Menu sets the target then amber-pending; 0 candidates -> stays locked ("device is not mapped in this race"). Checkpoint cell shows "Unassigned -> <gate>" while pending; OFF drops target with flag.
+- New state: `pendingTargets: Record<readId, {id,name}>` (always paired with pendingCrossings[id]=true) + `gatePicker`. `effectiveGateOf(read) = checkpointId ?? pendingTargets[id]?.id`.
+- `crossingConflicts` + `handleSaveCrossings` group by EFFECTIVE gate -> the save passes the resolved checkpointId to addManualTime (param existed) and an unassigned read chosen at an occupied gate surfaces the SAME named conflict (no auto-replace preserved). Discard/catch keep both maps consistent.
+
+**FLAGGED DEVIATION (deadlock fix, needs Kunal sign-off before push):** the old guard blocked toggling the automatic (dedup) pick OFF entirely -> a gate occupied by an automatic crossing could NEVER be conflict-resolved, blocking the ordered end-to-end (choose pre-gun 05:26:22 at a Start occupied by the auto pick 05:33:33-class). Guard was implementation detail, not client rule. Now: dedup pick can go pending-OFF (amber); a save leaving a gate all-OFF with NO override = no-op + info note "the automatic crossing stays" (the guard's purpose, enforced at save, without the deadlock). ON still never silently turns anything off.
+
+**End-to-end gate (before ANY push):** toggle 05:26:22 (unassigned, shared mat) -> picker -> Start -> resolve conflict by toggling the auto start OFF -> Save -> runner reclassifies with pre-gun chosen start (DNF + warning expected, accept-and-classify) -> revert -> auto-selection returns. Pending pushes: API dbee14d + c0ee4aa; UI 30b4beb.

@@ -48,5 +48,20 @@ namespace Runnatics.Services.RFID
             }
             return deviceLookup;
         }
+
+        /// <summary>
+        /// Resolve the FIRST matching serial (priority order — callers pass the batch serial
+        /// before the read's own DeviceId) to a Device.Id. 0 = unresolved. Null/empty entries
+        /// are skipped, so callers can pass navigation values without guarding.
+        /// </summary>
+        public static int ResolveDeviceId(Dictionary<string, int> lookup, params string?[] serialsInPriorityOrder)
+        {
+            foreach (var serial in serialsInPriorityOrder)
+            {
+                if (!string.IsNullOrEmpty(serial) && lookup.TryGetValue(serial, out var id))
+                    return id;
+            }
+            return 0;
+        }
     }
 }

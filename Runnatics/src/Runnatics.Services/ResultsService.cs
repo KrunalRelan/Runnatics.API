@@ -1256,23 +1256,27 @@ namespace Runnatics.Services
                 .GroupBy(c => c.DistanceFromStart)
                 .ToDictionary(g => g.Key, g => g.First().Name!);
 
-            // ASSIGN-THEN-CHOOSE (UI contract): for UNASSIGNED reads, surface the candidate gates
-            // the read may be chosen for — the read's device's checkpoints in this race, resolved
-            // exactly like RecordManualTimeAsync validates (batch serial first, then the read's
-            // own, via the ONE DeviceSerialResolver map). One candidate → the UI auto-targets it;
-            // several (shared mat) → inline picker; none → the toggle stays locked.
+            // Serial → device resolution serves TWO columns now: DeviceName (every read — the
+            // UI shows the friendly name, serial only as fallback) and, for UNASSIGNED reads,
+            // the ASSIGN-THEN-CHOOSE candidate gates. Same resolution as Phase 1.5 and the
+            // save-time validation (batch serial first, then the read's own, via the ONE
+            // DeviceSerialResolver map). Active devices only, ordered by Id so a duplicate-MAC
+            // pair resolves deterministically (the duplicate-MAC finding).
+            var devices = await _repository.GetRepository<Device>()
+                .GetQuery(d => d.AuditProperties.IsActive && !d.AuditProperties.IsDeleted)
+                .OrderBy(d => d.Id)
+                .AsNoTracking()
+                .ToListAsync();
+            var deviceLookup = DeviceSerialResolver.BuildLookup(devices);
+            var devicesById = devices
+                .GroupBy(d => d.Id)
+                .ToDictionary(g => g.Key, g => g.First());
+
             var hasUnassigned = readings.Any(r => !r.ReadingCheckpointAssignments
                 .Any(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted));
-            var deviceLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var checkpointsByDeviceId = new Dictionary<int, List<Checkpoint>>();
             if (hasUnassigned)
             {
-                var devices = await _repository.GetRepository<Device>()
-                    .GetQuery(d => d.AuditProperties.IsActive && !d.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .ToListAsync();
-                deviceLookup = DeviceSerialResolver.BuildLookup(devices);
-
                 checkpointsByDeviceId = (await checkpointRepo.GetQuery(c =>
                     c.RaceId == raceId &&
                     c.EventId == eventId &&
@@ -1316,18 +1320,20 @@ namespace Runnatics.Services
                         checkpointDisplay = $"{name} ({dist:0.##} km)";
                 }
 
-                // Candidate gates for an unassigned read (assign-then-choose) — null for
-                // assigned reads, empty when the device is not mapped in this race.
+                // Resolve the read's device once: friendly name for the Device column (null when
+                // the serial is unmapped — the UI falls back to the serial), and the candidate
+                // gates for an unassigned read (assign-then-choose).
+                var resolvedDeviceId = DeviceSerialResolver.ResolveDeviceId(
+                    deviceLookup, r.UploadBatch?.DeviceId, r.DeviceId);
+                var deviceName = resolvedDeviceId != 0
+                    && devicesById.TryGetValue(resolvedDeviceId, out var resolvedDevice)
+                    && !string.IsNullOrEmpty(resolvedDevice.Name)
+                        ? resolvedDevice.Name
+                        : null;
+
                 List<ChoosableCheckpointDto>? choosable = null;
                 if (assignment == null)
                 {
-                    var batchSerial = r.UploadBatch?.DeviceId;
-                    var resolvedDeviceId = 0;
-                    if (!string.IsNullOrEmpty(batchSerial) && deviceLookup.TryGetValue(batchSerial, out var byBatch))
-                        resolvedDeviceId = byBatch;
-                    else if (!string.IsNullOrEmpty(r.DeviceId) && deviceLookup.TryGetValue(r.DeviceId, out var byRead))
-                        resolvedDeviceId = byRead;
-
                     choosable = resolvedDeviceId != 0
                         && checkpointsByDeviceId.TryGetValue(resolvedDeviceId, out var candidateCps)
                         ? candidateCps
@@ -1362,6 +1368,7 @@ namespace Runnatics.Services
                     CheckpointDistance = assignment?.Checkpoint?.DistanceFromStart,
                     Device = r.UploadBatch?.ReaderDevice?.Name ?? r.DeviceId,
                     DeviceId = r.DeviceId,
+                    DeviceName = deviceName,
                     GunTime = isNormalized && normalized?.GunTime is { } gv
                         ? TimeFormatter.FormatTimeSpan(gv) : null,
                     NetTime = isNormalized && normalized?.NetTime is { } nv
@@ -2460,11 +2467,7 @@ namespace Runnatics.Services
                 .ToListAsync();
             var deviceLookup = DeviceSerialResolver.BuildLookup(devices);
 
-            var deviceId = 0;
-            if (!string.IsNullOrEmpty(batchSerial) && deviceLookup.TryGetValue(batchSerial, out var byBatch))
-                deviceId = byBatch;
-            else if (!string.IsNullOrEmpty(chosenRead.DeviceId) && deviceLookup.TryGetValue(chosenRead.DeviceId, out var byRead))
-                deviceId = byRead;
+            var deviceId = DeviceSerialResolver.ResolveDeviceId(deviceLookup, batchSerial, chosenRead.DeviceId);
 
             if (deviceId == 0)
                 return new HashSet<int>();

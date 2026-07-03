@@ -23,6 +23,13 @@ namespace Runnatics.Models.Client.Responses.Participants
         public decimal? CheckpointDistance { get; set; }
         public string Device { get; set; } = string.Empty;
         public string DeviceId { get; set; } = string.Empty;
+        /// <summary>
+        /// Friendly device name ("box2", "Box 01") resolved from the read's serial via the same
+        /// active-device lookup Phase 1.5 uses (deleted rows filtered, deterministic on duplicate
+        /// MACs). Null when the serial is unmapped — the UI falls back to showing DeviceId, which
+        /// stays in the payload for debugging.
+        /// </summary>
+        public string? DeviceName { get; set; }
         public string? GunTime { get; set; }
         public string? NetTime { get; set; }
         public string ChipId { get; set; } = string.Empty;

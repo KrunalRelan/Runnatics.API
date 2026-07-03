@@ -67,5 +67,53 @@ namespace Runnatics.Services.Tests.RFID
             Assert.IsFalse(lookup.ContainsKey(string.Empty));
             Assert.AreEqual(2, lookup["0016251182bc"]);
         }
+
+        // ------------------------------------------------------------------
+        // ResolveDeviceId — the ONE priority rule (batch serial first, then the
+        // read's own DeviceId), feeding the readings DTO's DeviceName column and
+        // the assign-then-choose candidate resolution.
+        // ------------------------------------------------------------------
+
+        [TestMethod]
+        public void ResolveDeviceId_KnownSerial_ResolvesToDeviceName()
+        {
+            var devices = new[] { D(7, "00162511ebf3", "box2"), D(9, "0016251182bc", "Box 01") };
+            var lookup = DeviceSerialResolver.BuildLookup(devices);
+            var byId = devices.ToDictionary(d => d.Id);
+
+            var id = DeviceSerialResolver.ResolveDeviceId(lookup, "ebf3");
+            Assert.AreEqual(7, id);
+            Assert.AreEqual("box2", byId[id].Name);
+
+            var id2 = DeviceSerialResolver.ResolveDeviceId(lookup, null, "Box 01");
+            Assert.AreEqual(9, id2);
+            Assert.AreEqual("Box 01", byId[id2].Name);
+        }
+
+        [TestMethod]
+        public void ResolveDeviceId_BatchSerialWins_OverReadSerial()
+        {
+            var lookup = DeviceSerialResolver.BuildLookup(new[]
+            {
+                D(1, "00162511ebf3", "box2"),
+                D(2, "0016251182bc", "Box 01")
+            });
+
+            // Batch serial (first arg) resolves → the read's own serial is never consulted.
+            Assert.AreEqual(1, DeviceSerialResolver.ResolveDeviceId(lookup, "ebf3", "82bc"));
+            // Batch serial unmapped/empty → falls through to the read's serial.
+            Assert.AreEqual(2, DeviceSerialResolver.ResolveDeviceId(lookup, "ffff", "82bc"));
+            Assert.AreEqual(2, DeviceSerialResolver.ResolveDeviceId(lookup, "", "82bc"));
+        }
+
+        [TestMethod]
+        public void ResolveDeviceId_UnmappedSerial_ReturnsZero_SoNameFallsBackToSerial()
+        {
+            var lookup = DeviceSerialResolver.BuildLookup(new[] { D(1, "00162511ebf3", "box2") });
+
+            // 0 = unresolved → the DTO's DeviceName stays null and the UI shows the raw serial.
+            Assert.AreEqual(0, DeviceSerialResolver.ResolveDeviceId(lookup, "deadbeef", "cafe"));
+            Assert.AreEqual(0, DeviceSerialResolver.ResolveDeviceId(lookup, null, null));
+        }
     }
 }

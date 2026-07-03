@@ -1175,7 +1175,10 @@ namespace Runnatics.Services
                         .Include(r => r.RaceSettings)
                         .FirstOrDefaultAsync();
                     var raceStartTime = race?.StartTime;
-                    var dedupWindowSeconds = race?.RaceSettings?.DedUpSeconds ?? DEFAULT_DEDUP_WINDOW_SECONDS;
+                    // #6 (2026-07-03): RaceSettings.DedUpSeconds is now the MINIMUM SEGMENT TIME
+                    // between consecutive checkpoints (applied in Phase 2 selection) — it no longer
+                    // drives this legacy same-checkpoint collapse, which is frozen at 30s.
+                    var dedupWindowSeconds = DEFAULT_DEDUP_WINDOW_SECONDS;
                     if (isLoopRace)
                     {
                         // Get EPC->Participant mapping first
@@ -2158,39 +2161,71 @@ namespace Runnatics.Services
                     "Built participant start times dictionary: {Count} participants have start checkpoint readings",
                     participantStartTimes.Count);
 
+                // ============================================================
+                // #6 (2026-07-03) + #2 offline: PER-PARTICIPANT SEQUENTIAL GATE SELECTION.
+                // OLD RULE (removed): DedUpSeconds = "collapse rapid repeat reads at the SAME
+                //   checkpoint within DedUpSeconds (default 30s)".
+                // NEW RULE: DedUpSeconds = MINIMUM SEGMENT TIME between CONSECUTIVE checkpoints —
+                //   a crossing at gate N+1 within < DedUpSeconds of gate N's selected crossing is
+                //   discarded; a later reading ≥ DedUpSeconds is used; the gate is uninhabited
+                //   (→ #7 DNF) only if no valid reading remains. null/0 = feature OFF.
+                // The selector also enforces the strictly-after SEQUENCE rule (#2): out-of-order
+                //   readings are discarded in favor of the next candidate that satisfies the
+                //   order — greedy earliest-valid, which provably covers "any combination that
+                //   satisfies the order" (see SequentialGateSelector docs).
+                // ============================================================
+                var minSegmentSeconds = PassCollapseSettings.MinSegmentSeconds(raceSettingsP2?.DedUpSeconds);
+                var distanceByCheckpointId = allCheckpoints.ToDictionary(cp => cp.Id, cp => cp.DistanceFromStart);
+
+                var chosenReadByGate = new Dictionary<(int ParticipantId, int CheckpointId), long>();
+                foreach (var participantGates in readingsWithMergedCheckpoints.GroupBy(r => r.ParticipantId))
+                {
+                    var gates = participantGates
+                        .GroupBy(r => r.CheckpointId)
+                        .OrderBy(g => distanceByCheckpointId.GetValueOrDefault(g.Key, decimal.MaxValue))
+                        .Select(g => new GateInput
+                        {
+                            GateId = g.Key,
+                            IsStartGate = g.Key == startCheckpointId,
+                            Candidates = g
+                                .OrderBy(r => r.Reading.TimestampMs)
+                                .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
+                                .Select(r => new GateCandidate { Key = r.RawReadId, Time = r.Reading.ReadTimeUtc })
+                                .ToList()
+                        })
+                        .ToList();
+
+                    var chain = SequentialGateSelector.SelectChain(
+                        gates, validStartFloorP2, validStartCeilingP2, passGapP2, minSegmentSeconds);
+
+                    foreach (var kvp in chain)
+                        chosenReadByGate[(participantGates.Key, kvp.Key)] = kvp.Value;
+                }
+
                 // Process all groups in parallel using LINQ - no for loop needed
                 var normalizedReadings = grouped.Select(group =>
                 {
                     // ==========================================================
-                    // START checkpoint: START SELECTION INVARIANT (StartWindow.SelectStartRead) —
-                    //   the LAST read of the FIRST in-window pass in [floor, ceiling] (the runner
-                    //   leaving the mat; historical client-confirmed rule). If none is in-window,
-                    //   keep the earliest available read as an INVALID placeholder so Phase 3
-                    //   and the display can see it (early → DNS / "not found"; late → finisher-safe).
-                    // All other checkpoints: EARLIEST entry (their historical rule).
+                    // Selection already ran (SequentialGateSelector above):
+                    //   START gate: START SELECTION INVARIANT (LAST read of the first in-window
+                    //     pass; out-of-window → earliest kept as the INVALID placeholder).
+                    //   Other gates: EARLIEST candidate satisfying the strictly-after sequence
+                    //     rule (#2) and the minimum-segment rule (#6, when DedUpSeconds is set).
+                    // A gate with NO selection had every candidate discarded → NO normalized row
+                    // (discarded reads are not data — #7 counts the gate as missing → DNF path).
                     // ==========================================================
                     var isStartCheckpoint = group.Key.CheckpointId == startCheckpointId;
 
-                    var bestReading = !isStartCheckpoint
-                        ? group
-                            .OrderBy(r => r.Reading.TimestampMs)             // EARLIEST entry for others
-                            .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
-                            .First()
-                        : (validStartFloorP2.HasValue && group.Any(r =>
-                                r.Reading.ReadTimeUtc >= validStartFloorP2.Value &&
-                                r.Reading.ReadTimeUtc <= validStartCeilingP2!.Value)
-                            ? StartWindow.SelectStartRead(
-                                group
-                                    .OrderBy(r => r.Reading.TimestampMs)     // time order; tiebreak strongest RSSI
-                                    .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue),
-                                r => r.Reading.ReadTimeUtc,
-                                validStartFloorP2.Value,
-                                validStartCeilingP2!.Value,
-                                passGapP2)!                                  // non-null: guarded by Any(in-window)
-                            : group
-                                .OrderBy(r => r.Reading.TimestampMs)         // earliest available (out-of-window placeholder)
-                                .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
-                                .First());
+                    if (!chosenReadByGate.TryGetValue((group.Key.ParticipantId, group.Key.CheckpointId), out var chosenRawReadId))
+                    {
+                        _logger.LogDebug(
+                            "Participant {ParticipantId} at Checkpoint {CheckpointId}: all {Count} candidate reading(s) " +
+                            "discarded (sequence / min-segment) — gate left uninhabited.",
+                            group.Key.ParticipantId, group.Key.CheckpointId, group.Count());
+                        return null;
+                    }
+
+                    var bestReading = group.First(r => r.RawReadId == chosenRawReadId);
 
                     if (isStartCheckpoint && group.Count() > 1)
                     {
@@ -2286,7 +2321,10 @@ namespace Runnatics.Services
                             IsDeleted = false
                         }
                     };
-                }).ToList();
+                })
+                .Where(rn => rn is not null)
+                .Select(rn => rn!)
+                .ToList();
 
                 var duplicateCount = rawReadings.Count - normalizedReadings.Count;
 
@@ -4227,7 +4265,10 @@ namespace Runnatics.Services
 
                 var raceStartTime = race.StartTime.Value;
                 var raceSettings = race.RaceSettings;
-                var dedupWindowSeconds = PassCollapseSettings.DedupSeconds(raceSettings?.DedUpSeconds);
+                // #6 (2026-07-03): RaceSettings.DedUpSeconds NO LONGER feeds this window — it is
+                // now the minimum-segment time (SequentialGateSelector, Phase 2). The internal
+                // within-pass keep-LAST window is FROZEN at the 30s constant.
+                var dedupWindowSeconds = PassCollapseSettings.DefaultDedupWindowSeconds;
                 var passGapThreshold = PassCollapseSettings.PassGapSeconds(raceSettings?.PassGapThresholdSeconds);
                 // VALID START WINDOW = [validStartFloor, validStartCeiling], both from settings (SECONDS).
                 //   floor   = gun - EarlyStartCutOff (default 300s) — a read before this is too early (pre-start stray).

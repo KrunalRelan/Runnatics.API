@@ -1238,3 +1238,17 @@ Branch: `bugfix/testing-round-1`.
 **Tests 107/107.** MEANING CHANGES (for spec honesty): RowG late-only Finished→DNF; RowI no-start-finisher Finished→DNF; RowC-late+covered Finished→DNF; RowE/RowK early+covered DNS→DNF; classifier signature now gate-coverage counts; SplitBaseline late-only test re-premised (runner now DNF; gun-fallback stays the split display rule). Unchanged rows asserted: valid-start+coverage, valid-start+gaps, invalid-only DNS, boundary inclusivity, midnight-crossing window.
 
 **Spec:** STATUS DEFINITIONS section added with removed-rules history. NOT pushed.
+
+---
+
+## 2026-07-03 (3) — RULE PASS commit (b): #6 DedUpSeconds redefinition (minimum segment time)
+
+**BREAKING (client-confirmed):** OLD rule (removed): DedUpSeconds = same-checkpoint collapse window (null/0→30s default). NEW rule: DedUpSeconds = MINIMUM SEGMENT TIME between CONSECUTIVE checkpoints; crossing at N+1 < DedUpSeconds after N''s crossing → discarded; later reading ≥ threshold used; gate uninhabited (→ #7 DNF) only if nothing valid remains; null/0 = feature OFF (default REMOVED). Verbatim old→new comments at PassCollapseSettings, SequentialGateSelector, both freeze sites.
+
+**Decoupling (per the gate-1 interaction finding):** the internal same-checkpoint collapse is FROZEN at the 30s constant — CollapseIntoPasses call site + legacy per-batch path (:1178) no longer read RaceSettings.DedUpSeconds. One-crossing-per-checkpoint is guaranteed by pass-gap chaining + Step-5 dedup + Phase-2 selection (proven in gate 1); `PassCollapseSettings.DedupSeconds` deleted, `MinSegmentSeconds` (null/0/neg → null=OFF) added.
+
+**New `SequentialGateSelector` (pure):** per-participant gates in course order; START gate via the START SELECTION INVARIANT (SelectStartRead; out-of-window → earliest kept as INVALID placeholder, chain still anchors on it); every later gate = EARLIEST candidate strictly-after the last selected crossing (#2 offline) AND ≥ minSegment when ON; uninhabited gates don''t break the chain (next validates against last selected). GREEDY NO-BACKTRACK pinned by test (starved next gate = DNF, per client rule); earliest-valid-never-hurts-next also pinned.
+
+**Phase 2 rewired:** pre-computed chain per participant replaces the inline bestReading; unselected gates produce NO normalized row (discarded reads are not data); monotonic guard retained as no-op safety net. `readingsWithMergedCheckpoints`→gates keyed on merged (parent) checkpoint ids; start gate = CheckpointGates.Start id.
+
+**Tests 120/120:** 12 new selector tests incl. the 5km-loop 2100s example (30min discarded → 36min finish; only-30min → DNF), sequence discard/equal-time, uninhabited-gate chaining, greedy pins, placeholder anchor, missing-start-gate, per-pair min-segment; PassCollapse settings test updated (frozen constant + pass-gap only). NOT pushed.

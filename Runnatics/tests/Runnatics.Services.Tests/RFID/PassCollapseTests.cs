@@ -292,19 +292,22 @@ namespace Runnatics.Services.Tests.RFID
             Assert.AreEqual(2, result.ReadingsByEpc["E1"].Count);
         }
 
-        // ─── 2e: settings defaults / guards ───
+        // ─── Settings defaults / guards ───
 
         [TestMethod]
-        public void PassCollapseSettings_NullZeroNegative_UseDefaults()
+        public void PassCollapseSettings_PassGap_NullZero_UseDefault300()
         {
-            Assert.AreEqual(30, PassCollapseSettings.DedupSeconds(null));
-            Assert.AreEqual(30, PassCollapseSettings.DedupSeconds(0));
-            Assert.AreEqual(30, PassCollapseSettings.DedupSeconds(-1));
-            Assert.AreEqual(45, PassCollapseSettings.DedupSeconds(45));
-
             Assert.AreEqual(300, PassCollapseSettings.PassGapSeconds(null));   // race 65: NULL → 300s
             Assert.AreEqual(300, PassCollapseSettings.PassGapSeconds(0));
             Assert.AreEqual(120, PassCollapseSettings.PassGapSeconds(120));
+        }
+
+        [TestMethod]
+        public void InternalDedupWindow_IsFrozenConstant_NotSettingsDriven()
+        {
+            // #6 (2026-07-03): RaceSettings.DedUpSeconds no longer feeds the within-pass
+            // keep-LAST window — it is the minimum-segment time now (SequentialGateSelector).
+            Assert.AreEqual(30, PassCollapseSettings.DefaultDedupWindowSeconds);
         }
     }
 }

@@ -1656,13 +1656,72 @@ namespace Runnatics.Services
                         return null;
                     }
 
-                    var assignedToCheckpoint = chosenRead.ReadingCheckpointAssignments.Any(a =>
-                        a.CheckpointId == decryptedCheckpointId &&
-                        a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted);
-                    if (!assignedToCheckpoint)
+                    var activeAssignments = chosenRead.ReadingCheckpointAssignments
+                        .Where(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted)
+                        .ToList();
+                    var assignedToCheckpoint = activeAssignments.Any(a => a.CheckpointId == decryptedCheckpointId);
+
+                    if (!assignedToCheckpoint && activeAssignments.Count > 0)
                     {
+                        // Assigned to a DIFFERENT gate → unchanged rule: a read can only be chosen
+                        // for its own checkpoint.
                         ErrorMessage = "Selected read is not assigned to this checkpoint. A read can only be chosen for its own checkpoint.";
                         return null;
+                    }
+
+                    if (!assignedToCheckpoint)
+                    {
+                        // ============================================================
+                        // ASSIGN-THEN-CHOOSE (client-confirmed 2026-07-03): an UNASSIGNED read —
+                        // typically one the pass-collapse rejected as pre-start noise — IS
+                        // choosable. Choosing it CREATES the assignment, validated against the
+                        // read's DEVICE: the target checkpoint must be one this device serves.
+                        // On a shared start/finish mat the device serves several gates, so the
+                        // UI supplies the intended one (decision a: inline picker) — the server
+                        // never guesses, that ambiguity class is exactly what this codebase
+                        // eliminated. The created assignment is PRESERVED across reprocess while
+                        // the chosen-read override is active (Phase 1.5 exclusion, decision b)
+                        // and cleaned up after a revert.
+                        // ============================================================
+                        var candidateCheckpointIds = await ResolveChoosableCheckpointIdsAsync(
+                            chosenRead, decryptedRaceId, decryptedEventId);
+
+                        if (candidateCheckpointIds.Count == 0)
+                        {
+                            ErrorMessage = "Selected read's device is not mapped to any checkpoint in this race, so it cannot be chosen as a crossing.";
+                            return null;
+                        }
+
+                        if (!candidateCheckpointIds.Contains(decryptedCheckpointId))
+                        {
+                            var candidateNames = raceCheckpoints
+                                .Where(c => candidateCheckpointIds.Contains(c.Id))
+                                .Select(c => c.Name ?? $"CP {c.DistanceFromStart}");
+                            ErrorMessage =
+                                "Selected read's device does not serve this checkpoint. " +
+                                $"It can be chosen for: {string.Join(", ", candidateNames)}.";
+                            return null;
+                        }
+
+                        await _repository.GetRepository<ReadingCheckpointAssignment>().AddAsync(
+                            new ReadingCheckpointAssignment
+                            {
+                                ReadingId = chosenRead.Id,
+                                CheckpointId = decryptedCheckpointId,
+                                AuditProperties = new Models.Data.Common.AuditProperties
+                                {
+                                    CreatedBy = _userContext.UserId,
+                                    CreatedDate = DateTime.UtcNow,
+                                    IsActive = true,
+                                    IsDeleted = false
+                                }
+                            });
+                        await _repository.SaveChangesAsync();
+
+                        _logger.LogInformation(
+                            "Assign-then-choose: unassigned reading {ReadingId} assigned to checkpoint {CheckpointId} " +
+                            "for participant {ParticipantId} (operator override of the pipeline's rejection).",
+                            chosenRead.Id, decryptedCheckpointId, decryptedParticipantId);
                     }
 
                     var participantEpcs = await _repository.GetRepository<ChipAssignment>()
@@ -2317,6 +2376,50 @@ namespace Runnatics.Services
         // out-of-window start — typed or toggled — is now ACCEPTED and stored, and #7
         // classification decides the consequence (DNF/DNS). The discard-and-warn behavior
         // (46ec16d) was incoherent once toggles accepted the same physical situation.
+
+        /// <summary>
+        /// ASSIGN-THEN-CHOOSE candidate resolution: the checkpoints an UNASSIGNED read may be
+        /// chosen for = this race's active checkpoints whose device matches the read's serial
+        /// (batch serial first, then the read's own DeviceId — the same order and the same
+        /// variant map, DeviceSerialResolver, as Phase 1.5, so resolution can never fork).
+        /// Empty set = the device is not mapped in this race (read is not choosable).
+        /// </summary>
+        private async Task<HashSet<int>> ResolveChoosableCheckpointIdsAsync(
+            RawRFIDReading chosenRead, int raceId, int eventId)
+        {
+            var batchSerial = await _repository.GetRepository<UploadBatch>()
+                .GetQuery(b => b.Id == chosenRead.BatchId)
+                .AsNoTracking()
+                .Select(b => b.DeviceId)
+                .FirstOrDefaultAsync();
+
+            var devices = await _repository.GetRepository<Device>()
+                .GetQuery(d => d.AuditProperties.IsActive && !d.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .ToListAsync();
+            var deviceLookup = DeviceSerialResolver.BuildLookup(devices);
+
+            var deviceId = 0;
+            if (!string.IsNullOrEmpty(batchSerial) && deviceLookup.TryGetValue(batchSerial, out var byBatch))
+                deviceId = byBatch;
+            else if (!string.IsNullOrEmpty(chosenRead.DeviceId) && deviceLookup.TryGetValue(chosenRead.DeviceId, out var byRead))
+                deviceId = byRead;
+
+            if (deviceId == 0)
+                return new HashSet<int>();
+
+            return (await _repository.GetRepository<Checkpoint>()
+                .GetQuery(cp =>
+                    cp.RaceId == raceId &&
+                    cp.EventId == eventId &&
+                    cp.DeviceId == deviceId &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .Select(cp => cp.Id)
+                .ToListAsync())
+                .ToHashSet();
+        }
 
         /// <summary>
         /// REVERT (2026-07-03 rewrite): removing a manual time / chosen-read toggle RESTORES the

@@ -4352,42 +4352,10 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                // FIX #2: Resolve by BOTH Device.DeviceId (MAC) and Device.Name (friendly name)
-                // FIX #9: Also register short MAC suffix variants so batch serials like "ebf3"
-                //         (last 4 of MAC "00162511ebf3") resolve correctly.
-                //         Priority: full MAC > last-6 suffix > last-4 suffix > name variants.
-                //         Short suffixes use TryAdd so the first (most-specific) registration wins
-                //         if two devices share the same suffix.
-                var deviceLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-                foreach (var device in devices)
-                {
-                    if (!string.IsNullOrEmpty(device.DeviceMacAddress))
-                    {
-                        var mac = device.DeviceMacAddress;
-                        deviceLookup[mac] = device.Id;                          // full: "00162511ebf3"
-
-                        // Strip colon/hyphen separators: "00:16:25:11:eb:f3" → "00162511ebf3"
-                        var macStripped = mac.Replace(":", "").Replace("-", "");
-                        if (macStripped.Length != mac.Length)
-                            deviceLookup[macStripped] = device.Id;
-
-                        // Last-6 suffix: "11ebf3" — use TryAdd to avoid overwriting a full-MAC match
-                        if (macStripped.Length >= 6)
-                            deviceLookup.TryAdd(macStripped[^6..], device.Id);
-
-                        // Last-4 suffix: "ebf3" — common format stored in UploadBatches.DeviceId
-                        if (macStripped.Length >= 4)
-                            deviceLookup.TryAdd(macStripped[^4..], device.Id);
-                    }
-                    if (!string.IsNullOrEmpty(device.Name))
-                    {
-                        deviceLookup[device.Name] = device.Id;                  // "Box 16" → 12
-                        // Also register name without spaces: "Box16" → 12
-                        var nameNoSpace = device.Name.Replace(" ", "");
-                        if (nameNoSpace.Length != device.Name.Length)
-                            deviceLookup.TryAdd(nameNoSpace, device.Id);
-                    }
-                }
+                // FIX #2 + #9: serial→device resolution via the ONE shared map (full MAC, stripped,
+                // last-6/last-4 suffixes, name variants) — extracted to DeviceSerialResolver so
+                // assign-then-choose resolves identically and the logic can never fork.
+                var deviceLookup = DeviceSerialResolver.BuildLookup(devices);
 
                 // 1c. Checkpoints
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
@@ -4516,9 +4484,28 @@ namespace Runnatics.Services
                     raceReadingIds.Contains(a.ReadingId))  // ← FIX: List for EF Core SQL translation
                     .ToListAsync();
 
+                // ASSIGN-THEN-CHOOSE persistence (decision b, 2026-07-03): assignments referenced
+                // by an ACTIVE chosen-read override are PRESERVED across reprocess. The operator
+                // explicitly assigned + chose that read (often one the pass-collapse rejected as
+                // pre-start noise); deleting its assignment would leave the row displaying
+                // "Unassigned" while functioning as the crossing. A REVERT soft-deletes the
+                // override, which drops the read from this set → its assignment is cleaned up on
+                // the NEXT reprocess (the read returns to an honest "Unassigned"). The IsDeleted
+                // filter below is what makes that revert-cleanup fall out.
+                var protectedReadingIds = (await _repository.GetRepository<ManualTimeOverride>()
+                    .GetQuery(o =>
+                        o.RaceId == decryptedRaceId &&
+                        o.ChosenRawReadId.HasValue &&
+                        !o.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(o => o.ChosenRawReadId!.Value)
+                    .ToListAsync())
+                    .ToHashSet();
+
                 // Delete stale assignments (referencing checkpoints that no longer exist)
                 var staleAssignments = existingAssignments
-                    .Where(a => !currentCheckpointIds.Contains(a.CheckpointId))
+                    .Where(a => !currentCheckpointIds.Contains(a.CheckpointId) &&
+                                !protectedReadingIds.Contains(a.ReadingId))
                     .ToList();
 
                 if (staleAssignments.Count > 0)
@@ -4532,19 +4519,30 @@ namespace Runnatics.Services
                 // FIX #7: Delete ALL remaining existing assignments for this race's readings.
                 // Phase 1 may have already assigned "simple" child device checkpoints (e.g. 4317)
                 // that Phase 1.5 also assigns, causing duplicate key violations on BulkInsert.
-                // Phase 1.5 re-creates everything (shared + turnaround + single device assignments).
+                // Phase 1.5 re-creates everything (shared + turnaround + single device assignments)
+                // EXCEPT the protected chosen-read assignments above.
                 var staleIds = staleAssignments.Select(s => s.Id).ToHashSet();
                 var remainingAssignments = existingAssignments
-                    .Where(a => !staleIds.Contains(a.Id))  // Skip already-deleted stale ones
+                    .Where(a => !staleIds.Contains(a.Id) &&                 // Skip already-deleted stale ones
+                                !protectedReadingIds.Contains(a.ReadingId)) // Preserve chosen-read assignments
                     .ToList();
 
                 if (remainingAssignments.Count > 0)
                 {
                     _logger.LogInformation(
-                        "FIX #7: Deleting {Count} existing assignments for re-processing (includes Phase 1 simple + shared device assignments)",
-                        remainingAssignments.Count);
+                        "FIX #7: Deleting {Count} existing assignments for re-processing (includes Phase 1 simple + shared device assignments); {Protected} chosen-read assignment(s) preserved",
+                        remainingAssignments.Count,
+                        existingAssignments.Count(a => protectedReadingIds.Contains(a.ReadingId)));
                     await assignmentRepo.BulkDeleteAsync(remainingAssignments);
                 }
+
+                // Preserved assignments stay in place — the persist step below must not insert a
+                // duplicate (ReadingId, CheckpointId) pair if Phase 1.5's selection also picks a
+                // protected reading (unique index IX_ReadingCheckpointAssignments_ReadingId_CheckpointId).
+                var preservedAssignmentPairs = existingAssignments
+                    .Where(a => protectedReadingIds.Contains(a.ReadingId))
+                    .Select(a => (a.ReadingId, a.CheckpointId))
+                    .ToHashSet();
 
                 // ================================================================
                 // 1f. Load ALL readings (Success OR Pending) across all batches
@@ -4791,6 +4789,11 @@ namespace Runnatics.Services
 
                 foreach (var assigned in deduplicatedReadings)
                 {
+                    // Preserved chosen-read assignment already covers this pair — skip the insert
+                    // (unique-index collision guard for the assign-then-choose persistence above).
+                    if (preservedAssignmentPairs.Contains((assigned.ReadingId, assigned.CheckpointId)))
+                        continue;
+
                     assignmentsToCreate.Add(new ReadingCheckpointAssignment
                     {
                         ReadingId = assigned.ReadingId,

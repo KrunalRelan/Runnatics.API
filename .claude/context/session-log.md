@@ -1334,3 +1334,17 @@ Branch: `bugfix/testing-round-1`.
 **Controller:** DELETE manual-time returns `ResponseBase<ManualTimeResponse>`; UI ignores body today (re-fetches) — revert-warning rendering added to the gated UI queue (spec updated).
 
 **Tests 139/139:** +5 locked-anchor tests (no-emit+anchor, later-locked upper bound, min-segment both sides, start-past-locked uninhabited, reverted-start re-selected by the START INVARIANT under a locked finish). **Prod-verify:** race 65 manual start 05:29:23 → revert → system-selected start returns, byte-identical to fresh reprocess; revert-without-raw → warning + #7 status; toggle revert same path. NOT pushed.
+
+---
+
+## 2026-07-03 (10) — ASSIGN-THEN-CHOOSE, API half (unassigned reads become choosable)
+
+**Client scenario:** the 05:32:22-class reads are unassigned BY DESIGN (pass-collapse rejects pre-start noise → no assignment) — choosing one is an operator override that must CREATE assignment state. The old chosen-read validation (`ResultsService:1659-1666`) hard-rejected them.
+
+**API (this commit):**
+- `RecordManualTimeAsync` chosen-read path: an UNASSIGNED read is now choosable — candidates = race checkpoints whose device matches the read''s serial (batch serial → read serial, via the ONE `DeviceSerialResolver` map extracted verbatim from Phase 1.5''s FIX #2/#9 block; Phase 1.5 now consumes the same helper — no fork possible). Target checkpoint must be a candidate (the UI supplies it — decision a: inline picker on shared mats; server NEVER guesses); 400 naming valid candidates otherwise; assignment created with audit, then the normal chosen-read flow (window/sequence/min-segment accept-and-classify, override, snapshot). Reads assigned to a DIFFERENT gate: unchanged rejection.
+- **Decision b persistence:** Phase 1.5''s FIX #3/#7 delete now PRESERVES assignments referenced by ACTIVE ChosenRawReadId overrides (`!IsDeleted` filter = the revert-cleanup falls out: revert soft-deletes the override → next reprocess deletes the assignment → read returns to honest "Unassigned"). Insert-collision guard: the persist step skips preserved (ReadingId, CheckpointId) pairs (unique index).
+
+**Tests 144/144:** +5 DeviceSerialResolver pins (variants, case-insensitivity, most-specific-wins suffix collision). EF-heavy → prod-verify: choose-unassigned → reprocess → assignment survives; revert → reprocess → cleaned up; choose at an occupied gate flows through the normal conflict path.
+
+**UI half NOT here (gated on Kunal''s discriminator run):** enable unassigned-row switches, shared-mat inline gate picker, pass target checkpointId in handleSaveCrossings. NOT pushed.

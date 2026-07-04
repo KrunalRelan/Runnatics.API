@@ -233,6 +233,16 @@ rule working, not a regression.
   `Warning: "No automated reading exists for this checkpoint — reverting leaves it empty…"`.
   **UI (gated queue): render this warning on revert** — the client-side `hasRawRead` pre-warning
   remains, but the server response is now the authoritative source.
+- **UN-DSQ** (`PUT api/races/{raceId}/participants/{participantId}`, `RunStatus="Recompute"` —
+  API complete 2026-07-03): clears an existing disqualification. Allowed ONLY when the current
+  stored status is `DQ` (otherwise 400); the reason is NULLED, the status is RECLASSIFIED from
+  gate coverage (#7 via `ParticipantStatusCalculator` — never operator choice), and the race
+  re-ranks in memory (the restored finisher re-enters; everyone below steps back down). The
+  response carries the commit-f snapshot (display status, stored times, post-re-rank ranks,
+  `TotalFinishers`).
+  **UI (gated queue): the Run Status DDL shows a "Remove disqualification" action when the
+  current status is DSQ** — it sends `RunStatus="Recompute"` (no reason field) and re-renders
+  from the returned snapshot (or re-fetches, per the standing refresh contract).
 
 **Edge cases handled:** shared start/finish mat cross-reads (gun window); multiple reads at a mat
 (dedup LAST/EARLIEST); out-and-back via turnaround/pass-ordinal; pre-gun early-line starters (window

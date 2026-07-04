@@ -22,7 +22,9 @@ namespace Runnatics.Models.Client.Requests.Participant
         /// <summary>
         /// #4/#5 (2026-07-03): run status is COMPUTED from timing data (OK/DNF/DNS — #7 rules);
         /// the ONLY manually settable value is DSQ (accepted spellings: "DSQ" / "DQ" /
-        /// "Disqualified" — normalized to the stored "DQ"). Any other value → 400.
+        /// "Disqualified" — normalized to the stored "DQ"). UN-DSQ: "Recompute" clears an
+        /// existing disqualification (allowed only when the current stored status is DQ —
+        /// otherwise 400) and reclassifies from gate coverage. Any other value → 400.
         /// </summary>
         public string? RunStatus { get; set; }
 
@@ -55,17 +57,20 @@ namespace Runnatics.Models.Client.Requests.Participant
             if (RunStatus != null)
             {
                 // #4 (2026-07-03): OK/DNF/DNS are COMPUTED-ONLY (#7 gate-coverage rules) — the
-                // sole manual override is DSQ.
+                // manual actions are DSQ and "Recompute" (un-DSQ: clear the disqualification
+                // and reclassify; the service 400s it unless the current stored status is DQ).
                 var dsqSpellings = new[] { "DSQ", "DQ", "Disqualified" };
-                if (!dsqSpellings.Contains(RunStatus, StringComparer.OrdinalIgnoreCase))
+                var isRecompute = string.Equals(RunStatus, "Recompute", StringComparison.OrdinalIgnoreCase);
+                if (!isRecompute && !dsqSpellings.Contains(RunStatus, StringComparer.OrdinalIgnoreCase))
                 {
                     yield return new ValidationResult(
-                        "Run status is computed from timing data — only DSQ can be set manually.",
+                        "Run status is computed from timing data — only DSQ (or Recompute, to clear a DSQ) can be set manually.",
                         new[] { nameof(RunStatus) });
                 }
-                else if (string.IsNullOrWhiteSpace(DisqualificationReason))
+                else if (!isRecompute && string.IsNullOrWhiteSpace(DisqualificationReason))
                 {
-                    // #5: the reason is MANDATORY for a disqualification.
+                    // #5: the reason is MANDATORY for a disqualification (not for clearing one —
+                    // Recompute nulls the stored reason).
                     yield return new ValidationResult(
                         "DisqualificationReason is required when setting DSQ.",
                         new[] { nameof(DisqualificationReason) });

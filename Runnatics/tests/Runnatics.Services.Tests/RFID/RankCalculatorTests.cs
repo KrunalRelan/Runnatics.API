@@ -176,6 +176,30 @@ namespace Runnatics.Services.Tests.RFID
             Assert.IsNull(none.CategoryRank);
         }
 
+        // ─── UN-DSQ: a restored finisher re-enters the set; everyone below steps back down ───
+
+        [TestMethod]
+        public void UnDsq_RestoredFinisher_ShiftsEveryoneBelowBackDown()
+        {
+            // While X is DSQ'd it is excluded from the finished set — A/B/C rank 1-2-3.
+            var a = R(1, net: 100, gun: 100);
+            var b = R(2, net: 200, gun: 200);
+            var c = R(3, net: 300, gun: 300);
+            RankCalculator.AssignRanks(new[] { a, b, c }, overallBasis: true, categoryBasis: true);
+            Assert.AreEqual(1, a.OverallRank);
+            Assert.AreEqual(2, b.OverallRank);
+            Assert.AreEqual(3, c.OverallRank);
+
+            // Clearing the DSQ recomputes X to Finished — the race-wide re-rank includes it
+            // again and everyone below its time steps back down (the mirror of the DSQ apply).
+            var x = R(4, net: 150, gun: 150);
+            RankCalculator.AssignRanks(new[] { a, b, c, x }, overallBasis: true, categoryBasis: true);
+            Assert.AreEqual(1, a.OverallRank);
+            Assert.AreEqual(2, x.OverallRank, "restored runner slots in by time");
+            Assert.AreEqual(3, b.OverallRank, "…and everyone below steps back down");
+            Assert.AreEqual(4, c.OverallRank);
+        }
+
         // ─── GenderRank follows the OVERALL basis ───
 
         [TestMethod]

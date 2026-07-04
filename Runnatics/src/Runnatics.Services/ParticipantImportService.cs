@@ -2105,6 +2105,45 @@ namespace Runnatics.Services
                     return null;
                 }
 
+                // ============================================================
+                // UN-DSQ (flagged follow-up to #4/#5): RunStatus="Recompute" clears an existing
+                // disqualification. Allowed ONLY when the current stored status is DQ — every
+                // other manual status write stays 400 (request validation). The status is then
+                // RECLASSIFIED from gate coverage (#7, ParticipantStatusCalculator — never
+                // operator choice), the reason is nulled, and the race re-ranks IN MEMORY
+                // (everyone below the restored finisher steps back down).
+                // ============================================================
+                var clearingDsq = ResultStatus.IsClearDsq(request.RunStatus);
+                string? recomputedStatus = null;
+                if (clearingDsq)
+                {
+                    if (!string.IsNullOrEmpty(request.RaceId) &&
+                        Convert.ToInt32(_encryptionService.Decrypt(request.RaceId)) != decryptedRaceId)
+                    {
+                        ErrorMessage = "Clearing a disqualification cannot be combined with a race move.";
+                        return null;
+                    }
+
+                    var currentStatus = await _repository.GetRepository<Models.Data.Entities.Results>()
+                        .GetQuery(r =>
+                            r.ParticipantId == decryptedParticipantId &&
+                            r.EventId == participant.EventId &&
+                            r.RaceId == decryptedRaceId &&
+                            !r.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .Select(r => r.Status)
+                        .FirstOrDefaultAsync();
+
+                    if (currentStatus != ResultStatus.DQ)
+                    {
+                        ErrorMessage = "Participant is not disqualified — there is no DSQ to clear.";
+                        return null;
+                    }
+
+                    recomputedStatus = await ParticipantStatusCalculator.ComputeAsync(
+                        _repository, participant.EventId, decryptedRaceId, decryptedParticipantId);
+                }
+
                 // Apply scalar updates
                 if (request.FirstName != null) participant.FirstName = request.FirstName;
                 if (request.LastName != null) participant.LastName = request.LastName;
@@ -2120,6 +2159,12 @@ namespace Runnatics.Services
                 if (request.RunStatus != null && ResultStatus.IsDsq(request.RunStatus))
                 {
                     participant.Status = ResultStatus.DQ;
+                }
+                else if (clearingDsq)
+                {
+                    // UN-DSQ: the computed status (#7) replaces the manual DQ on the
+                    // participant row too — status comes from gate coverage, never the operator.
+                    participant.Status = recomputedStatus!;
                 }
 
                 participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
@@ -2143,6 +2188,7 @@ namespace Runnatics.Services
                 }
 
                 var dsqApplied = false;
+                var dsqCleared = false;
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
@@ -2193,7 +2239,16 @@ namespace Runnatics.Services
                                 result.CategoryRank = null;
                                 dsqApplied = true;
                             }
-                            if (request.DisqualificationReason != null)
+                            else if (clearingDsq && result.Status == ResultStatus.DQ)
+                            {
+                                // UN-DSQ: reclassified status (#7), reason nulled; ranks stay
+                                // null here — the in-memory race-wide re-rank after the
+                                // transaction assigns them when the runner is Finished.
+                                result.Status = recomputedStatus!;
+                                result.DisqualificationReason = null;
+                                dsqCleared = true;
+                            }
+                            if (request.DisqualificationReason != null && !clearingDsq)
                                 result.DisqualificationReason = request.DisqualificationReason;
 
                             if (request.ManualTime != null &&
@@ -2300,18 +2355,52 @@ namespace Runnatics.Services
 
                 // #5: a DSQ re-ranks the race IN MEMORY (RankCalculator loads Status=="Finished"
                 // only, so the DQ row drops out and everyone below steps up — overall, gender AND
-                // category). Deliberately NOT an RFID reprocess.
-                if (dsqApplied)
+                // category). UN-DSQ is the mirror image: the restored Finished runner re-enters
+                // the set and everyone below steps back down. Deliberately NOT an RFID reprocess.
+                if (dsqApplied || dsqCleared)
                 {
                     await RankCalculator.ApplyStoredRanksAsync(
                         _repository, participant.EventId, decryptedRaceId, userId);
                     _logger.LogInformation(
-                        "Participant {ParticipantId} disqualified — race {RaceId} re-ranked (DSQ excluded).",
+                        dsqApplied
+                            ? "Participant {ParticipantId} disqualified — race {RaceId} re-ranked (DSQ excluded)."
+                            : "Participant {ParticipantId} DSQ cleared (status recomputed from gate coverage) — race {RaceId} re-ranked.",
                         participantId, decryptedRaceId);
                 }
 
                 _logger.LogInformation("Participant {ParticipantId} updated successfully by User {UserId}", participantId, userId);
-                return MapToSearchResponse(participant);
+                var searchResponse = MapToSearchResponse(participant);
+
+                // Commit-f contract: a status-changing edit (DSQ / un-DSQ) returns the COMPLETE
+                // post-recompute result — stored times, post-re-rank ranks, DISPLAY status and
+                // TotalFinishers — reloaded AFTER the re-rank, so the UI can re-render without a
+                // second fetch. Ranks are null when the runner is unranked (DNF/DNS/DSQ).
+                if (dsqApplied || dsqCleared)
+                {
+                    var snapshotRepo = _repository.GetRepository<Models.Data.Entities.Results>();
+                    var updatedResult = await snapshotRepo.GetQuery(r =>
+                        r.ParticipantId == decryptedParticipantId &&
+                        r.EventId == participant.EventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync();
+
+                    searchResponse.GunTime = TimeFormatter.FormatTimeSpan(updatedResult?.GunTime);
+                    searchResponse.NetTime = TimeFormatter.FormatTimeSpan(updatedResult?.NetTime);
+                    searchResponse.OverallRank = updatedResult?.OverallRank;
+                    searchResponse.GenderRank = updatedResult?.GenderRank;
+                    searchResponse.CategoryRank = updatedResult?.CategoryRank;
+                    searchResponse.TotalFinishers = await snapshotRepo.CountAsync(r =>
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == ResultStatus.Finished &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted);
+                    searchResponse.Status = ResultStatus.ToDisplay(updatedResult?.Status ?? participant.Status);
+                }
+
+                return searchResponse;
             }
             catch (Exception ex)
             {

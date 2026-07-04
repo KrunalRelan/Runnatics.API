@@ -59,5 +59,11 @@
         /// Rank within age category
         /// </summary>
         public int? CategoryRank { get; set; }
+
+        /// <summary>
+        /// Commit-f snapshot: race-wide count of Finished runners after a status-changing edit
+        /// (DSQ / un-DSQ) — populated only on those paths, alongside post-re-rank ranks/times.
+        /// </summary>
+        public int? TotalFinishers { get; set; }
     }
 }

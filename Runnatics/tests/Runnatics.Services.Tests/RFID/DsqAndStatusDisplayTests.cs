@@ -50,6 +50,26 @@ namespace Runnatics.Services.Tests.RFID
             Assert.AreEqual("DSQ", ResultStatus.ToDisplay(ResultStatus.DQ), "…and DISPLAYS as DSQ");
         }
 
+        // ─── UN-DSQ: "Recompute" is the one clear-DSQ action value, disjoint from DSQ ───
+
+        [TestMethod]
+        public void IsClearDsq_AcceptsRecompute_CaseInsensitive_NothingElse()
+        {
+            Assert.IsTrue(ResultStatus.IsClearDsq("Recompute"));
+            Assert.IsTrue(ResultStatus.IsClearDsq("recompute"));
+            Assert.IsTrue(ResultStatus.IsClearDsq("RECOMPUTE"));
+
+            Assert.IsFalse(ResultStatus.IsClearDsq("DSQ"));
+            Assert.IsFalse(ResultStatus.IsClearDsq("DQ"));
+            Assert.IsFalse(ResultStatus.IsClearDsq("OK"));
+            Assert.IsFalse(ResultStatus.IsClearDsq(null));
+
+            // Disjoint action sets: "Recompute" is never a DSQ, and it is NEVER stored.
+            Assert.IsFalse(ResultStatus.IsDsq(ResultStatus.Recompute));
+            Assert.AreEqual("Recompute", ResultStatus.ToDisplay("Recompute"),
+                "no display mapping — the value never reaches storage or display");
+        }
+
         // ─── #4: RunStatus is computed-only; only DSQ can be set manually ───
 
         private static List<ValidationResult> Validate(UpdateParticipantRequest request) =>
@@ -96,6 +116,22 @@ namespace Runnatics.Services.Tests.RFID
         {
             Assert.AreEqual(0, Validate(new UpdateParticipantRequest()).Count,
                 "a request without RunStatus edits other fields freely");
+        }
+
+        [TestMethod]
+        public void RunStatus_Recompute_ValidWithoutReason()
+        {
+            // UN-DSQ: clearing a disqualification needs NO reason (the clear nulls the stored one).
+            Assert.AreEqual(0, Validate(new UpdateParticipantRequest { RunStatus = "Recompute" }).Count);
+            Assert.AreEqual(0, Validate(new UpdateParticipantRequest { RunStatus = "recompute" }).Count,
+                "case-insensitive like the DSQ spellings");
+
+            // A stray reason alongside Recompute is tolerated — the service nulls it regardless.
+            Assert.AreEqual(0, Validate(new UpdateParticipantRequest
+            {
+                RunStatus = "Recompute",
+                DisqualificationReason = "left over from the DSQ form"
+            }).Count);
         }
     }
 }

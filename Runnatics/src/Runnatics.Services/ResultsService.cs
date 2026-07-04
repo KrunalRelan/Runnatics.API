@@ -2849,7 +2849,7 @@ namespace Runnatics.Services
 
             if (result != null && result.Status != ResultStatus.DQ) // #5: DSQ survives recompute
             {
-                result.Status = await ComputeParticipantStatusAsync(eventId, raceId, participantId);
+                result.Status = await ParticipantStatusCalculator.ComputeAsync(_repository, eventId, raceId, participantId);
                 result.AuditProperties.UpdatedBy = userId;
                 result.AuditProperties.UpdatedDate = DateTime.UtcNow;
                 await resultsRepo.UpdateAsync(result);
@@ -2859,71 +2859,8 @@ namespace Runnatics.Services
             await CalculateResultRankingsAsync(eventId, raceId, userId);
         }
 
-        private async Task<string> ComputeParticipantStatusAsync(int eventId, int raceId, int participantId)
-        {
-            // BUG-26 + #7: mandatory evaluation is per-DISTANCE via the shared
-            // ResultClassifier.MandatoryDistances ({START gate, implicitly} ∪ {IsMandatory} ∪
-            // {finish fallback}); the START gate counts only with an IN-WINDOW crossing
-            // (StartWindow.Contains). all gates valid → Finished · some → DNF · none → DNS.
-            var allCheckpoints = await _repository.GetRepository<Checkpoint>()
-                .GetQuery(cp => cp.RaceId == raceId
-                             && cp.EventId == eventId
-                             && cp.AuditProperties.IsActive
-                             && !cp.AuditProperties.IsDeleted)
-                .AsNoTracking()
-                .ToListAsync();
-
-            if (allCheckpoints.Count == 0)
-                return ResultStatus.DNF;
-
-            var mandatoryDistances = ResultClassifier.MandatoryDistances(allCheckpoints);
-            var startGateDistance = allCheckpoints.Min(cp => cp.DistanceFromStart);
-
-            var idsByMandatoryDistance = mandatoryDistances.ToDictionary(
-                d => d,
-                d => allCheckpoints.Where(cp => cp.DistanceFromStart == d).Select(cp => cp.Id).ToHashSet());
-
-            var gateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
-
-            var race = await _repository.GetRepository<Race>()
-                .GetQuery(r => r.Id == raceId && r.EventId == eventId)
-                .Include(r => r.RaceSettings)
-                .AsNoTracking()
-                .FirstOrDefaultAsync();
-            var (windowFloor, windowCeiling) = StartWindow.For(
-                race?.StartTime, race?.RaceSettings?.EarlyStartCutOff, race?.RaceSettings?.LateStartCutOff);
-
-            var detections = await _repository.GetRepository<ReadNormalized>()
-                .GetQuery(rn => rn.ParticipantId == participantId
-                             && gateIds.Contains(rn.CheckpointId)
-                             && !rn.AuditProperties.IsDeleted)
-                .Select(rn => new { rn.CheckpointId, rn.ChipTime })
-                .ToListAsync();
-
-            var detectedIds = detections.Select(d => d.CheckpointId).ToHashSet();
-            var startGateIds = idsByMandatoryDistance[startGateDistance];
-            var startChip = detections
-                .Where(d => startGateIds.Contains(d.CheckpointId))
-                .OrderBy(d => d.ChipTime)
-                .Select(d => (DateTime?)d.ChipTime)
-                .FirstOrDefault();
-
-            var validGates = 0;
-            foreach (var d in mandatoryDistances)
-            {
-                var gateValid = d == startGateDistance
-                    ? startChip.HasValue && StartWindow.Contains(startChip.Value, windowFloor, windowCeiling)
-                    : idsByMandatoryDistance[d].Overlaps(detectedIds);
-                if (gateValid)
-                    validGates++;
-            }
-
-            return ResultClassifier.Classify(validGates, mandatoryDistances.Count) switch
-            {
-                ParticipantOutcome.Finished => ResultStatus.Finished,
-                ParticipantOutcome.DNF => ResultStatus.DNF,
-                _ => ResultStatus.DNS
-            };
-        }
+        // Single-runner status classification moved to the shared static
+        // ParticipantStatusCalculator.ComputeAsync (RankCalculator pattern) — also consumed by
+        // ParticipantImportService's UN-DSQ path, so classification can never fork.
     }
 }

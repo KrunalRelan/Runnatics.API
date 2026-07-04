@@ -30,5 +30,16 @@ namespace Runnatics.Models.Data.Constants
             string.Equals(value, DQ, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "DSQ", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "Disqualified", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// UN-DSQ (the flagged follow-up to #4/#5): "Recompute" is the ONE accepted clear-DSQ
+        /// action value at the RunStatus boundary. It is never stored — it means "remove the
+        /// disqualification and let #7 gate-coverage classification decide the status again".
+        /// Allowed only when the current stored status is DQ.
+        /// </summary>
+        public const string Recompute = "Recompute";
+
+        public static bool IsClearDsq(string? value) =>
+            string.Equals(value, Recompute, StringComparison.OrdinalIgnoreCase);
     }
 }

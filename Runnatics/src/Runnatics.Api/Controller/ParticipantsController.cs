@@ -279,6 +279,11 @@ namespace Runnatics.Api.Controller
             {
                 if (_service.ErrorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase))
                     return NotFound(new { error = _service.ErrorMessage });
+                // UN-DSQ guards are CLIENT errors (clear on a non-DSQ runner; clear combined
+                // with a race move) — 400, not 500.
+                if (_service.ErrorMessage.Contains("not disqualified", StringComparison.OrdinalIgnoreCase) ||
+                    _service.ErrorMessage.Contains("cannot be combined", StringComparison.OrdinalIgnoreCase))
+                    return BadRequest(new { error = _service.ErrorMessage });
                 return StatusCode((int)HttpStatusCode.InternalServerError, new { error = _service.ErrorMessage });
             }
 

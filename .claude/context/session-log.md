@@ -1373,3 +1373,17 @@ Branch: `bugfix/testing-round-1`.
 **API (d153937):** `RfidRawReadingDto.DeviceName` - every read''s serial resolved to the friendly device name via the active-device lookup (IsActive/!IsDeleted, OrderBy(Id) for deterministic duplicate-MAC picks); batch serial -> read serial priority now lives ONCE in `DeviceSerialResolver.ResolveDeviceId` (assign-then-choose candidate resolution refactored onto it, identical semantics). Null = unmapped -> UI falls back to the serial; DeviceId stays in the payload. Devices query no longer gated on unassigned rows. +3 resolver tests, 147/147.
 
 **UI (a0f5f48):** Device column renders deviceName (serial fallback + serial tooltip); REMOVED Gun Time/Net Time/Chip ID columns (raw + legacy fallback views; Split Times stays the authoritative timing view; participant-scoped table made Chip ID redundant); EPC footer STAYS (sole chip display). "Detections by Checkpoint" section deleted end-to-end: JSX, state, fetchDetections + effect + 4 refresh call sites, service method, ServiceUrls entry, ParticipantDetectionsResponse model (this page was the only consumer; API endpoint untouched). NON-display consumer `checkpointHasRawRead` (revert dialog''s empty-gate pre-warning) re-derived from `participant.rawRfidTagReadings` (non-manual read assigned to the gate - same raw-only semantics), one fewer request per load/save. Snackbar severity union +"warning" (was already set by rule-pass code; vite never type-checks) -> `npx tsc --noEmit` clean repo-wide. Deploy order: API before UI bundle (else Device column shows serials). NOT pushed.
+
+---
+
+## 2026-07-03 (13) - UN-DSQ path (46f7ce1) - the flagged follow-up to a85ef01
+
+**Boundary:** RunStatus="Recompute" (ResultStatus.Recompute + IsClearDsq, case-insensitive, disjoint from IsDsq, NEVER stored) = clear the disqualification. No reason required (the clear NULLS it; stray reason tolerated). All other manual status writes stay 400.
+
+**Service (UpdateParticipantExtendedAsync):** guard - only when current Results.Status == DQ, else 400 "not disqualified"; clear + race-move combo also 400. On clear: reason nulled, status RECLASSIFIED from gate coverage on Results AND Participant rows via the NEW shared static `ParticipantStatusCalculator.ComputeAsync` (extracted verbatim from ResultsService''s private ComputeParticipantStatusAsync - RankCalculator pattern, one classifier for single-runner reprocess + un-DSQ), then RankCalculator.ApplyStoredRanksAsync (in-memory race-wide - restored finisher re-enters, everyone below steps back down; mirror of DSQ apply; deliberately NOT a reprocess). Survives reprocess by construction (nothing DQ left -> Phase 3 dsq-skip doesn''t fire).
+
+**Response:** commit-f snapshot now populated on BOTH status-changing paths (DSQ apply + clear) on ParticipantSearchReponse - stored Gun/Net, post-re-rank ranks, DISPLAY status, new TotalFinishers field - loaded AFTER re-rank. Controller maps the un-DSQ guard messages to 400 (previously generic 500 branch).
+
+**Tests +3 (150/150):** IsClearDsq spellings/disjointness; Recompute validates without reason; un-DSQ rank-shift pin (restored finisher slots by time, below steps down). Prod-verify: DSQ -> clear -> computed OK + ranks -> reprocess keeps it; clear on non-DSQ -> 400.
+
+**UI QUEUED (spec gated-UI queue):** Run Status DDL "Remove disqualification" action when current = DSQ -> sends RunStatus="Recompute", re-renders from snapshot. NOT pushed.

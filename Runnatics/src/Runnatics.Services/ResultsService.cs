@@ -342,6 +342,21 @@ namespace Runnatics.Services
                     raceForStatus?.RaceSettings?.EarlyStartCutOff,
                     raceForStatus?.RaceSettings?.LateStartCutOff);
 
+                // FINISH CEILING (Races.EndTime): stored finish-gate crossings after EndTime are
+                // not valid data (#7 → DNF). Null = OFF (EndTime null / EndTime<=StartTime sanity
+                // guard). Finish-only, gate-parameterized (widen = every gate becomes a ceiling gate).
+                var finishCeilingCalc = StartWindow.FinishCeiling(raceForStatus?.StartTime, raceForStatus?.EndTime);
+                if (raceForStatus?.EndTime != null && finishCeilingCalc == null)
+                    _logger.LogWarning(
+                        "Race {RaceId}: EndTime ({EndTime:yyyy-MM-dd HH:mm:ss}) <= StartTime ({StartTime:yyyy-MM-dd HH:mm:ss}) — " +
+                        "treated as unset; NO finish ceiling applied (sanity guard).",
+                        decryptedRaceId, raceForStatus.EndTime.Value, raceForStatus.StartTime);
+                var physicalFinishDistanceCalc = allCheckpoints.Max(c => c.DistanceFromStart);
+                var ceilingGateIdsCalc = allCheckpoints
+                    .Where(c => c.DistanceFromStart == physicalFinishDistanceCalc)
+                    .Select(c => c.Id)
+                    .ToHashSet();
+
                 // Finish gate = ALL checkpoints at the highest mandatory distance — finish time and
                 // status must come from the same rule.
                 var finishGateDistance = mandatoryDistances.Max();
@@ -384,6 +399,10 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 var detectionsByParticipant = allDetections
+                    // FINISH CEILING: post-EndTime finish-gate rows are not valid data.
+                    .Where(d => !(finishCeilingCalc.HasValue &&
+                                  ceilingGateIdsCalc.Contains(d.CheckpointId) &&
+                                  !StartWindow.WithinCeiling(d.ChipTime, finishCeilingCalc)))
                     .GroupBy(d => d.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.Select(d => d.CheckpointId).ToHashSet());
 
@@ -1953,6 +1972,24 @@ namespace Runnatics.Services
 
                 var mandatoryGateIds = idsByMandatoryDistance.Values.SelectMany(ids => ids).Distinct().ToList();
 
+                // FINISH CEILING (Races.EndTime — client rule 2026-07-05): a finish-gate crossing
+                // after EndTime is ACCEPTED (accept-and-classify, #1) but is INVALID data — the
+                // gate stays uncovered and #7 classifies. Null = feature OFF (EndTime null or the
+                // EndTime<=StartTime sanity guard). Finish-only scope, gate-parameterized: widen
+                // to every gate by flipping the predicate to `_ => true`.
+                var finishCeilingManual = StartWindow.FinishCeiling(race.StartTime, race.EndTime);
+                if (race.EndTime.HasValue && finishCeilingManual == null)
+                    _logger.LogWarning(
+                        "Race {RaceId}: EndTime ({EndTime:yyyy-MM-dd HH:mm:ss}) <= StartTime ({StartTime:yyyy-MM-dd HH:mm:ss}) — " +
+                        "treated as unset; NO finish ceiling applied (sanity guard).",
+                        decryptedRaceId, race.EndTime.Value, race.StartTime);
+                var physicalFinishDistance = raceCheckpoints.Max(c => c.DistanceFromStart);
+                var physicalFinishGateIds = raceCheckpoints
+                    .Where(c => c.DistanceFromStart == physicalFinishDistance)
+                    .Select(c => c.Id)
+                    .ToHashSet();
+                bool CeilingAppliesTo(decimal gateDistance) => gateDistance == physicalFinishDistance;
+
                 // Existing ReadNormalized detections at the mandatory gates for this participant
                 // (ChipTime needed for #7 start-gate window validity)
                 var existingDetections = await rnRepo.GetQuery(rn =>
@@ -2018,11 +2055,34 @@ namespace Runnatics.Services
                             $"{invalidGateName}'s crossing violates the sequence/minimum-segment rule — accepted, " +
                             "but it does not count as valid data; the runner's status is computed accordingly.";
                     }
+
+                    // FINISH CEILING: an edited/toggled finish crossing after Race.EndTime is
+                    // accepted with the display reason ("read at 07:35 — after race end 07:30"),
+                    // but is not valid finish data (#7 → DNF path).
+                    if (editedGateDataValid &&
+                        CeilingAppliesTo(editedCheckpoint.DistanceFromStart) &&
+                        !StartWindow.WithinCeiling(crossingUtc, finishCeilingManual))
+                    {
+                        editedGateDataValid = false;
+                        var localCrossing = TimeZoneInfo.ConvertTimeFromUtc(crossingUtc, eventTz);
+                        var localEnd = TimeZoneInfo.ConvertTimeFromUtc(finishCeilingManual!.Value, eventTz);
+                        acceptanceWarning = (acceptanceWarning == null ? string.Empty : acceptanceWarning + " ") +
+                            $"Finish crossing {localCrossing:HH:mm:ss} is after the race end ({localEnd:HH:mm:ss}) — " +
+                            "accepted, but it does not count as valid finish data; the runner's status is computed accordingly.";
+                    }
                 }
 
                 // Add the checkpoint being recorded now to the covered set (in-memory, before DB
-                // write) — only when its data is VALID (#1/#7).
-                var coveredCheckpointIds = existingDetections.Select(d => d.CheckpointId).Distinct().ToHashSet();
+                // write) — only when its data is VALID (#1/#7). Existing STORED finish-gate rows
+                // past the EndTime ceiling are not valid data either (accept-and-classify can
+                // store them; classification must see through them everywhere identically).
+                var coveredCheckpointIds = existingDetections
+                    .Where(d => !(finishCeilingManual.HasValue &&
+                                  physicalFinishGateIds.Contains(d.CheckpointId) &&
+                                  !StartWindow.WithinCeiling(d.ChipTime, finishCeilingManual)))
+                    .Select(d => d.CheckpointId)
+                    .Distinct()
+                    .ToHashSet();
                 if (editedGateDataValid)
                     coveredCheckpointIds.Add(decryptedCheckpointId);
 

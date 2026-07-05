@@ -45,6 +45,14 @@ namespace Runnatics.Models.Client.Responses.RFID
         public int CategoriesProcessed { get; set; }
 
         public int DNSCount { get; set; }
+
+        /// <summary>
+        /// FINISH CEILING (Races.EndTime) aggregate flag: set when runners were DNF'd solely
+        /// because their only finish-gate read(s) fell after Race.EndTime — includes the count
+        /// and the nearest-miss delta, so a WRONG EndTime announces itself on every reprocess.
+        /// Null when the ceiling flagged nobody (or the feature is off).
+        /// </summary>
+        public string? FinishCeilingNote { get; set; }
     }
 }
 

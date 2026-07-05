@@ -40,6 +40,34 @@ namespace Runnatics.Services
             => !floor.HasValue || (read >= floor.Value && read <= ceiling!.Value);
 
         /// <summary>
+        /// FINISH CEILING (client rule 2026-07-05): finish-gate readings after Races.EndTime are
+        /// INVALID — the valid finish is the FIRST finish-gate read ≤ EndTime (INCLUSIVE; see
+        /// WithinCeiling). Returns null = feature OFF:
+        ///   guard 1 — EndTime null (same null-guard discipline as the cutoffs);
+        ///   guard 2 — EndTime &lt;= StartTime (SANITY: a form-default / clobbered EndTime must
+        ///             never DNF a whole race; callers detect EndTime-set-but-ceiling-null and
+        ///             log the warning — this helper stays pure).
+        /// SCOPE: the FINISH gate only (client question on all-gates pending) — callers keep the
+        /// check gate-parameterized so widening it is a one-line predicate flip.
+        /// All times UTC (EndTime is stored UTC like everything; display converts via Event.TimeZone).
+        /// </summary>
+        public static DateTime? FinishCeiling(DateTime? startTimeUtc, DateTime? endTimeUtc)
+        {
+            if (!endTimeUtc.HasValue) return null;
+            if (startTimeUtc.HasValue && endTimeUtc.Value <= startTimeUtc.Value) return null;
+            return endTimeUtc.Value;
+        }
+
+        /// <summary>
+        /// INCLUSIVE ceiling membership: a read AT the ceiling is valid; null ceiling = feature
+        /// OFF = everything valid. THE membership test for the finish ceiling — selection
+        /// (Phase 2 candidate filter), classification (#7 finish-gate validity) and manual-edit
+        /// acceptance all use this; never re-implement the comparison inline.
+        /// </summary>
+        public static bool WithinCeiling(DateTime read, DateTime? ceiling)
+            => !ceiling.HasValue || read <= ceiling.Value;
+
+        /// <summary>
         /// START SELECTION INVARIANT (client-confirmed, HISTORICAL rule — changing it requires
         /// explicit client sign-off): among IN-WINDOW start reads, the start is the
         /// <b>LAST read of the FIRST in-window pass</b> — the runner LEAVING the mat, not the

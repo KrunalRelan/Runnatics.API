@@ -1671,6 +1671,14 @@ namespace Runnatics.Services
                     response.Warnings.Add("No finishers found. Ensure checkpoints are properly configured.");
                 }
 
+                // FINISH CEILING aggregate flag: surface Phase 3's "N finisher(s) after
+                // Race.EndTime; nearest miss …" note on the workflow response — a wrong EndTime
+                // must announce itself to the admin, not hide in the logs.
+                if (!string.IsNullOrEmpty(calcResponse.FinishCeilingNote))
+                {
+                    response.Warnings.Add(calcResponse.FinishCeilingNote);
+                }
+
                 _logger.LogInformation(
                     "Phase 3 completed in {Time}ms. Finishers: {Finishers}, Created: {Created}, Updated: {Updated}",
                     response.Phase3CalculationMs,
@@ -2178,6 +2186,24 @@ namespace Runnatics.Services
                 var minSegmentSeconds = PassCollapseSettings.MinSegmentSeconds(raceSettingsP2?.DedUpSeconds);
                 var distanceByCheckpointId = allCheckpoints.ToDictionary(cp => cp.Id, cp => cp.DistanceFromStart);
 
+                // FINISH CEILING (Races.EndTime — client rule 2026-07-05): finish-gate reads
+                // after EndTime are INVALID candidates. Null ceiling = feature OFF (EndTime null,
+                // or the EndTime<=StartTime sanity guard tripped — logged below, never DNFs a
+                // race on a clobbered value). Selection itself is unchanged: the finish gate
+                // already picks earliest-valid; the ceiling only bounds the candidate set, and
+                // an all-filtered gate simply stays uninhabited (→ #7 DNF).
+                var finishCeilingP2 = StartWindow.FinishCeiling(race.StartTime, race.EndTime);
+                if (race.EndTime.HasValue && finishCeilingP2 == null)
+                    _logger.LogWarning(
+                        "Race {RaceId}: EndTime ({EndTime:yyyy-MM-dd HH:mm:ss}) <= StartTime ({StartTime:yyyy-MM-dd HH:mm:ss}) — " +
+                        "treated as unset; NO finish ceiling applied (sanity guard).",
+                        decryptedRaceId, race.EndTime.Value, race.StartTime);
+                var finishDistanceP2 = allCheckpoints.Max(cp => cp.DistanceFromStart);
+                // Gate-parameterized scope (finish-only pending the all-gates client answer):
+                // widening the ceiling to every gate = flip this predicate to `_ => true`.
+                bool CeilingApplies(int gateId) =>
+                    distanceByCheckpointId.GetValueOrDefault(gateId, decimal.MinValue) == finishDistanceP2;
+
                 // LOCKED ANCHORS (incremental correctness — manual-time REVERT / late batches):
                 // the participant's EXISTING normalized crossings join the chain as LOCKED gates,
                 // so a rebuilt gate is selected against its real neighbors — strictly after the
@@ -2216,6 +2242,10 @@ namespace Runnatics.Services
                                 ? lockedTime
                                 : null,
                             Candidates = g
+                                // FINISH CEILING: post-EndTime reads at the finish gate are not
+                                // candidates (inclusive ≤ via WithinCeiling; null ceiling = off).
+                                .Where(r => !CeilingApplies(g.Key) ||
+                                            StartWindow.WithinCeiling(r.Reading.ReadTimeUtc, finishCeilingP2))
                                 .OrderBy(r => r.Reading.TimestampMs)
                                 .ThenByDescending(r => r.Reading.RssiDbm ?? decimal.MinValue)
                                 .Select(r => new GateCandidate { Key = r.RawReadId, Time = r.Reading.ReadTimeUtc })
@@ -2764,6 +2794,18 @@ namespace Runnatics.Services
                 var (validStartFloorP3, validStartCeilingP3) =
                     StartWindow.For(race.StartTime, race.RaceSettings?.EarlyStartCutOff, race.RaceSettings?.LateStartCutOff);
 
+                // FINISH CEILING (Races.EndTime — client rule 2026-07-05): a finish-gate reading
+                // after EndTime is INVALID data (#7 → gate empty → DNF). Null = feature OFF
+                // (EndTime null, or the EndTime<=StartTime sanity guard — logged, never DNFs a
+                // race on a clobbered value). Phase 2 already filters candidates; this covers
+                // STORED post-ceiling crossings (accept-and-classify manual edits/toggles).
+                var finishCeilingP3 = StartWindow.FinishCeiling(race.StartTime, race.EndTime);
+                if (race.EndTime.HasValue && finishCeilingP3 == null)
+                    _logger.LogWarning(
+                        "Race {RaceId}: EndTime ({EndTime:yyyy-MM-dd HH:mm:ss}) <= StartTime ({StartTime:yyyy-MM-dd HH:mm:ss}) — " +
+                        "treated as unset; NO finish ceiling applied (sanity guard).",
+                        decryptedRaceId, race.EndTime.Value, race.StartTime);
+
                 // Get all checkpoints ordered by distance
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 var checkpoints = await checkpointRepo.GetQuery(cp =>
@@ -2942,6 +2984,34 @@ namespace Runnatics.Services
                             $"Participant {r.ParticipantId}: {TimeSpan.FromMilliseconds(r.GunTime.Value):hh\\:mm\\:ss}")));
                 }
 
+                // FINISH CEILING: runners whose (earliest) finish-gate crossing lands AFTER
+                // Race.EndTime are excluded from finishers/ranking and their finish gate is
+                // INVALID data (#7 → DNF). The earliest crossing being past the ceiling means
+                // EVERY read is (only-read-after-EndTime). Aggregate-flagged with the
+                // nearest-miss delta — same pattern as the negative-finish flag — so a WRONG
+                // EndTime announces itself on every reprocess instead of silently DNF'ing a race.
+                var pastCeilingFinishes = finishCeilingP3.HasValue
+                    ? finishReadings.Where(r => !StartWindow.WithinCeiling(r.ChipTime, finishCeilingP3)).ToList()
+                    : [];
+                var pastCeilingFinishIds = pastCeilingFinishes.Select(r => r.ParticipantId).ToHashSet();
+                string? finishCeilingNote = null;
+                if (pastCeilingFinishIds.Count > 0)
+                {
+                    var nearestMiss = pastCeilingFinishes.Min(r => r.ChipTime - finishCeilingP3!.Value);
+                    finishCeilingNote =
+                        $"{pastCeilingFinishIds.Count} finisher(s) read after Race.EndTime " +
+                        $"({finishCeilingP3!.Value:yyyy-MM-dd HH:mm:ss} UTC) — flagged DNF; " +
+                        $"nearest miss {nearestMiss:hh\\:mm\\:ss} past the ceiling.";
+                    _logger.LogWarning(
+                        "Race {RaceId}: {Note} Examples: {Examples}",
+                        decryptedRaceId, finishCeilingNote,
+                        string.Join(", ", pastCeilingFinishes.Take(5).Select(r =>
+                            $"Participant {r.ParticipantId}: {r.ChipTime:HH:mm:ss}")));
+                    finishReadings = finishReadings
+                        .Where(r => !pastCeilingFinishIds.Contains(r.ParticipantId))
+                        .ToList();
+                }
+
                 // =====================================================================
                 // Classify all participants: Finished, DNF, or DNS
                 // =====================================================================
@@ -2994,8 +3064,11 @@ namespace Runnatics.Services
                             gateValid = idsByMandatoryDistance[d].Overlaps(covered);
                         }
 
-                        // Impossible (negative) finish time = invalid data at the finish gate.
-                        if (gateValid && d == finishGateDistance && flaggedNegativeFinishIds.Contains(participant.Id))
+                        // Impossible (negative) finish time OR a post-EndTime finish (ceiling) =
+                        // invalid data at the finish gate.
+                        if (gateValid && d == finishGateDistance &&
+                            (flaggedNegativeFinishIds.Contains(participant.Id) ||
+                             pastCeilingFinishIds.Contains(participant.Id)))
                             gateValid = false;
 
                         if (gateValid)
@@ -3227,11 +3300,13 @@ namespace Runnatics.Services
                     OtherFinishers = genderStats.GetValueOrDefault("other", 0)
                 };
                 response.Status = "Completed";
+                response.FinishCeilingNote = finishCeilingNote;
                 response.Message = $"Results: {finishedParticipantIds.Count} Finished, " +
                     $"{dnfParticipantIds.Count} DNF, {dnsParticipantIds.Count} DNS" +
                     (flaggedNegativeFinishIds.Count > 0
                         ? $" ({flaggedNegativeFinishIds.Count} flagged DNF: negative finish time)"
-                        : string.Empty);
+                        : string.Empty) +
+                    (finishCeilingNote != null ? $" ({finishCeilingNote})" : string.Empty);
 
                 var endTime = DateTime.UtcNow;
                 response.ProcessingTimeMs = (long)(endTime - startTime).TotalMilliseconds;

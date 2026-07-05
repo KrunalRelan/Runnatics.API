@@ -53,6 +53,17 @@ namespace Runnatics.Services
             var (windowFloor, windowCeiling) = StartWindow.For(
                 race?.StartTime, race?.RaceSettings?.EarlyStartCutOff, race?.RaceSettings?.LateStartCutOff);
 
+            // FINISH CEILING (Races.EndTime): a stored finish-gate crossing after EndTime is not
+            // valid data (#7 → gate empty → DNF). Null = feature OFF (EndTime null / sanity guard
+            // — the reprocess paths log the warning; this helper stays quiet). Finish-only scope,
+            // gate-parameterized: widen by making every gate id a "ceiling gate".
+            var finishCeiling = StartWindow.FinishCeiling(race?.StartTime, race?.EndTime);
+            var physicalFinishDistance = allCheckpoints.Max(cp => cp.DistanceFromStart);
+            var ceilingGateIds = allCheckpoints
+                .Where(cp => cp.DistanceFromStart == physicalFinishDistance)
+                .Select(cp => cp.Id)
+                .ToHashSet();
+
             var detections = await repository.GetRepository<ReadNormalized>()
                 .GetQuery(rn => rn.ParticipantId == participantId
                              && gateIds.Contains(rn.CheckpointId)
@@ -60,7 +71,12 @@ namespace Runnatics.Services
                 .Select(rn => new { rn.CheckpointId, rn.ChipTime })
                 .ToListAsync();
 
-            var detectedIds = detections.Select(d => d.CheckpointId).ToHashSet();
+            var detectedIds = detections
+                .Where(d => !(finishCeiling.HasValue &&
+                              ceilingGateIds.Contains(d.CheckpointId) &&
+                              !StartWindow.WithinCeiling(d.ChipTime, finishCeiling)))
+                .Select(d => d.CheckpointId)
+                .ToHashSet();
             var startGateIds = idsByMandatoryDistance[startGateDistance];
             var startChip = detections
                 .Where(d => startGateIds.Contains(d.CheckpointId))

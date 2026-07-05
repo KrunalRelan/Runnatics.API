@@ -267,6 +267,26 @@ no in-window start read (falls through, may produce negative → DNF after the �
   ⚠️ known limitation; a full reprocess is unaffected because Phase 2 computes NetTime from the raw
   start before Phase 2.4.
 
+### 4b. FINISH CEILING — `Races.EndTime` (client rule 2026-07-05)
+
+- **Rule:** finish-gate readings after `Races.EndTime` are INVALID. Valid finish = the FIRST
+  finish-gate read **≤ EndTime (inclusive)**. Only-read-after-EndTime → gate empty → #7 → DNF.
+- **One source of truth:** `StartWindow.FinishCeiling(startUtc, endUtc)` (null = feature OFF) +
+  `StartWindow.WithinCeiling(read, ceiling)` (inclusive membership). Consumed by: Phase 2
+  candidate filter (selection unchanged — the ceiling only bounds the candidate set), Phase 3
+  classification + finisher/ranking exclusion, `ParticipantStatusCalculator`,
+  `CalculateResultsAsync`, and `RecordManualTimeAsync` (accept-and-classify: post-EndTime
+  typed/toggled finish → accepted + warning "Finish crossing 07:35:00 is after the race end
+  (07:30:00)…", not valid data).
+- **Guards (the LateStartCutOff=60 lesson):** (1) `EndTime` null → OFF; (2) SANITY —
+  `EndTime <= StartTime` → treated as unset + logged warning (a clobbered value must never DNF a
+  race); (3) REPROCESS FLAG — Phase 3 aggregates "N finisher(s) read after Race.EndTime — flagged
+  DNF; nearest miss hh:mm:ss past the ceiling" into its message, `FinishCeilingNote`, and the
+  workflow `Warnings`, so a wrong EndTime announces itself.
+- **Scope:** FINISH gate only (gate at max `DistanceFromStart`); OPEN client question whether it
+  should apply to all gates — every consumer keeps the check gate-parameterized (one-line flip).
+- All boundary math UTC; display converts via `Event.TimeZone`.
+
 ---
 
 ## 5. Time calculations (all milliseconds unless noted)

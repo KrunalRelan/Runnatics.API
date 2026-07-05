@@ -223,5 +223,46 @@ namespace Runnatics.Services.Tests.RFID
 
             Assert.AreEqual(1, selected!.Id);
         }
+
+        // ─── FINISH CEILING (Races.EndTime — client rule 2026-07-05) ───
+
+        [TestMethod]
+        public void FinishCeiling_NullEndTime_FeatureOff()
+        {
+            // Guard 1: the same null-guard discipline as the cut-offs.
+            Assert.IsNull(StartWindow.FinishCeiling(Gun, null));
+            Assert.IsNull(StartWindow.FinishCeiling(null, null));
+        }
+
+        [TestMethod]
+        public void FinishCeiling_EndTimeAtOrBeforeStart_TreatedAsUnset()
+        {
+            // Guard 2 (SANITY): a form-default / clobbered EndTime must never DNF a whole race.
+            Assert.IsNull(StartWindow.FinishCeiling(Gun, Gun), "EndTime == StartTime → unset");
+            Assert.IsNull(StartWindow.FinishCeiling(Gun, Gun.AddMinutes(-30)), "EndTime < StartTime → unset");
+        }
+
+        [TestMethod]
+        public void FinishCeiling_ValidEndTime_ReturnsIt_UtcMathAcrossMidnight()
+        {
+            // Gun is 00:03 UTC (05:33 IST — the IST pre-05:30 class lives one calendar day
+            // earlier in UTC); a plausible EndTime hours later stays plain UTC math.
+            var end = Gun.AddHours(3);
+            Assert.AreEqual(end, StartWindow.FinishCeiling(Gun, end));
+
+            // EndTime without a StartTime (shouldn't happen post-validation) → still on.
+            Assert.AreEqual(end, StartWindow.FinishCeiling(null, end));
+        }
+
+        [TestMethod]
+        public void WithinCeiling_InclusiveAtBoundary_OffWhenNull()
+        {
+            var end = Gun.AddHours(2);
+
+            Assert.IsTrue(StartWindow.WithinCeiling(end, end), "a finish AT EndTime is VALID (inclusive ≤)");
+            Assert.IsTrue(StartWindow.WithinCeiling(end.AddSeconds(-1), end));
+            Assert.IsFalse(StartWindow.WithinCeiling(end.AddSeconds(1), end), "one second past → invalid");
+            Assert.IsTrue(StartWindow.WithinCeiling(end.AddHours(5), null), "null ceiling = feature OFF = everything valid");
+        }
     }
 }

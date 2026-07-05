@@ -1393,3 +1393,15 @@ Branch: `bugfix/testing-round-1`.
 ## 2026-07-05 (14) - UN-DSQ UI (UI cef6f51) - "Remove disqualification" in both editors
 
 Run Status DDL (ParticipantDetail edit dialog + EditParticipant grid modal): "Remove disqualification" option ONLY when current status = DSQ. Selecting it opens a CONFIRM dialog (symmetric friction with DSQ''s mandatory reason); the DDL value never changes until the server confirms. Confirm -> `ParticipantService.removeDisqualification` (PUT RunStatus="Recompute", no reason). Success -> render what the classifier said (never assume OK): new `ParticipantStatusSnapshot` model; detail page applies snapshot (status chip, header gun/chip times, rankings) then re-fetches (race-wide shifts); grid modal toasts the recomputed status, onUpdate re-fetches the list, closes. Errors: `extractErrorMessage` now reads the endpoint''s `{ error: "..." }` shape; 400 (stale UI) -> server message + re-sync. tsc clean, build green. Spec queue item marked SHIPPED. Requires API 46f7ce1 (pushed). Prod-verify: DSQ -> ranks shift -> Remove -> computed status + ranks restore, others shift back; 400 path on a non-DSQ runner. NOT pushed (UI cef6f51 + this docs commit).
+
+---
+
+## 2026-07-05 (15) - FINISH CEILING at Races.EndTime (c51ce2e)
+
+**Client rule:** finish-gate reads after Races.EndTime are INVALID; valid finish = FIRST read <= EndTime (INCLUSIVE); only-after -> gate empty -> #7 DNF. No new status logic. OPEN client question: all gates or finish-only -> built finish-only (gate = max DistanceFromStart), every consumer gate-parameterized (one-line flip).
+
+**One source of truth:** `StartWindow.FinishCeiling(start, end)` (null = OFF: EndTime null / SANITY EndTime<=StartTime -> unset + caller-logged warning; the LateStartCutOff=60 lesson) + `StartWindow.WithinCeiling` (inclusive). UTC throughout.
+
+**Consumers:** Phase 2 candidate filter (selector untouched; all-filtered gate stays uninhabited); Phase 3 finisher/ranking exclusion + finish-gate invalidation + AGGREGATE FLAG ("N finisher(s) read after Race.EndTime - flagged DNF; nearest miss hh:mm:ss past") in message + new `CalculateResultsResponse.FinishCeilingNote` + workflow Warnings; RecordManualTimeAsync accept-and-classify (post-EndTime typed/toggled finish -> accepted + display-reason warning, gate uncovered; stored post-ceiling rows seen through in the covered set); ParticipantStatusCalculator + CalculateResultsAsync covered-set filters. All four classification sites identical.
+
+**Tests +4 (154/154):** inclusive boundary, null-off, sanity-unset (equal+earlier), IST-midnight UTC math. **Kunal pre-verify data check:** SELECT Id,Title,StartTime,EndTime,DATEDIFF(MINUTE,StartTime,EndTime) FROM Races WHERE IsActive=1 AND IsDeleted=0 - flag null/equal/absurd windows BEFORE the rule can bite. Prod-verify: post-EndTime finisher -> DNF + workflow warning w/ nearest miss; at-EndTime -> OK; typed post-EndTime -> warning + DNF. NOT pushed (also pending push: un-DSQ UI cef6f51 + docs b1bbe66).

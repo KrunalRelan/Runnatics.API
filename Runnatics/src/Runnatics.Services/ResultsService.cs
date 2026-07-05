@@ -1248,9 +1248,27 @@ namespace Runnatics.Services
                 .GroupBy(n => n.RawReadId!.Value)
                 .ToDictionary(g => g.Key, g => g.First());
 
+            // ONE load of the race's active checkpoints serves the name lookup, the candidate
+            // gates AND the canonical gate map (race-66: a read assigned to a CHILD row must
+            // surface as its PRIMARY gate — the id the save path writes to and every reader
+            // looks at — or the panel groups two mats at one line as two different gates).
+            var checkpointRepo = _repository.GetRepository<Checkpoint>();
+            var raceCheckpoints = await checkpointRepo.GetQuery(c =>
+                c.RaceId == raceId &&
+                c.EventId == eventId &&
+                c.AuditProperties.IsActive &&
+                !c.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .ToListAsync();
+            var canonicalGateMap = CheckpointGates.CanonicalGateMap(raceCheckpoints);
+            var checkpointById = raceCheckpoints
+                .GroupBy(c => c.Id)
+                .ToDictionary(g => g.Key, g => g.First());
+
             // Checkpoints (for this participant) that currently have an ACTIVE manual override. Keyed
             // off the override ROW — the single source of truth — so the "is the current pick an
-            // override or the dedup default?" signal never depends on IsManualEntry.
+            // override or the dedup default?" signal never depends on IsManualEntry. Ids fold onto
+            // the primary gate (legacy override rows can hold a child id).
             var overrideCheckpointIds = (await _repository.GetRepository<ManualTimeOverride>()
                 .GetQuery(o =>
                     o.ParticipantId == participantId &&
@@ -1259,19 +1277,13 @@ namespace Runnatics.Services
                 .AsNoTracking()
                 .Select(o => o.CheckpointId)
                 .ToListAsync())
+                .Select(id => CheckpointGates.Canonical(canonicalGateMap, id))
                 .ToHashSet();
 
             // Build DistanceFromStart → name lookup for parent (named) checkpoints.
             // Child checkpoints share the same distance as their parent but have empty names.
-            var checkpointRepo = _repository.GetRepository<Checkpoint>();
-            var namedByDistance = (await checkpointRepo.GetQuery(c =>
-                c.RaceId == raceId &&
-                c.EventId == eventId &&
-                c.Name != null && c.Name != "" &&
-                c.AuditProperties.IsActive &&
-                !c.AuditProperties.IsDeleted)
-                .AsNoTracking()
-                .ToListAsync())
+            var namedByDistance = raceCheckpoints
+                .Where(c => !string.IsNullOrEmpty(c.Name))
                 .GroupBy(c => c.DistanceFromStart)
                 .ToDictionary(g => g.Key, g => g.First().Name!);
 
@@ -1291,21 +1303,9 @@ namespace Runnatics.Services
                 .GroupBy(d => d.Id)
                 .ToDictionary(g => g.Key, g => g.First());
 
-            var hasUnassigned = readings.Any(r => !r.ReadingCheckpointAssignments
-                .Any(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted));
-            var checkpointsByDeviceId = new Dictionary<int, List<Checkpoint>>();
-            if (hasUnassigned)
-            {
-                checkpointsByDeviceId = (await checkpointRepo.GetQuery(c =>
-                    c.RaceId == raceId &&
-                    c.EventId == eventId &&
-                    c.AuditProperties.IsActive &&
-                    !c.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .ToListAsync())
-                    .GroupBy(c => c.DeviceId)
-                    .ToDictionary(g => g.Key, g => g.OrderBy(c => c.DistanceFromStart).ToList());
-            }
+            var checkpointsByDeviceId = raceCheckpoints
+                .GroupBy(c => c.DeviceId)
+                .ToDictionary(g => g.Key, g => g.OrderBy(c => c.DistanceFromStart).ToList());
 
             TimeZoneInfo timeZone;
             try
@@ -1327,14 +1327,24 @@ namespace Runnatics.Services
                 var localTime = TimeZoneInfo.ConvertTimeFromUtc(r.ReadTimeUtc, timeZone);
                 var isNormalized = normalizedByRawId.TryGetValue(r.Id, out var normalized);
 
-                string? checkpointDisplay = null;
+                // The read's GATE = its assignment folded onto the PRIMARY checkpoint (race-66):
+                // the id the UI toggles must send, the id the save writes, the id status/splits
+                // read. A child-row assignment (second mat on the same line) surfaces as the
+                // primary — never as a sibling gate of its own.
+                Checkpoint? gateCheckpoint = null;
                 if (assignment?.Checkpoint != null)
                 {
-                    var cp = assignment.Checkpoint;
-                    var dist = cp.DistanceFromStart;
-                    var name = string.IsNullOrEmpty(cp.Name)
+                    var canonicalId = CheckpointGates.Canonical(canonicalGateMap, assignment.Checkpoint.Id);
+                    gateCheckpoint = checkpointById.GetValueOrDefault(canonicalId, assignment.Checkpoint);
+                }
+
+                string? checkpointDisplay = null;
+                if (gateCheckpoint != null)
+                {
+                    var dist = gateCheckpoint.DistanceFromStart;
+                    var name = string.IsNullOrEmpty(gateCheckpoint.Name)
                         ? namedByDistance.GetValueOrDefault(dist)
-                        : cp.Name;
+                        : gateCheckpoint.Name;
                     if (name != null)
                         checkpointDisplay = $"{name} ({dist:0.##} km)";
                 }
@@ -1353,9 +1363,17 @@ namespace Runnatics.Services
                 List<ChoosableCheckpointDto>? choosable = null;
                 if (assignment == null)
                 {
+                    // Candidate gates fold onto their PRIMARY row and dedupe: a child device's own
+                    // rows are the gates' CHILD rows — offering those ids would land the choice on
+                    // a sibling nobody reads (the save path canonicalizes identically).
                     choosable = resolvedDeviceId != 0
                         && checkpointsByDeviceId.TryGetValue(resolvedDeviceId, out var candidateCps)
                         ? candidateCps
+                            .Select(cp => checkpointById.GetValueOrDefault(
+                                CheckpointGates.Canonical(canonicalGateMap, cp.Id), cp))
+                            .GroupBy(cp => cp.Id)
+                            .Select(g => g.First())
+                            .OrderBy(cp => cp.DistanceFromStart)
                             .Select(cp =>
                             {
                                 var candidateName = string.IsNullOrEmpty(cp.Name)
@@ -1379,12 +1397,12 @@ namespace Runnatics.Services
                     LocalTime = localTime.ToString("HH:mm:ss"),
                     Date = localTime.ToString("yyyy-MM-dd"),
                     Checkpoint = checkpointDisplay,
-                    CheckpointId = assignment?.Checkpoint != null
-                        ? _encryptionService.Encrypt(assignment.Checkpoint.Id.ToString())
+                    CheckpointId = gateCheckpoint != null
+                        ? _encryptionService.Encrypt(gateCheckpoint.Id.ToString())
                         : null,
-                    HasActiveOverride = assignment?.Checkpoint != null
-                        && overrideCheckpointIds.Contains(assignment.Checkpoint.Id),
-                    CheckpointDistance = assignment?.Checkpoint?.DistanceFromStart,
+                    HasActiveOverride = gateCheckpoint != null
+                        && overrideCheckpointIds.Contains(gateCheckpoint.Id),
+                    CheckpointDistance = gateCheckpoint?.DistanceFromStart,
                     Device = r.UploadBatch?.ReaderDevice?.Name ?? r.DeviceId,
                     DeviceId = r.DeviceId,
                     DeviceName = deviceName,
@@ -1670,16 +1688,38 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                var editedIndex = raceCheckpoints.FindIndex(c => c.Id == decryptedCheckpointId);
-                if (editedIndex < 0)
+                // RACE-66 — ONE LOGICAL GATE: a CHILD checkpoint id (second mat at the same
+                // distance) folds onto its PRIMARY before ANYTHING else. The override, the
+                // normalized row and the split must land on the gate every reader (display,
+                // status, splits, revert) looks at — a toggle targeting the child's id was
+                // persisting a second crossing "where nobody looks".
+                var canonicalGateMap = CheckpointGates.CanonicalGateMap(raceCheckpoints);
+                decryptedCheckpointId = CheckpointGates.Canonical(canonicalGateMap, decryptedCheckpointId);
+
+                var editedCheckpoint = raceCheckpoints.FirstOrDefault(c => c.Id == decryptedCheckpointId);
+                if (editedCheckpoint == null)
                 {
                     ErrorMessage = $"Checkpoint {decryptedCheckpointId} not found for this race.";
                     return null;
                 }
 
-                var editedCheckpoint = raceCheckpoints[editedIndex];
-                var isFinish = editedIndex == raceCheckpoints.Count - 1;
-                var isStart = editedIndex == 0; // start = lowest DistanceFromStart
+                // Gate identity is by DISTANCE — with a primary + child sharing a distance, index
+                // math over the raw row list is undefined (the tie order is the DB's whim).
+                var gateDistances = raceCheckpoints
+                    .Select(c => c.DistanceFromStart)
+                    .Distinct()
+                    .OrderBy(d => d)
+                    .ToList();
+                var editedGateIndex = gateDistances.IndexOf(editedCheckpoint.DistanceFromStart);
+                var isFinish = editedGateIndex == gateDistances.Count - 1;
+                var isStart = editedGateIndex == 0; // start = lowest DistanceFromStart
+
+                // The edited gate's sibling rows (primary + children at its distance): stored
+                // crossings under ANY of them are the same gate's data, not "other" crossings.
+                var editedGateSiblingIds = raceCheckpoints
+                    .Where(c => c.DistanceFromStart == editedCheckpoint.DistanceFromStart)
+                    .Select(c => c.Id)
+                    .ToHashSet();
 
                 var raceStartUtc = race.StartTime.Value;
 
@@ -1746,7 +1786,10 @@ namespace Runnatics.Services
                     var activeAssignments = chosenRead.ReadingCheckpointAssignments
                         .Where(a => a.AuditProperties.IsActive && !a.AuditProperties.IsDeleted)
                         .ToList();
-                    var assignedToCheckpoint = activeAssignments.Any(a => a.CheckpointId == decryptedCheckpointId);
+                    // Assignment ids fold through the canonical map: a read assigned to the gate's
+                    // CHILD row (the other mat on the same line) IS assigned to this gate.
+                    var assignedToCheckpoint = activeAssignments.Any(a =>
+                        CheckpointGates.Canonical(canonicalGateMap, a.CheckpointId) == decryptedCheckpointId);
 
                     if (!assignedToCheckpoint && activeAssignments.Count > 0)
                     {
@@ -1770,8 +1813,13 @@ namespace Runnatics.Services
                         // the chosen-read override is active (Phase 1.5 exclusion, decision b)
                         // and cleaned up after a revert.
                         // ============================================================
-                        var candidateCheckpointIds = await ResolveChoosableCheckpointIdsAsync(
-                            chosenRead, decryptedRaceId, decryptedEventId);
+                        var candidateCheckpointIds = (await ResolveChoosableCheckpointIdsAsync(
+                                chosenRead, decryptedRaceId, decryptedEventId))
+                            // A child device's own rows are its gates' CHILD rows — the gates the
+                            // read may be chosen for are their PRIMARIES (race-66: never let a
+                            // choice land on a sibling nobody reads).
+                            .Select(id => CheckpointGates.Canonical(canonicalGateMap, id))
+                            .ToHashSet();
 
                         if (candidateCheckpointIds.Count == 0)
                         {
@@ -1884,7 +1932,7 @@ namespace Runnatics.Services
                 {
                     var otherCrossings = (await _repository.GetRepository<ReadNormalized>().GetQuery(rn =>
                             rn.ParticipantId == decryptedParticipantId &&
-                            rn.CheckpointId != decryptedCheckpointId &&
+                            !editedGateSiblingIds.Contains(rn.CheckpointId) &&
                             !rn.AuditProperties.IsDeleted)
                         .Select(rn => new { rn.CheckpointId, rn.ChipTime })
                         .ToListAsync())
@@ -2011,7 +2059,7 @@ namespace Runnatics.Services
                 {
                     var allOtherRows = await rnRepo.GetQuery(rn =>
                             rn.ParticipantId == decryptedParticipantId &&
-                            rn.CheckpointId != decryptedCheckpointId &&
+                            !editedGateSiblingIds.Contains(rn.CheckpointId) &&
                             !rn.AuditProperties.IsDeleted)
                         .Select(rn => new { rn.CheckpointId, rn.ChipTime })
                         .ToListAsync();
@@ -2123,9 +2171,14 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .FirstOrDefaultAsync();
 
-                // Determine FromCheckpointId: from existing row, or infer from checkpoint order
+                // Determine FromCheckpointId: from existing row, or the PREVIOUS GATE's primary
+                // (gate-level neighbor — index math over raw rows would happily name a sibling
+                // child row at the SAME distance as "previous").
                 var fromCheckpointId = existingSplitForSegment?.FromCheckpointId
-                    ?? (editedIndex > 0 ? raceCheckpoints[editedIndex - 1].Id : decryptedCheckpointId);
+                    ?? (editedGateIndex > 0
+                        ? CheckpointGates.Start(raceCheckpoints
+                            .Where(c => c.DistanceFromStart == gateDistances[editedGateIndex - 1]))!.Id
+                        : decryptedCheckpointId);
                 long? previousCumulativeMs = null;
                 if (fromCheckpointId != decryptedCheckpointId)
                 {
@@ -2171,10 +2224,13 @@ namespace Runnatics.Services
                     // by clear) and is re-applied onto ReadNormalized by Phase 2.4 on every rebuild. The
                     // ReadNormalized write in STEP A0 below is the live-display twin (so the grid reflects
                     // immediately); this override row is the source of truth for future reprocesses.
-                    // Upsert the single ACTIVE row (filtered unique index: one active per participant+checkpoint).
+                    // Upsert the single ACTIVE row per LOGICAL GATE (filtered unique index is
+                    // per participant+checkpoint; matching the gate's SIBLING ids catches a legacy
+                    // row parked under a CHILD id — race-66 — and re-owns it by the primary so two
+                    // overrides can never share one gate).
                     var existingOverride = await overrideRepo.GetQuery(o =>
                         o.ParticipantId == decryptedParticipantId &&
-                        o.CheckpointId == decryptedCheckpointId &&
+                        editedGateSiblingIds.Contains(o.CheckpointId) &&
                         !o.AuditProperties.IsDeleted)
                         .FirstOrDefaultAsync();
 
@@ -2182,6 +2238,7 @@ namespace Runnatics.Services
                     {
                         existingOverride.EventId = decryptedEventId;
                         existingOverride.RaceId = decryptedRaceId;
+                        existingOverride.CheckpointId = decryptedCheckpointId; // re-own by the PRIMARY id
                         existingOverride.ManualCrossingUtc = crossingUtc;
                         // Set on chosen-read, CLEAR on typed — a later typed edit on the same checkpoint
                         // flips this row back to a typed override (latest write wins on the single active row).
@@ -2216,21 +2273,22 @@ namespace Runnatics.Services
                     }
 
                     // STEP A0 — Make this manual detection the SOLE normalized crossing at this
-                    // (participant, checkpoint). Match on (participant, checkpoint) REGARDLESS of
-                    // IsManualEntry: if an AUTOMATIC row exists it must be CONVERTED in place, not left
-                    // beside a new manual row. The old query filtered rn.IsManualEntry, so it never saw
-                    // the automatic row and AddAsync'd a second one — two crossings at one checkpoint,
-                    // which is what fed the wrong-split bug. Invariant: exactly one active normalized
-                    // crossing per checkpoint.
+                    // (participant, LOGICAL GATE). Match on the gate's SIBLING ids (primary +
+                    // children at its distance) REGARDLESS of IsManualEntry: if an AUTOMATIC row
+                    // exists it must be CONVERTED in place, not left beside a new manual row — and
+                    // a legacy row parked under a CHILD id (race-66) is the same gate's crossing,
+                    // so it collapses here too. Invariant: exactly one active normalized crossing
+                    // per gate, always under the PRIMARY id.
                     var rnsAtCheckpoint = await rnRepo.GetQuery(rn =>
                         rn.ParticipantId == decryptedParticipantId &&
-                        rn.CheckpointId == decryptedCheckpointId &&
+                        editedGateSiblingIds.Contains(rn.CheckpointId) &&
                         !rn.AuditProperties.IsDeleted)
                         .ToListAsync();
 
                     if (rnsAtCheckpoint.Count > 0)
                     {
                         var keep = rnsAtCheckpoint[0];
+                        keep.CheckpointId = decryptedCheckpointId; // re-own by the PRIMARY id
                         keep.ChipTime = crossingUtc;
                         keep.GunTime = chipTimeMs;
                         keep.NetTime = chipTimeMs;
@@ -2571,19 +2629,6 @@ namespace Runnatics.Services
 
             try
             {
-                var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
-                var existingOverride = await overrideRepo.GetQuery(o =>
-                    o.ParticipantId == decryptedParticipantId &&
-                    o.CheckpointId == decryptedCheckpointId &&
-                    !o.AuditProperties.IsDeleted)
-                    .FirstOrDefaultAsync(ct);
-
-                if (existingOverride == null)
-                {
-                    ErrorMessage = "No manual override found for this checkpoint.";
-                    return null;
-                }
-
                 var checkpointRepo = _repository.GetRepository<Checkpoint>();
                 var raceCheckpoints = await checkpointRepo.GetQuery(c =>
                     c.RaceId == decryptedRaceId &&
@@ -2592,6 +2637,11 @@ namespace Runnatics.Services
                     .OrderBy(c => c.DistanceFromStart)
                     .AsNoTracking()
                     .ToListAsync(ct);
+
+                // RACE-66: fold a CHILD checkpoint id onto its PRIMARY — the revert must clean the
+                // LOGICAL gate whichever sibling id the caller (or a legacy override row) holds.
+                var canonicalGateMap = CheckpointGates.CanonicalGateMap(raceCheckpoints);
+                decryptedCheckpointId = CheckpointGates.Canonical(canonicalGateMap, decryptedCheckpointId);
 
                 var editedCheckpoint = raceCheckpoints.FirstOrDefault(c => c.Id == decryptedCheckpointId);
                 if (editedCheckpoint == null)
@@ -2605,6 +2655,21 @@ namespace Runnatics.Services
                     .Where(c => c.DistanceFromStart == editedCheckpoint.DistanceFromStart)
                     .Select(c => c.Id)
                     .ToHashSet();
+
+                // ALL active overrides at the gate — a legacy row may sit under a child id; leaving
+                // it behind would let Phase 2.4 resurrect the crossing right after this revert.
+                var overrideRepo = _repository.GetRepository<ManualTimeOverride>();
+                var gateOverrides = await overrideRepo.GetQuery(o =>
+                    o.ParticipantId == decryptedParticipantId &&
+                    gateCheckpointIds.Contains(o.CheckpointId) &&
+                    !o.AuditProperties.IsDeleted)
+                    .ToListAsync(ct);
+
+                if (gateOverrides.Count == 0)
+                {
+                    ErrorMessage = "No manual override found for this checkpoint.";
+                    return null;
+                }
 
                 // GAP B: the NEXT gate's split must re-chain off the restored crossing — delete it
                 // so Phase 2.5 rebuilds it. ONE gate is provably sufficient: SegmentTime[i]
@@ -2629,23 +2694,27 @@ namespace Runnatics.Services
 
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    // 1. Soft-delete the durable override. This releases the filtered unique slot
-                    //    (WHERE IsDeleted=0), so a later re-override of the same checkpoint inserts cleanly.
-                    existingOverride.AuditProperties.IsDeleted = true;
-                    existingOverride.AuditProperties.IsActive = false;
-                    existingOverride.AuditProperties.UpdatedBy = userId;
-                    existingOverride.AuditProperties.UpdatedDate = DateTime.UtcNow;
-                    await overrideRepo.UpdateAsync(existingOverride);
+                    // 1. Soft-delete the durable override(s) at the gate. This releases the filtered
+                    //    unique slot (WHERE IsDeleted=0), so a later re-override inserts cleanly.
+                    foreach (var gateOverride in gateOverrides)
+                    {
+                        gateOverride.AuditProperties.IsDeleted = true;
+                        gateOverride.AuditProperties.IsActive = false;
+                        gateOverride.AuditProperties.UpdatedBy = userId;
+                        gateOverride.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                    }
+                    await overrideRepo.UpdateRangeAsync(gateOverrides);
 
-                    // 2. Soft-delete the ReadNormalized row(s) at this checkpoint.
-                    //    Key off (participant, checkpoint) — NOT IsManualEntry. A CHOSEN-READ override
-                    //    writes IsManualEntry=false, so filtering on the flag would skip it and leave a
-                    //    stale crossing after "revert". Deleting the row also unblocks its raw reads in
-                    //    Phase 2 (they leave existingNormalizedReadIds), which is what lets the pipeline
+                    // 2. Soft-delete the ReadNormalized row(s) at this LOGICAL gate (all sibling
+                    //    ids — a legacy row can sit under a child id). Key off (participant, gate)
+                    //    — NOT IsManualEntry. A CHOSEN-READ override writes IsManualEntry=false, so
+                    //    filtering on the flag would skip it and leave a stale crossing after
+                    //    "revert". Deleting the row also unblocks its raw reads in Phase 2 (they
+                    //    leave existingNormalizedReadIds), which is what lets the pipeline
                     //    re-select the automated crossing.
                     var manualRns = await rnRepo.GetQuery(rn =>
                         rn.ParticipantId == decryptedParticipantId &&
-                        rn.CheckpointId == decryptedCheckpointId &&
+                        gateCheckpointIds.Contains(rn.CheckpointId) &&
                         !rn.AuditProperties.IsDeleted)
                         .ToListAsync();
                     foreach (var rn in manualRns)
@@ -2658,10 +2727,10 @@ namespace Runnatics.Services
                     if (manualRns.Count > 0)
                         await rnRepo.UpdateRangeAsync(manualRns);
 
-                    // 3. Soft-delete the SplitTimes row(s) at this checkpoint AND at the NEXT gate
-                    //    (GAP B — its SegmentTime chains off this gate's crossing). Key off
-                    //    (participant, checkpoint), NOT s.IsManual.
-                    var affectedSplitCheckpointIds = new HashSet<int> { decryptedCheckpointId };
+                    // 3. Soft-delete the SplitTimes row(s) at this gate (all sibling ids) AND at
+                    //    the NEXT gate (GAP B — its SegmentTime chains off this gate's crossing).
+                    //    Key off (participant, checkpoint), NOT s.IsManual.
+                    var affectedSplitCheckpointIds = new HashSet<int>(gateCheckpointIds);
                     foreach (var id in nextGateCheckpointIds)
                         affectedSplitCheckpointIds.Add(id);
 

@@ -1861,45 +1861,78 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .ToListAsync();
 
-                // Build mapping: Child DeviceId -> Parent CheckpointId
-                // If a checkpoint has ParentDeviceId > 0, it's a child device and readings should be merged to parent
-                var deviceRepo = _repository.GetRepository<Device>();
-                var allDevices = await deviceRepo.GetQuery(d =>
-                    d.AuditProperties.IsActive &&
-                    !d.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .ToListAsync();
-
-                // Create Device.Id -> Device mapping for lookup
-                var deviceById = allDevices.ToDictionary(d => d.Id, d => d);
-
-                // Build child checkpoint -> parent checkpoint mapping
-                // Key: Child Checkpoint ID, Value: Parent Checkpoint ID
-                var childToParentCheckpointMap = new Dictionary<int, int>();
-
-                foreach (var checkpoint in allCheckpoints)
-                {
-                    // If ParentDeviceId is set and > 0, this checkpoint uses a child device
-                    if (checkpoint.ParentDeviceId.HasValue && checkpoint.ParentDeviceId.Value > 0)
-                    {
-                        // Find the parent checkpoint that has DeviceId == this checkpoint's ParentDeviceId
-                        var parentCheckpoint = allCheckpoints.FirstOrDefault(cp =>
-                            cp.DeviceId == checkpoint.ParentDeviceId.Value &&
-                            Math.Abs(cp.DistanceFromStart - checkpoint.DistanceFromStart) < 0.001m); // Same distance
-
-                        if (parentCheckpoint != null)
-                        {
-                            childToParentCheckpointMap[checkpoint.Id] = parentCheckpoint.Id;
-                            _logger.LogInformation(
-                                "Mapping child checkpoint {ChildId} (Device {ChildDevice}) to parent checkpoint {ParentId} '{ParentName}' (Device {ParentDevice}) at {Distance} KM",
-                                checkpoint.Id, checkpoint.DeviceId, parentCheckpoint.Id, parentCheckpoint.Name,
-                                parentCheckpoint.DeviceId, parentCheckpoint.DistanceFromStart);
-                        }
-                    }
-                }
+                // Build child checkpoint -> parent checkpoint mapping via the ONE canonical fold
+                // (CheckpointGates.CanonicalGateMap — shared with Phase 2.4, the manual-time paths
+                // and the readings DTO, so no consumer can disagree with this merge).
+                var childToParentCheckpointMap = CheckpointGates.CanonicalGateMap(allCheckpoints);
 
                 _logger.LogInformation("Built parent-child checkpoint mapping: {Count} child checkpoints mapped to parents",
                     childToParentCheckpointMap.Count);
+
+                // ============================================================
+                // RACE-66 SELF-HEAL: a CHILD checkpoint must never own a normalized row — the
+                // logical gate's crossing lives under the PRIMARY id (where display, status and
+                // splits look). Rows stored under a child id (legacy toggles/overrides keyed by
+                // the child, pre-fix pipelines) are soft-deleted HERE, BEFORE
+                // existingNormalizedReadIds is computed: their raw reads re-enter this run's
+                // candidate set at the PRIMARY gate (or stay suppressed by its LOCKED anchor if
+                // the primary already has the crossing), and Phase 2.4 re-applies any override
+                // canonicalized. Net effect: one reprocess repairs a double-gate race.
+                // ============================================================
+                if (childToParentCheckpointMap.Count > 0)
+                {
+                    var childCheckpointIds = childToParentCheckpointMap.Keys.ToList();
+                    var childOwnedRows = await normalizedRepo.GetQuery(n =>
+                            n.EventId == decryptedEventId &&
+                            n.Participant.RaceId == decryptedRaceId &&
+                            childCheckpointIds.Contains(n.CheckpointId) &&
+                            !n.AuditProperties.IsDeleted)
+                        .ToListAsync();
+
+                    if (childOwnedRows.Count > 0)
+                    {
+                        foreach (var row in childOwnedRows)
+                        {
+                            row.AuditProperties.IsDeleted = true;
+                            row.AuditProperties.IsActive = false;
+                            row.AuditProperties.UpdatedBy = userId;
+                            row.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        }
+                        await normalizedRepo.UpdateRangeAsync(childOwnedRows);
+
+                        // Splits keyed to (or chained from) a child id are stale with their rows —
+                        // Phase 2.5 rebuilds them under the primary this same run.
+                        var childOwnedSplits = await _repository.GetRepository<SplitTimes>().GetQuery(s =>
+                                s.EventId == decryptedEventId &&
+                                s.Participant.RaceId == decryptedRaceId &&
+                                ((s.CheckpointId.HasValue && childCheckpointIds.Contains(s.CheckpointId.Value)) ||
+                                 childCheckpointIds.Contains(s.FromCheckpointId)) &&
+                                !s.AuditProperties.IsDeleted)
+                            .ToListAsync();
+                        foreach (var split in childOwnedSplits)
+                        {
+                            split.AuditProperties.IsDeleted = true;
+                            split.AuditProperties.IsActive = false;
+                            split.AuditProperties.UpdatedBy = userId;
+                            split.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        }
+                        if (childOwnedSplits.Count > 0)
+                            await _repository.GetRepository<SplitTimes>().UpdateRangeAsync(childOwnedSplits);
+
+                        await _repository.SaveChangesAsync();
+
+                        var healedParticipants = childOwnedRows.Select(r => r.ParticipantId).Distinct().Count();
+                        var healNote =
+                            $"Healed {childOwnedRows.Count} crossing(s) stored under CHILD checkpoint row(s) " +
+                            $"for {healedParticipants} participant(s) — re-owned by their primary gate this reprocess.";
+                        _logger.LogWarning(
+                            "Race {RaceId}: {Note} (child checkpoint ids: [{Ids}])",
+                            decryptedRaceId, healNote, string.Join(", ", childOwnedRows.Select(r => r.CheckpointId).Distinct()));
+                        response.Message = string.IsNullOrEmpty(response.Message)
+                            ? healNote
+                            : response.Message + " " + healNote;
+                    }
+                }
 
                 // =====================================================================
                 // FIX: Identify start checkpoint for special handling (pick LAST entry)
@@ -2220,11 +2253,15 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .Select(n => new { n.ParticipantId, n.CheckpointId, n.ChipTime })
                     .ToListAsync();
+                // Anchor keys fold through the canonical gate map (race-66): a legacy row stored
+                // under a CHILD id must lock the LOGICAL gate — not anchor a phantom sibling gate
+                // while the primary selects independently. (The self-heal above removes such rows
+                // for THIS race; the fold keeps the anchors honest regardless.)
                 var lockedByParticipant = existingCrossings
                     .GroupBy(c => c.ParticipantId)
                     .ToDictionary(
                         g => g.Key,
-                        g => g.GroupBy(c => c.CheckpointId)
+                        g => g.GroupBy(c => CheckpointGates.Canonical(childToParentCheckpointMap, c.CheckpointId))
                               .ToDictionary(cg => cg.Key, cg => cg.Min(c => c.ChipTime)));
 
                 var chosenReadByGate = new Dictionary<(int ParticipantId, int CheckpointId), long>();
@@ -2477,8 +2514,11 @@ namespace Runnatics.Services
 
                 if (overridePairs.Count > 0)
                 {
+                    // Override targets fold through the canonical gate map too — an override
+                    // recorded against a CHILD id owns the same logical gate (Phase 2.4 applies
+                    // it under the primary), so the automatic row must be skipped at the PRIMARY.
                     var overridePairSet = overridePairs
-                        .Select(p => (p.ParticipantId, p.CheckpointId))
+                        .Select(p => (p.ParticipantId, CheckpointGates.Canonical(childToParentCheckpointMap, p.CheckpointId)))
                         .ToHashSet();
                     var beforeSkip = normalizedReadings.Count;
                     normalizedReadings = normalizedReadings
@@ -2583,7 +2623,14 @@ namespace Runnatics.Services
                     .OrderBy(c => c.DistanceFromStart)
                     .AsNoTracking()
                     .ToListAsync();
-                var startCheckpointId = raceCheckpoints.Count > 0 ? raceCheckpoints[0].Id : 0;
+                // PRIMARY start row via CheckpointGates (raceCheckpoints[0] broke the same-distance
+                // tie between a primary and its child by DB return order — race-66 class bug).
+                var startCheckpointId = CheckpointGates.Start(raceCheckpoints)?.Id ?? 0;
+
+                // RACE-66: an override recorded against a CHILD checkpoint id owns the LOGICAL
+                // gate — apply it under the PRIMARY id, where display/status/splits read. (New
+                // overrides are canonicalized at write; this fold covers legacy rows.)
+                var canonicalGateMap = CheckpointGates.CanonicalGateMap(raceCheckpoints);
 
                 var participantIds = overrides.Select(o => o.ParticipantId).Distinct().ToList();
 
@@ -2602,9 +2649,13 @@ namespace Runnatics.Services
                     .GroupBy(rn => rn.ParticipantId)
                     .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).First().ChipTime);
 
-                // ALL rows per (participant, checkpoint), so we can collapse any duplicates to one.
+                // ALL rows per (participant, LOGICAL gate) — the key folds child checkpoint ids
+                // onto their primary, so a legacy child-keyed row collapses into the same gate
+                // instead of surviving as a sibling duplicate. The kept row is re-owned by the
+                // primary id below.
                 var rnsByKey = existingRns
-                    .GroupBy(rn => (rn.ParticipantId, rn.CheckpointId))
+                    .GroupBy(rn => (rn.ParticipantId,
+                                    CheckpointId: CheckpointGates.Canonical(canonicalGateMap, rn.CheckpointId)))
                     .ToDictionary(g => g.Key, g => g.OrderBy(x => x.ChipTime).ToList());
 
                 // Chosen-read resolution: an override with ChosenRawReadId is a real hardware read the
@@ -2638,6 +2689,8 @@ namespace Runnatics.Services
 
                 foreach (var ov in overrides)
                 {
+                    // The gate the override OWNS is the canonical (primary) one, whatever id the row stores.
+                    var gateCheckpointId = CheckpointGates.Canonical(canonicalGateMap, ov.CheckpointId);
                     var crossingUtc = ov.ManualCrossingUtc;
                     var gunTime = (long)(crossingUtc - raceStartUtc).TotalMilliseconds;
 
@@ -2648,7 +2701,7 @@ namespace Runnatics.Services
                     var isManualEntry = !resolvedReadId.HasValue;
 
                     long? netTime;
-                    if (ov.CheckpointId == startCheckpointId)
+                    if (gateCheckpointId == startCheckpointId)
                     {
                         netTime = gunTime;
                     }
@@ -2662,12 +2715,14 @@ namespace Runnatics.Services
                         netTime = null;
                     }
 
-                    if (rnsByKey.TryGetValue((ov.ParticipantId, ov.CheckpointId), out var rows) && rows.Count > 0)
+                    if (rnsByKey.TryGetValue((ov.ParticipantId, gateCheckpointId), out var rows) && rows.Count > 0)
                     {
                         // Convert the first existing crossing to the manual value (with skip-in-Phase-2
                         // there normally IS none here, so this is a defensive collapse for any leftover
-                        // automatic/duplicate rows).
+                        // automatic/duplicate rows). Re-own it by the PRIMARY id (a child must never
+                        // keep a normalized row).
                         var keep = rows[0];
+                        keep.CheckpointId = gateCheckpointId;
                         keep.ChipTime = crossingUtc;
                         keep.GunTime = gunTime;
                         keep.NetTime = netTime;
@@ -2697,7 +2752,7 @@ namespace Runnatics.Services
                         {
                             EventId = decryptedEventId,
                             ParticipantId = ov.ParticipantId,
-                            CheckpointId = ov.CheckpointId,
+                            CheckpointId = gateCheckpointId, // ALWAYS the primary — never a child id
                             ChipTime = crossingUtc,
                             GunTime = gunTime,
                             NetTime = netTime,

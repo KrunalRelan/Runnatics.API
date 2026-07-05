@@ -240,9 +240,11 @@ rule working, not a regression.
   re-ranks in memory (the restored finisher re-enters; everyone below steps back down). The
   response carries the commit-f snapshot (display status, stored times, post-re-rank ranks,
   `TotalFinishers`).
-  **UI (gated queue): the Run Status DDL shows a "Remove disqualification" action when the
-  current status is DSQ** — it sends `RunStatus="Recompute"` (no reason field) and re-renders
-  from the returned snapshot (or re-fetches, per the standing refresh contract).
+  **UI (SHIPPED 2026-07-05): the Run Status DDL shows a "Remove disqualification" action when
+  the current status is DSQ** — confirm-gated (symmetric friction with DSQ), sends
+  `RunStatus="Recompute"` (no reason field), renders the returned snapshot (status chip +
+  header times/ranks) and then re-fetches per the standing refresh contract; a 400 (stale
+  UI — runner no longer DSQ) surfaces the server message and re-syncs.
 
 **Edge cases handled:** shared start/finish mat cross-reads (gun window); multiple reads at a mat
 (dedup LAST/EARLIEST); out-and-back via turnaround/pass-ordinal; pre-gun early-line starters (window

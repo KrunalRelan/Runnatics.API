@@ -1387,3 +1387,9 @@ Branch: `bugfix/testing-round-1`.
 **Tests +3 (150/150):** IsClearDsq spellings/disjointness; Recompute validates without reason; un-DSQ rank-shift pin (restored finisher slots by time, below steps down). Prod-verify: DSQ -> clear -> computed OK + ranks -> reprocess keeps it; clear on non-DSQ -> 400.
 
 **UI QUEUED (spec gated-UI queue):** Run Status DDL "Remove disqualification" action when current = DSQ -> sends RunStatus="Recompute", re-renders from snapshot. NOT pushed.
+
+---
+
+## 2026-07-05 (14) - UN-DSQ UI (UI cef6f51) - "Remove disqualification" in both editors
+
+Run Status DDL (ParticipantDetail edit dialog + EditParticipant grid modal): "Remove disqualification" option ONLY when current status = DSQ. Selecting it opens a CONFIRM dialog (symmetric friction with DSQ''s mandatory reason); the DDL value never changes until the server confirms. Confirm -> `ParticipantService.removeDisqualification` (PUT RunStatus="Recompute", no reason). Success -> render what the classifier said (never assume OK): new `ParticipantStatusSnapshot` model; detail page applies snapshot (status chip, header gun/chip times, rankings) then re-fetches (race-wide shifts); grid modal toasts the recomputed status, onUpdate re-fetches the list, closes. Errors: `extractErrorMessage` now reads the endpoint''s `{ error: "..." }` shape; 400 (stale UI) -> server message + re-sync. tsc clean, build green. Spec queue item marked SHIPPED. Requires API 46f7ce1 (pushed). Prod-verify: DSQ -> ranks shift -> Remove -> computed status + ranks restore, others shift back; 400 path on a non-DSQ runner. NOT pushed (UI cef6f51 + this docs commit).

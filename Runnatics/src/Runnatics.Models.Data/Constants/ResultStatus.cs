@@ -41,5 +41,28 @@ namespace Runnatics.Models.Data.Constants
 
         public static bool IsClearDsq(string? value) =>
             string.Equals(value, Recompute, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// STATUS-FILTER boundary mapping (participants search, 2026-07-07): a display-form
+        /// filter value ("OK"/"DNF"/"DNS"/"DSQ", case-insensitive; stored spellings
+        /// "Finished"/"DQ" tolerated) → the STORED Results.Status to match. Null = no filter:
+        /// null / empty / "all", and UNKNOWN values (mirrors the old unknown-numeric behavior —
+        /// an unrecognized filter never silently empties the grid).
+        /// </summary>
+        public static string? FilterToStored(string? filter)
+        {
+            if (string.IsNullOrWhiteSpace(filter) ||
+                string.Equals(filter.Trim(), "all", StringComparison.OrdinalIgnoreCase))
+                return null;
+            if (IsDsq(filter.Trim()))
+                return DQ;
+            return filter.Trim().ToUpperInvariant() switch
+            {
+                "OK" or "FINISHED" => Finished,
+                "DNF" => DNF,
+                "DNS" => DNS,
+                _ => null
+            };
+        }
     }
 }

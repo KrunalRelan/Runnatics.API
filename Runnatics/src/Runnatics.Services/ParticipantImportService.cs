@@ -409,13 +409,14 @@ namespace Runnatics.Services
                     p.AuditProperties.IsActive &&
                     !p.AuditProperties.IsDeleted);
 
-                // Apply status filter if provided
-                if (request.Status.HasValue)
-                {
-                    var statusString = MapRaceStatusToDbString(request.Status.Value);
-                    if (statusString != null)
-                        participantQuery = participantQuery.Where(p => p.Status == statusString);
-                }
+                // STATUS filter (contract 2026-07-07): matches the COMPUTED Results.Status —
+                // the value the grid's Status column displays — via the join below, NEVER the
+                // stale raw Participant.Status (the field behind the "Registered (computed)"
+                // label bug; the old numeric contract filtered it and returned wrong rows).
+                // ResultStatus.FilterToStored maps "OK"→"Finished", "DSQ"→"DQ" etc.; a filtered
+                // status can only match runners WITH a Results row (unprocessed runners appear
+                // under "All Status" only).
+                var storedStatusFilter = Models.Data.Constants.ResultStatus.FilterToStored(request.Status);
 
                 // Apply gender filter if provided
                 if (request.Gender.HasValue)
@@ -473,6 +474,11 @@ namespace Runnatics.Services
                                 r.Status == "DQ" ? 3 : 4
                         });
 
+                // The status filter lives on the JOINED shape — it matches the computed
+                // Results.Status the grid displays.
+                if (storedStatusFilter != null)
+                    joinedQuery = joinedQuery.Where(x => x.Status == storedStatusFilter);
+
                 // Apply sorting: Status priority first, then by GunTime asc within each group, then by Bib
                 var orderedQuery = joinedQuery
                     .OrderBy(x => x.StatusOrder)
@@ -480,8 +486,10 @@ namespace Runnatics.Services
                     .ThenBy(x => x.Participant.BibNumber == null ? 0 : x.Participant.BibNumber.Length)
                     .ThenBy(x => x.Participant.BibNumber);
 
-                // Get total count for pagination
-                var totalCount = await participantQuery.CountAsync();
+                // Total count for pagination — counted on the FILTERED joined query so
+                // "Showing X of Y" always matches the rendered set (a status filter would
+                // otherwise report the unfiltered participant count).
+                var totalCount = await joinedQuery.CountAsync();
 
                 // Apply pagination
                 var pagedResults = await orderedQuery
@@ -1412,29 +1420,10 @@ namespace Runnatics.Services
             return sb.ToString();
         }
 
-        /// <summary>
-        /// Builds the filter expression for event search
-        /// </summary>
-        private static Expression<Func<Models.Data.Entities.Participant, bool>> BuildSearchExpression(ParticipantSearchRequest request, int eventId, int raceId)
-        {
-            return e =>
-                e.EventId == eventId &&
-                e.RaceId == raceId &&
-                (!request.Status.HasValue || e.Status == MapRaceStatusToDbString(request.Status.Value)) &&
-                (!request.Gender.HasValue || e.Gender == MapGenderToDbString(request.Gender.Value)) &&
-                (string.IsNullOrEmpty(request.Category) || e.AgeCategory == request.Category) &&
-                e.AuditProperties.IsActive &&
-                !e.AuditProperties.IsDeleted;
-        }
-
-        private static string? MapRaceStatusToDbString(int statusValue) => statusValue switch
-        {
-            1 => "Registered",
-            2 => "Finished",
-            3 => "DNF",
-            4 => "DNS",
-            _ => null
-        };
+        // BuildSearchExpression(ParticipantSearchRequest…) and MapRaceStatusToDbString were
+        // REMOVED 2026-07-07 (status-filter contract change): both were dead code wired to the
+        // old numeric status enum filtering the stale raw Participant.Status. The live filter
+        // is ResultStatus.FilterToStored → Results.Status in Search().
 
         private static string? MapGenderToDbString(Gender gender) => gender switch
         {

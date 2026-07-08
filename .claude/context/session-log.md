@@ -1475,3 +1475,17 @@ Run Status DDL (ParticipantDetail edit dialog + EditParticipant grid modal): "Re
 **Verify note:** API builds 0 errors, UI tsc clean - but the test suite could NOT run this session: a Windows Application Control policy (0x800711C7) began blocking the freshly built test DLL mid-session (last green run 167/167 ~30 min earlier; clean rebuild re-blocked). Machine policy issue for Kunal (Windows Security -> Smart App Control / App Control for Business); rerun the suite once unblocked. Change itself is display-only atop the test-pinned ToDisplay.
 
 **Prod-verify:** detail page of a processed runner -> DDL shows OK/DNF/DNS '(computed)', header badge matches; DSQ a runner -> detail DDL shows 'DSQ' + 'Remove disqualification' appears -> confirm -> RunStatus='Recompute' -> computed status + ranks restore. NOT pushed.
+
+---
+
+## 2026-07-07 (20) - Participants STATUS FILTER: wrong values + filtering the stale field (both layers)
+
+**Contract found (reported before coding):** UI dropdown (All/Registered/Completed/DNF/DNS) -> statusMap numbers 1-4 -> ParticipantSearchRequest.Status (int?) -> MapRaceStatusToDbString ('Registered'/'Finished'/'DNF'/'DNS') -> filtered RAW Participant.Status (Search():417) - the same stale field as the 'Registered (computed)' label bug - while the grid's Status column displays computed Results.Status. Filter and column read two different fields; numeric contract + wrong source.
+
+**New contract (explicit):** ParticipantSearchRequest.Status is a display-form STRING - 'OK' | 'DNF' | 'DNS' | 'DSQ' (case-insensitive; stored spellings Finished/DQ tolerated; null/empty/'all'/unknown = no filter - an unknown value never silently empties the grid). Mapped once via NEW ResultStatus.FilterToStored (lives beside IsDsq/ToDisplay) and matched against the JOINED Results.Status - the exact value the grid displays. Filter applies to the joined shape; totalCount now counts the FILTERED joined query so 'Showing X of Y' matches the rendered set. A filtered status matches only runners WITH a Results row; unprocessed runners appear under All Status only. Composes with gender/category/search (unchanged, participant-level). Dead code removed: BuildSearchExpression(ParticipantSearchRequest) (uncalled) + MapRaceStatusToDbString.
+
+**UI:** dropdown = All Status / OK / DNF / DNS / DSQ (display strings sent verbatim); numeric statusMap removed (reverseStatusMap stays - legacy numeric ROW normalize only); ParticipantSearchRequest.ts status: string|null. DEPLOY API + UI TOGETHER: the old UI's numeric 'status':1 no longer binds to the string property (400 on status-filtered searches during a mixed window).
+
+**Tests +2 (169/169):** FilterToStored display/stored/case mappings + all/empty/null/unknown = no-filter pins. NOTE: the Application Control block from entry 19 cleared - the suite runs again and now also covers cb8384b.
+
+**Prod-verify:** OK -> only Finished runners w/ matching count; DNF/DNS/DSQ likewise; DSQ'd runner appears ONLY under DSQ; All Status -> everyone; composes with gender/category/search; values match the Status column exactly. PUSHED on Kunal's order (API + UI, together with pending cb8384b/c43a8be detail-status pair).

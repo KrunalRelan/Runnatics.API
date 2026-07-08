@@ -42,6 +42,37 @@ namespace Runnatics.Services.Tests.RFID
             Assert.IsFalse(ResultStatus.IsDsq(null));
         }
 
+        // ─── Status-FILTER boundary (participants search, 2026-07-07 contract):
+        //     display-form string → the STORED Results.Status to match. The old numeric
+        //     contract filtered the stale raw Participant.Status and returned wrong rows. ───
+
+        [TestMethod]
+        public void FilterToStored_DisplayValues_MapToStored_CaseInsensitive()
+        {
+            Assert.AreEqual("Finished", ResultStatus.FilterToStored("OK"));
+            Assert.AreEqual("Finished", ResultStatus.FilterToStored("ok"));
+            Assert.AreEqual("Finished", ResultStatus.FilterToStored("Finished"), "stored spelling tolerated");
+            Assert.AreEqual("DNF", ResultStatus.FilterToStored("DNF"));
+            Assert.AreEqual("DNS", ResultStatus.FilterToStored("dns"));
+            Assert.AreEqual("DQ", ResultStatus.FilterToStored("DSQ"));
+            Assert.AreEqual("DQ", ResultStatus.FilterToStored("dq"), "stored spelling tolerated");
+            Assert.AreEqual("DQ", ResultStatus.FilterToStored("Disqualified"));
+        }
+
+        [TestMethod]
+        public void FilterToStored_AllEmptyNullUnknown_MeanNoFilter()
+        {
+            Assert.IsNull(ResultStatus.FilterToStored(null));
+            Assert.IsNull(ResultStatus.FilterToStored(""));
+            Assert.IsNull(ResultStatus.FilterToStored("   "));
+            Assert.IsNull(ResultStatus.FilterToStored("all"));
+            Assert.IsNull(ResultStatus.FilterToStored("All"));
+            // Unknown values NEVER silently empty the grid — they mean "no filter",
+            // mirroring the old unknown-numeric behavior.
+            Assert.IsNull(ResultStatus.FilterToStored("Registered"));
+            Assert.IsNull(ResultStatus.FilterToStored("Completed"));
+        }
+
         [TestMethod]
         public void CanonicalStoredValue_IsDQ()
         {

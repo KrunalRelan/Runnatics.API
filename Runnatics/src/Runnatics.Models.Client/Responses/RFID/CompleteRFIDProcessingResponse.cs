@@ -25,6 +25,10 @@ namespace Runnatics.Models.Client.Responses.RFID
         public int CheckpointsProcessed { get; set; }
         public int ParticipantsProcessed { get; set; }
 
+        // Phase 2.45: Derived-time reconciliation (Gun/Net re-derived from current crossings)
+        public int DerivedTimesRecomputed { get; set; }
+        public int SplitRowsReset { get; set; }
+
         // Phase 2.5: Split Times Stats
         public long Phase25SplitTimesMs { get; set; }
         public int SplitTimesCreated { get; set; }

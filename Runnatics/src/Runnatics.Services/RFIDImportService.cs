@@ -1626,6 +1626,18 @@ namespace Runnatics.Services
                 if (overrideResult.Warnings.Count > 0)
                     response.Warnings.AddRange(overrideResult.Warnings);
 
+                // ========== PHASE 2.45: Reconcile derived times with current crossings ==========
+                // Gun/Net are re-derived on EVERY active row from the CURRENT crossings (a start
+                // toggle/edit/revert moves the net baseline of every downstream row — bib-1002
+                // frozen-net). Runs AFTER 2.4 (overrides applied) and BEFORE 2.5 (stale split
+                // chains reset here are rebuilt there). Phase 3 then copies FRESH values.
+                var (rowsRederived, splitRowsReset) = await RecomputeDerivedTimesAsync(guardEventId, guardRaceId);
+                response.DerivedTimesRecomputed = rowsRederived;
+                response.SplitRowsReset = splitRowsReset;
+                _logger.LogInformation(
+                    "Phase 2.45 completed. Rows re-derived: {Rows}, split rows reset: {Splits}",
+                    rowsRederived, splitRowsReset);
+
                 // ========== PHASE 2.5: Create Split Times ==========
                 var phase25Start = DateTime.UtcNow;
                 _logger.LogInformation("Phase 2.5: Creating split times...");
@@ -4998,6 +5010,165 @@ namespace Runnatics.Services
                 response.ErrorMessage = ErrorMessage;
                 return response;
             }
+        }
+
+        // ============================================================
+        // PHASE 2.45 — DERIVED-TIME RECONCILIATION (2026-07-07, bib-1002 frozen net).
+        // GunTime/NetTime are DERIVED from (gun, the participant's selected start crossing),
+        // but Phase 2 computes them only for rows it CREATES and Phase 2.4 only for the
+        // overridden row — a changed START crossing left every other row's NetTime frozen
+        // at the old baseline, and Phase 3 COPIES the finish row's NetTime into Results
+        // (two different starts → byte-identical net). This phase re-derives Gun/Net for
+        // EVERY active row of the race from the CURRENT crossings via DerivedTimes (the
+        // one implementation of the math; baseline = StartWindow.SelectStartRead winner,
+        // gun-clamped; gun fallback when start data exists but is out-of-window; null net
+        // when the runner has no start row). Split rows whose SplitTimeMs/SegmentTime no
+        // longer match the recomputed chain are soft-deleted per participant so Phase 2.5
+        // (which runs NEXT) rebuilds the whole chain with its own single-source math.
+        // Idempotent: a second run finds nothing to change.
+        // ============================================================
+        private async Task<(int RowsRederived, int SplitRowsReset)> RecomputeDerivedTimesAsync(
+            int decryptedEventId, int decryptedRaceId)
+        {
+            var userId = _userContext.UserId;
+
+            var race = await _repository.GetRepository<Race>().GetQuery(r =>
+                    r.Id == decryptedRaceId && r.EventId == decryptedEventId)
+                .Include(r => r.RaceSettings)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            // No gun = Phase 2 already failed the workflow before this phase; defensive no-op.
+            if (race?.StartTime == null)
+                return (0, 0);
+
+            var gun = race.StartTime.Value;
+            var (validStartFloor, validStartCeiling) = StartWindow.For(
+                gun, race.RaceSettings?.EarlyStartCutOff, race.RaceSettings?.LateStartCutOff);
+            var passGap = PassCollapseSettings.PassGapSeconds(race.RaceSettings?.PassGapThresholdSeconds);
+
+            var activeCheckpoints = await _repository.GetRepository<Checkpoint>().GetQuery(cp =>
+                    cp.RaceId == decryptedRaceId &&
+                    cp.EventId == decryptedEventId &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
+                .AsNoTracking()
+                .ToListAsync();
+
+            if (activeCheckpoints.Count == 0)
+                return (0, 0);
+
+            var distanceById = activeCheckpoints.ToDictionary(cp => cp.Id, cp => cp.DistanceFromStart);
+            var startDistance = activeCheckpoints.Min(cp => cp.DistanceFromStart);
+
+            var normalizedRepo = _repository.GetRepository<ReadNormalized>();
+            var rows = await normalizedRepo.GetQuery(rn =>
+                    rn.EventId == decryptedEventId &&
+                    rn.Participant.RaceId == decryptedRaceId &&
+                    rn.AuditProperties.IsActive &&
+                    !rn.AuditProperties.IsDeleted)
+                .ToListAsync();
+
+            if (rows.Count == 0)
+                return (0, 0);
+
+            var changedRows = new List<ReadNormalized>();
+            // Expected split chain per (participant, checkpoint) — EXACTLY Phase 2.5's math
+            // (cumulative = crossing − gun; segment = crossing − previous crossing in
+            // distance-then-time order, seeded at the gun; start-gate rows segment 0).
+            var expectedSplitByKey = new Dictionary<(int ParticipantId, int CheckpointId), (long GunMs, long SegmentMs)>();
+
+            foreach (var byParticipant in rows.GroupBy(rn => rn.ParticipantId))
+            {
+                // Rows on a since-deactivated checkpoint have no gate identity — leave untouched.
+                var known = byParticipant
+                    .Where(rn => distanceById.ContainsKey(rn.CheckpointId))
+                    .OrderBy(rn => distanceById[rn.CheckpointId])
+                    .ThenBy(rn => rn.ChipTime)
+                    .ToList();
+                if (known.Count == 0)
+                    continue;
+
+                var startRows = known
+                    .Where(rn => distanceById[rn.CheckpointId] == startDistance)
+                    .OrderBy(rn => rn.ChipTime)
+                    .ToList();
+                var selectedStart = StartWindow.SelectStartRead(
+                    startRows, rn => rn.ChipTime, validStartFloor, validStartCeiling, passGap);
+                var baseline = DerivedTimes.NetBaseline(gun, startRows.Count > 0, selectedStart?.ChipTime);
+
+                var previousChip = gun;
+                foreach (var rn in known)
+                {
+                    var isStartRow = distanceById[rn.CheckpointId] == startDistance;
+                    var (gunMs, netMs) = DerivedTimes.ForRow(rn.ChipTime, gun, baseline, isStartRow);
+
+                    var segmentMs = isStartRow ? 0L : (long)(rn.ChipTime - previousChip).TotalMilliseconds;
+                    expectedSplitByKey[(rn.ParticipantId, rn.CheckpointId)] = (gunMs, segmentMs);
+                    previousChip = rn.ChipTime;
+
+                    if (rn.GunTime != gunMs || rn.NetTime != netMs)
+                    {
+                        rn.GunTime = gunMs;
+                        rn.NetTime = netMs;
+                        rn.AuditProperties.UpdatedBy = userId;
+                        rn.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                        changedRows.Add(rn);
+                    }
+                }
+            }
+
+            // Split reconciliation: any row out of line with the expected chain (stale value,
+            // or an orphan at a gate with no active crossing) resets the PARTICIPANT's whole
+            // chain — segments reference neighboring crossings, so per-row patching is exactly
+            // the class of shortcut this phase exists to remove.
+            var splitRepo = _repository.GetRepository<SplitTimes>();
+            var splits = await splitRepo.GetQuery(s =>
+                    s.EventId == decryptedEventId &&
+                    s.Participant.RaceId == decryptedRaceId &&
+                    s.AuditProperties.IsActive &&
+                    !s.AuditProperties.IsDeleted)
+                .ToListAsync();
+
+            var staleSplitParticipants = new HashSet<int>();
+            foreach (var split in splits)
+            {
+                if (!split.CheckpointId.HasValue)
+                    continue;
+                if (!expectedSplitByKey.TryGetValue((split.ParticipantId, split.CheckpointId.Value), out var expected))
+                {
+                    staleSplitParticipants.Add(split.ParticipantId); // orphan — no active crossing at its gate
+                    continue;
+                }
+                if (split.SplitTimeMs != expected.GunMs || split.SegmentTime != expected.SegmentMs)
+                    staleSplitParticipants.Add(split.ParticipantId);
+            }
+
+            var splitsToReset = splits
+                .Where(s => staleSplitParticipants.Contains(s.ParticipantId))
+                .ToList();
+            foreach (var split in splitsToReset)
+            {
+                split.AuditProperties.IsDeleted = true;
+                split.AuditProperties.IsActive = false;
+                split.AuditProperties.UpdatedBy = userId;
+                split.AuditProperties.UpdatedDate = DateTime.UtcNow;
+            }
+
+            if (changedRows.Count > 0)
+                await normalizedRepo.UpdateRangeAsync(changedRows);
+            if (splitsToReset.Count > 0)
+                await splitRepo.UpdateRangeAsync(splitsToReset);
+            if (changedRows.Count > 0 || splitsToReset.Count > 0)
+            {
+                await _repository.SaveChangesAsync();
+                _logger.LogInformation(
+                    "Phase 2.45: re-derived Gun/Net on {Rows} row(s); reset {Splits} split row(s) " +
+                    "for {Participants} participant(s) (rebuilt by Phase 2.5).",
+                    changedRows.Count, splitsToReset.Count, staleSplitParticipants.Count);
+            }
+
+            return (changedRows.Count, splitsToReset.Count);
         }
 
         /// <summary>

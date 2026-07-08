@@ -2461,22 +2461,52 @@ namespace Runnatics.Services
                     }
 
                     await _repository.SaveChangesAsync();
-
-                    // Re-rank the WHOLE race unconditionally. A manual time can flip THIS runner
-                    // Finished<->DNF, which shifts everyone they pass / are passed by — so re-ranking
-                    // only when this entry is Finished would leave stale ranks on a demotion. The ranker
-                    // re-ranks just the Finished set (overall/gender/category by finish time) via
-                    // BulkUpdate (tracker-bypass), so it is correct and cheap whatever this entry's status.
-                    await CalculateResultRankingsAsync(decryptedEventId, decryptedRaceId, userId);
                 });
 
-                if (computedStatus == ResultStatus.Finished)
+                // FULL RECOMPUTE (2026-07-07, bib-1002 frozen net) — funnel through the SAME
+                // pipeline the revert path trusts (Phase 2 locked-anchor selection → 2.4 overrides
+                // → 2.45 derived-time reconciliation → 2.5 splits → Phase 3 results + ranks).
+                // REPLACES the old ranking-only shortcut (CalculateResultRankingsAsync): re-ranking
+                // without re-deriving left Results.Gun/NetTime frozen at the previous baseline when
+                // the START crossing changed — two different starts produced byte-identical net.
+                // The override + normalized row are already COMMITTED above, so a workflow failure
+                // here loses nothing: the operator reruns Process Result.
+                var workflow = await _rfidImportService.ProcessCompleteWorkflowAsync(eventId, raceId);
+                if (workflow.Status == "Failed")
                 {
-                    // Fire-and-forget completion notification. MUST run on its OWN DI scope: the
-                    // injected _raceNotificationService shares THIS request's scoped DbContext, so calling
-                    // it on a background thread races the awaited reads below (updatedResult/count) on the
-                    // same context ("A second operation was started on this context"). A fresh scope also
-                    // avoids using the request context after it is disposed at end-of-request.
+                    ErrorMessage = (workflow.Errors.FirstOrDefault() ?? "Reprocessing failed.") +
+                                   " The crossing WAS saved — run Process Result to rebuild the derived times.";
+                    return null;
+                }
+
+                // #3 (2026-07-03): reload the COMPLETE updated result — times, status, ranks — on
+                // EVERY edit, AFTER the full pipeline run, so the response is the post-recalc truth
+                // the UI re-renders from (chip-time header card + grid row) without a second fetch.
+                // Ranks are null for DNF/DNS/DSQ — that too is the truth (e.g. a demotion clears
+                // the header ranks).
+                var updatedResult = await resultsRepo.GetQuery(r =>
+                    r.ParticipantId == decryptedParticipantId &&
+                    r.EventId == decryptedEventId &&
+                    r.RaceId == decryptedRaceId &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync();
+
+                var totalFinishers = await resultsRepo.CountAsync(r =>
+                    r.RaceId == decryptedRaceId &&
+                    r.Status == ResultStatus.Finished &&
+                    r.AuditProperties.IsActive &&
+                    !r.AuditProperties.IsDeleted);
+
+                if (updatedResult?.Status == ResultStatus.Finished)
+                {
+                    // Fire-and-forget completion notification — gated on the STORED post-pipeline
+                    // status (Phase 3's classification), not the pre-save estimate. MUST run on its
+                    // OWN DI scope: the injected _raceNotificationService shares THIS request's
+                    // scoped DbContext, so calling it on a background thread races reads on the
+                    // same context ("A second operation was started on this context"). A fresh
+                    // scope also avoids using the request context after end-of-request disposal.
                     var notifyParticipantId = decryptedParticipantId;
                     var notifyRaceId = decryptedRaceId;
                     _ = Task.Run(async () =>
@@ -2495,26 +2525,6 @@ namespace Runnatics.Services
                         }
                     });
                 }
-
-                // #3 (2026-07-03): reload the COMPLETE updated result — times, status, ranks — on
-                // EVERY edit (previously finish/Finished-only), AFTER the transaction + re-rank,
-                // so the response is the post-recalc truth the UI re-renders from (chip-time
-                // header card + grid row) without a second fetch. Ranks are null for
-                // DNF/DNS/DSQ — that too is the truth (e.g. a demotion clears the header ranks).
-                var updatedResult = await resultsRepo.GetQuery(r =>
-                    r.ParticipantId == decryptedParticipantId &&
-                    r.EventId == decryptedEventId &&
-                    r.RaceId == decryptedRaceId &&
-                    r.AuditProperties.IsActive &&
-                    !r.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync();
-
-                var totalFinishers = await resultsRepo.CountAsync(r =>
-                    r.RaceId == decryptedRaceId &&
-                    r.Status == ResultStatus.Finished &&
-                    r.AuditProperties.IsActive &&
-                    !r.AuditProperties.IsDeleted);
 
                 _logger.LogInformation(
                     "Manual time recorded for participant {ParticipantId} at checkpoint {CheckpointId} ({CheckpointName}): {ChipTimeMs}ms",
@@ -2544,7 +2554,10 @@ namespace Runnatics.Services
                     GenderRank = updatedResult?.GenderRank,
                     CategoryRank = updatedResult?.CategoryRank,
                     TotalFinishers = totalFinishers,
-                    Status = ResultStatus.ToDisplay(computedStatus), // #7: "Finished" renders as "OK"
+                    // The STORED post-pipeline status (Phase 3 classified; DSQ preserved) — the
+                    // pre-save estimate (computedStatus) fed STEP A's immediate write, but the
+                    // pipeline's verdict is what the UI must render. #7: "Finished" renders as "OK".
+                    Status = ResultStatus.ToDisplay(updatedResult?.Status ?? computedStatus),
                     // #1: accepted-but-invalid crossings (out-of-window start / sequence /
                     // min-segment) succeed WITH a warning naming the consequence.
                     Warning = acceptanceWarning

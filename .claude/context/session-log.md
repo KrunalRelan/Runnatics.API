@@ -1519,4 +1519,21 @@ Run Status DDL (ParticipantDetail edit dialog + EditParticipant grid modal): "Re
 
 **Build 0 errors; 169/169 tests pass (DOTNET_ROLL_FORWARD=LatestMajor - only .NET 10 runtime installed locally). PUSHED d60a1e1 on Kunal's order (auto-deploys via master_runnatics-api.yml). Open item: once the mismatch is identified and the Pi contract settles, consider whether the raw-body Warning log should drop to Debug or be removed (it logs full payloads on every request).**
 
-**REVERTED 2026-07-08 (same day) on Kunal's order** ("endpoint was accepting body, new version removed it - restore what I had earlier"): RFIDController.cs restored byte-for-byte to 33a6675 (git checkout) - [FromBody] LiveReadingsRequest + ModelState check back, raw-body capture/logger/manual-deserialize gone. Note the functional nuance: the diagnostic version still ACCEPTED the body (read manually) but it disappeared from the bound contract/Swagger. Consequence of restore: blank pre-action binding 400s return; the 430x-400 payload mystery stays open unless traces were captured while d60a1e1 was live. Build 0 errors.
+**REVERTED 2026-07-08 (same day) on Kunal's order** ("endpoint was accepting body, new version removed it - restore what I had earlier"): RFIDController.cs restored byte-for-byte to 33a6675 (git checkout) - [FromBody] LiveReadingsRequest + ModelState check back, raw-body capture/logger/manual-deserialize gone. Note the functional nuance: the diagnostic version still ACCEPTED the body (read manually) but it disappeared from the bound contract/Swagger. Consequence of restore: blank pre-action binding 400s return; the 430x-400 payload mystery stays open unless traces were captured while d60a1e1 was live. Build 0 errors. PUSHED 47496bf; deploy GREEN.
+
+---
+
+## 2026-07-08 (23) - live-readings 400s RE-DIAGNOSED: NOT model binding - device resolution inside IngestAsync. Step logging added.
+
+**Kunal's correction:** the JSON body binds FINE; [FromBody] stays. The 400s come from _liveReadingService.HasError - device resolution failing inside IngestAsync.
+
+**RESOLVER REUSE CONFIRMED (no code change needed):** IngestAsync already resolves through THE shared blind resolver RFIDImportService.ResolveDeviceToEventAsync (offline import-auto calls it at RFIDImportService.cs:842, online at LiveReadingService.cs:75) - identifier -> Device row (raw MAC / normalized MAC / Name, active-only, OrderBy(Id)) -> newest active checkpoint -> EVENT; race per read downstream. One deliberate delta: online passes tenantId=null (keyless Pi), offline passes the JWT tenant - same-MAC-different-tenant could theoretically diverge, but that produces resolution SUCCESS differences, not 400s.
+
+**THE 400-vs-404 MAP (controller: ErrorMessage containing "not found"/"not registered" -> 404, else 400). Only TWO in-service errors map to 400:**
+1. "deviceMac or deviceName query parameter is required." - BOTH query params missing; returns BEFORE any DB call (explains <1ms!). PRIME SUSPECT: Pi firmware built against the intermediate 4ee6b7b contract (identity in BODY) posting to the final contract (identity in QUERY PARAMS) -> body binds fine (extra props ignored), params absent -> this 400 on EVERY request.
+2. "No checkpoint is assigned to device 'X'..." (DeviceFound=true) - device registered but no ACTIVE checkpoint mapping. If OFFLINE works for the same device, this one is ruled out (offline needs the same mapping).
+Everything else ("not found in the system" / "which was not found" / "is not registered") -> 404.
+
+**IMPLEMENTED (LiveReadingService.IngestAsync only):** LogWarning at every step (codeless attach -> App Insights traces): received deviceMac/deviceName/readings-count (logged BEFORE the missing-param check, so even param-less requests name what arrived); per-identifier resolver attempt (resolved -> Device.Id/Checkpoint/Event, or DeviceFound+Error); every ErrorMessage branch tagged with the status the controller will map it to. Search traces for "live-readings:". Drop to Debug once the Pi contract settles (noise: one Warning per request minimum).
+
+**Build 0 errors; 169/169 tests. Deploy pipeline GREEN (verified via public GitHub API - gh CLI unauthenticated locally): 47496bf revert deployed; this logging awaits push.**

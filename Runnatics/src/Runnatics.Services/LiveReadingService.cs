@@ -44,9 +44,18 @@ namespace Runnatics.Services
             LiveReadingsRequest request,
             CancellationToken ct)
         {
+            // DIAGNOSTIC (2026-07-08): Warning-level so Azure codeless attach forwards every
+            // resolution step to App Insights traces — the client's 400s originate in THIS
+            // method (device resolution), not in model binding. Drop to Debug once settled.
+            _logger.LogWarning(
+                "live-readings: received deviceMac={DeviceMac} deviceName={DeviceName} readings={ReadingCount}",
+                deviceMac, deviceName, request.Readings?.Count ?? 0);
+
             if (string.IsNullOrWhiteSpace(deviceMac) && string.IsNullOrWhiteSpace(deviceName))
             {
                 ErrorMessage = "deviceMac or deviceName query parameter is required.";
+                _logger.LogWarning(
+                    "live-readings: REJECTED (controller maps to 400) — {Error}", ErrorMessage);
                 return null;
             }
 
@@ -76,8 +85,14 @@ namespace Runnatics.Services
                 if (attempt.Succeeded)
                 {
                     resolution = attempt;
+                    _logger.LogWarning(
+                        "live-readings: resolved '{Identifier}' → Device.Id={DeviceDbId} Checkpoint={CheckpointId} Event={EventId} (race is resolved per read downstream)",
+                        identifier, attempt.DeviceDbId, attempt.CheckpointId, attempt.EventId);
                     break;
                 }
+                _logger.LogWarning(
+                    "live-readings: identifier '{Identifier}' did NOT resolve — DeviceFound={DeviceFound} Error={Error}",
+                    identifier, attempt.DeviceFound, attempt.Error);
                 // A matched-but-unconfigured device (no checkpoint mapping) is the more
                 // specific failure — surface it over a generic not-found.
                 if (attempt.DeviceFound)
@@ -90,6 +105,10 @@ namespace Runnatics.Services
                 // match a registered device.
                 ErrorMessage = deviceFoundError ??
                     $"Device '{string.Join("' / '", identifiers)}' not found in the system. Please ensure the device is registered.";
+                _logger.LogWarning(
+                    "live-readings: REJECTED (controller maps to {Status}) — {Error}",
+                    deviceFoundError != null ? "400, checkpoint-config" : "404, device not found",
+                    ErrorMessage);
                 return null;
             }
 
@@ -104,6 +123,8 @@ namespace Runnatics.Services
             if (eventEntity == null)
             {
                 ErrorMessage = $"Device '{identifiers[0]}' resolves to event {decryptedEventId}, which was not found.";
+                _logger.LogWarning(
+                    "live-readings: REJECTED (controller maps to 404) — {Error}", ErrorMessage);
                 return null;
             }
 
@@ -115,6 +136,8 @@ namespace Runnatics.Services
             if (device == null)
             {
                 ErrorMessage = $"Device '{identifiers[0]}' is not registered. Add it via the admin UI first.";
+                _logger.LogWarning(
+                    "live-readings: REJECTED (controller maps to 404) — {Error}", ErrorMessage);
                 return null;
             }
 

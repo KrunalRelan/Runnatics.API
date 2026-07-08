@@ -1448,3 +1448,18 @@ Run Status DDL (ParticipantDetail edit dialog + EditParticipant grid modal): "Re
 **FLAGGED (not fixed, pattern #1):** ResultsService.CalculateResultsAsync (standalone Calculate Results endpoint) still sets GunTime=NetTime=FinishTime from gun-based splits - divergent dual implementation, needs its own pass or retirement onto the funnel.
 
 **Prod-verify (gates push):** toggle start :52 vs :49 -> netTimeMs MUST differ by 2808ms between responses; header + Split Times reflect it; gun-net = chosen start''s offset; cumulative-at-finish = net; survives refresh AND reprocess; revert start -> net recomputes to automatic baseline. PUSHED 2026-07-07 on Kunal's order (d8000e6) with the verify run PENDING.
+
+---
+
+## 2026-07-07 (18) - REGRESSION FIX: EF double-tracking 500 on toggle (SplitTimes) - fresh-scope funnel + tracker-bypass Phase 2.45
+
+**Symptom:** PUT manual-time 500 "instance of entity type ''SplitTimes'' cannot be tracked because another instance with the same key is already being tracked" - introduced by d8000e6 (save path now funnels). Crossing/override SAVED (transaction commits first); the recompute died.
+
+**Mechanism (invariants pattern, 4th hit):** global NoTracking = no identity resolution; SaveChanges does NOT detach. The save transaction leaves STEP A-1/A0/A/B/C/D instances TRACKED in the request context; the funnel then re-loads the same rows as fresh instances. Phase 2.4 collided FIRST on the RN row but its catch SWALLOWED it into a warning (silently no-opping the override apply); Phase 2.45''s split-chain reset then swept the edited gate''s split row (guaranteed mismatch: STEP C writes start SegmentTime=chipTimeMs, pipeline rule is 0) and its UpdateRange attach threw fatally. BONUS within-run hazard found: even on a clean context, 2.4 leaves its toUpdate RN instances tracked and 2.45 re-loads + corrects those same rows (2.4''s net math is divergent by design) -> same throw on the PLAIN reprocess path whenever a mid-gate override''s net differs.
+
+**Fix (both layers, per the documented patterns):**
+- **Phase 2.45 -> BulkUpdateAsync** (EFCore.BulkExtensions, tracker-bypass - Phase 3/RankCalculator precedent) for RN changes + split resets; no SaveChanges; deliberately NOT inside ExecuteInTransactionAsync (the Phase-2.4-documented bulk-in-strategy-transaction hazard); idempotent + self-reconciling so partial failure heals next run. Kills the within-run 2.4->2.45 collision on every entry point.
+- **Fresh DI scope for the funnel** in RecordManualTimeAsync AND RemoveManualTimeAsync (scopeFactory -> IRFIDImportService): the funnel always starts with the clean context the reprocess endpoint gets - one owner of the entities per workflow run. Also un-breaks Phase 2.4 on the save path (its swallowed collision meant re-own/collapse never ran). UserContextService reads via IHttpContextAccessor (AsyncLocal) -> scoped run keeps the caller''s identity. ProcessParticipantResultAsync left as-is (documented: nothing tracked before its funnel).
+- ef-tracking-invariants.md: +funnel-from-a-request rule, +pipeline-phase rewrite rule, +SaveChanges-does-not-detach note.
+
+**Build 0 errors, 167/167. NOT pushed** - Kunal''s toggle verify gates it (origin currently carries broken d8000e6: push this immediately after verify). Verify: toggle bib 1002 :52<->:49 -> no 500, net 1891104<->1893912, splits rebuild, response consistent; full reprocess clean; revert clean.

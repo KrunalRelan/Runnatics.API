@@ -5155,13 +5155,24 @@ namespace Runnatics.Services
                 split.AuditProperties.UpdatedDate = DateTime.UtcNow;
             }
 
+            // TRACKER-BYPASS writes (EF double-tracking regression, 2026-07-07 toggle 500):
+            // Phase 2.4 leaves its just-updated ReadNormalized instances TRACKED, and a caller
+            // that funnels after its own save can hold tracked SplitTimes/ReadNormalized rows —
+            // this phase re-loads those same rows as FRESH untracked instances (global
+            // NoTracking, no identity resolution), so UpdateRange/Attach on them throws
+            // "another instance with the same key is already being tracked". BulkUpdateAsync
+            // (EFCore.BulkExtensions) writes directly and never touches the tracker — same
+            // pattern as Phase 3 / RankCalculator. Deliberately NOT inside
+            // ExecuteInTransactionAsync (bulk ops do not compose with deferred change-tracked
+            // writes in one strategy transaction — see the Phase 2.4 note); the two bulks are
+            // sequential, and this phase is idempotent + self-reconciling, so a partial failure
+            // heals on the next run.
             if (changedRows.Count > 0)
-                await normalizedRepo.UpdateRangeAsync(changedRows);
+                await normalizedRepo.BulkUpdateAsync(changedRows);
             if (splitsToReset.Count > 0)
-                await splitRepo.UpdateRangeAsync(splitsToReset);
+                await splitRepo.BulkUpdateAsync(splitsToReset);
             if (changedRows.Count > 0 || splitsToReset.Count > 0)
             {
-                await _repository.SaveChangesAsync();
                 _logger.LogInformation(
                     "Phase 2.45: re-derived Gun/Net on {Rows} row(s); reset {Splits} split row(s) " +
                     "for {Participants} participant(s) (rebuilt by Phase 2.5).",

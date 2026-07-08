@@ -2471,7 +2471,22 @@ namespace Runnatics.Services
                 // the START crossing changed — two different starts produced byte-identical net.
                 // The override + normalized row are already COMMITTED above, so a workflow failure
                 // here loses nothing: the operator reruns Process Result.
-                var workflow = await _rfidImportService.ProcessCompleteWorkflowAsync(eventId, raceId);
+                //
+                // FRESH DI SCOPE (EF double-tracking 500, 2026-07-07): the save transaction above
+                // leaves its ReadNormalized/SplitTimes/Results instances TRACKED in this request's
+                // DbContext (global NoTracking = no identity resolution), and the workflow re-loads
+                // those same rows as fresh instances — attaching them threw "another instance with
+                // the same key is already being tracked" (and Phase 2.4's swallowed variant silently
+                // no-opped the override application). A fresh scope gives the funnel the same clean
+                // context the reprocess endpoint starts with — one owner of the entities per run.
+                // IUserContextService reads lazily from IHttpContextAccessor (AsyncLocal), so the
+                // scoped pipeline still audits as the calling user.
+                CompleteRFIDProcessingResponse workflow;
+                using (var workflowScope = _scopeFactory.CreateScope())
+                {
+                    var scopedRfidService = workflowScope.ServiceProvider.GetRequiredService<IRFIDImportService>();
+                    workflow = await scopedRfidService.ProcessCompleteWorkflowAsync(eventId, raceId);
+                }
                 if (workflow.Status == "Failed")
                 {
                     ErrorMessage = (workflow.Errors.FirstOrDefault() ?? "Reprocessing failed.") +
@@ -2769,11 +2784,20 @@ namespace Runnatics.Services
                 // 4. FUNNEL through the proven pipeline (same call ProcessParticipantResultAsync
                 //    trusts): Phase 2 re-selects this gate's crossing from raw under the LOCKED
                 //    anchors of the runner's other crossings; Phase 2.4 re-applies the REMAINING
-                //    overrides; Phase 2.5 rebuilds the deleted splits (correctly chained); Phase 3
+                //    overrides; Phase 2.45 re-derives Gun/Net from the restored crossings;
+                //    Phase 2.5 rebuilds the deleted splits (correctly chained); Phase 3
                 //    reclassifies (#7, DSQ preserved) and ApplyStoredRanksAsync re-ranks.
                 //    Failure here is recoverable exactly like the race-move path: the override is
                 //    gone, the gate is temporarily empty, and Process Result rebuilds it.
-                var workflow = await _rfidImportService.ProcessCompleteWorkflowAsync(eventId, raceId);
+                //    FRESH DI SCOPE — same double-tracking boundary as the save path: the deletes
+                //    above leave tracked instances in this request's context; the funnel must own
+                //    a clean one (one owner of the entities per workflow run).
+                CompleteRFIDProcessingResponse workflow;
+                using (var workflowScope = _scopeFactory.CreateScope())
+                {
+                    var scopedRfidService = workflowScope.ServiceProvider.GetRequiredService<IRFIDImportService>();
+                    workflow = await scopedRfidService.ProcessCompleteWorkflowAsync(eventId, raceId);
+                }
                 if (workflow.Status == "Failed")
                 {
                     ErrorMessage = (workflow.Errors.FirstOrDefault() ?? "Reprocessing failed.") +

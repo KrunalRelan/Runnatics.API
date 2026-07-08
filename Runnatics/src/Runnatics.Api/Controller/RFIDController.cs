@@ -5,8 +5,6 @@ using Runnatics.Models.Client.Requests.RFID;
 using Runnatics.Models.Client.Responses.RFID;
 using Runnatics.Services.Interface;
 using System.Net;
-using System.Text;
-using System.Text.Json;
 
 namespace Runnatics.Api.Controller
 {
@@ -22,24 +20,17 @@ namespace Runnatics.Api.Controller
         private readonly IRFIDDiagnosticsService _diagnosticsService;
         private readonly IResultsService _resultsService;
         private readonly ILiveReadingService _liveReadingService;
-        private readonly ILogger<RFIDController> _logger;
-
-        // Same options MVC input formatting uses (camelCase, case-insensitive) so manual
-        // deserialization in IngestLiveReadings accepts exactly what [FromBody] would have.
-        private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
 
         public RFIDController(
             IRFIDImportService importService,
             IRFIDDiagnosticsService diagnosticsService,
             IResultsService resultsService,
-            ILiveReadingService liveReadingService,
-            ILogger<RFIDController> logger)
+            ILiveReadingService liveReadingService)
         {
             _service = importService;
             _diagnosticsService = diagnosticsService;
             _resultsService = resultsService;
             _liveReadingService = liveReadingService;
-            _logger = logger;
         }
 
         /// <summary>
@@ -519,8 +510,6 @@ namespace Runnatics.Api.Controller
         /// Saves to RawRFIDReading + UploadBatch, pushes immediate SignalR crossing events,
         /// then fires off the full processing pipeline asynchronously per affected race.
         /// Returns fast — pipeline runs in the background.
-        /// DIAGNOSTIC (2026-07-08): body is read RAW and logged before parsing — no [FromBody]
-        /// binding — so malformed payloads get a descriptive 400 instead of a blank one.
         /// </summary>
         [HttpPost("live-readings")]
         [ProducesResponseType(typeof(ResponseBase<LiveReadingResponse>), StatusCodes.Status200OK)]
@@ -530,58 +519,11 @@ namespace Runnatics.Api.Controller
         public async Task<IActionResult> IngestLiveReadings(
             [FromQuery] string? deviceMac,
             [FromQuery] string? deviceName,
+            [FromBody] LiveReadingsRequest request,
             CancellationToken cancellationToken)
         {
-            // DIAGNOSTIC (2026-07-08): [FromBody] model binding was rejecting every Pi request
-            // with a blank 400 before any code ran, so the payload was never visible. Read the
-            // raw body ourselves (same approach as RfidWebhookController) and log it BEFORE
-            // parsing, so a contract mismatch names itself in App Insights traces.
-            Request.EnableBuffering();
-            string rawBody;
-            using (var reader = new StreamReader(
-                Request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true))
-            {
-                rawBody = await reader.ReadToEndAsync(cancellationToken);
-            }
-            Request.Body.Position = 0;
-
-            _logger.LogWarning(
-                "live-readings RAW REQUEST: deviceMac={DeviceMac}, deviceName={DeviceName}, " +
-                "Content-Type={ContentType}, Content-Length={ContentLength}, Body={RawBody}",
-                deviceMac, deviceName, Request.ContentType, Request.ContentLength, rawBody);
-
-            const string expectedShape =
-                "POST api/rfid/live-readings?deviceMac=...&deviceName=... with JSON body " +
-                "{ \"readings\": [ { \"epc\": \"...\", \"time\": <epoch-millis number>, " +
-                "\"antenna\": 1, \"rssi\": -60.5, \"channel\": 1 } ] } — device identity in " +
-                "QUERY PARAMS, no event/race ids anywhere.";
-
-            LiveReadingsRequest? request;
-            try
-            {
-                request = JsonSerializer.Deserialize<LiveReadingsRequest>(rawBody, WebJsonOptions);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogError(ex,
-                    "live-readings DESERIALIZATION FAILED: {Error}. Body={RawBody}",
-                    ex.Message, rawBody);
-                return BadRequest(new
-                {
-                    error = $"Request body could not be parsed as LiveReadingsRequest: {ex.Message}",
-                    expected = expectedShape
-                });
-            }
-
-            if (request == null)
-            {
-                _logger.LogWarning("live-readings EMPTY BODY. Content-Length={ContentLength}", Request.ContentLength);
-                return BadRequest(new
-                {
-                    error = "Request body was empty or JSON null.",
-                    expected = expectedShape
-                });
-            }
+            if (!ModelState.IsValid)
+                return BadRequest(new { error = "Validation failed" });
 
             var response = new ResponseBase<LiveReadingResponse>();
             var result = await _liveReadingService.IngestAsync(deviceMac, deviceName, request, cancellationToken);

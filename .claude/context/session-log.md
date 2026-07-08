@@ -1447,4 +1447,4 @@ Run Status DDL (ParticipantDetail edit dialog + EditParticipant grid modal): "Re
 
 **FLAGGED (not fixed, pattern #1):** ResultsService.CalculateResultsAsync (standalone Calculate Results endpoint) still sets GunTime=NetTime=FinishTime from gun-based splits - divergent dual implementation, needs its own pass or retirement onto the funnel.
 
-**Prod-verify (gates push):** toggle start :52 vs :49 -> netTimeMs MUST differ by 2808ms between responses; header + Split Times reflect it; gun-net = chosen start''s offset; cumulative-at-finish = net; survives refresh AND reprocess; revert start -> net recomputes to automatic baseline. NOT pushed.
+**Prod-verify (gates push):** toggle start :52 vs :49 -> netTimeMs MUST differ by 2808ms between responses; header + Split Times reflect it; gun-net = chosen start''s offset; cumulative-at-finish = net; survives refresh AND reprocess; revert start -> net recomputes to automatic baseline. PUSHED 2026-07-07 on Kunal's order (d8000e6) with the verify run PENDING.

@@ -1463,3 +1463,15 @@ Run Status DDL (ParticipantDetail edit dialog + EditParticipant grid modal): "Re
 - ef-tracking-invariants.md: +funnel-from-a-request rule, +pipeline-phase rewrite rule, +SaveChanges-does-not-detach note.
 
 **Build 0 errors, 167/167. PUSHED 2026-07-07 on Kunal's order (c179270)** - master no longer carries the broken d8000e6 state; toggle verify still to run against the deployed build. Verify: toggle bib 1002 :52<->:49 -> no 500, net 1891104<->1893912, splits rebuild, response consistent; full reprocess clean; revert clean.
+
+---
+
+## 2026-07-07 (19) - Run Status DDL on the DETAIL page: details endpoint now sends the COMPUTED display status
+
+**Punit screenshot (Balvinder, race 66): DDL shows 'Registered (computed)'.** Verified: a85ef01 (API, in master lineage) fixed the GRID/SEARCH path only (ParticipantImportService MapResultStatus) - the DETAILS endpoint (ParticipantDetailsResponseBuilder) kept the implicit AutoMapper map of RAW Participant.Status. Both editors' DDL templates were already faithful (render participant.status + ' (computed)'), so the grid modal shows computed status while the DETAIL page leaked 'Registered'. SAME root cause killed un-DSQ on the detail page: its 'Remove disqualification' option requires status === 'DSQ' (display form), which the details DTO could never carry - the option was dead-on-arrival there (grid modal unaffected; its conditional + confirm flow verified correct, cef6f51).
+
+**Fix (one place, both callers):** ParticipantDetailsResponseBuilder.BuildResponse - when a Results row exists and has a status, response.Status = ResultStatus.ToDisplay(Result.Status) (OK/DNF/DNS/DSQ); no Results row -> raw participant status stays (honest for unprocessed runners). Exactly the grid rule. UI: ParticipantDetailData.status type widened with 'OK' | 'DSQ' (statusConfig already had both badges; DDL/un-DSQ conditionals unchanged - DESIGN CONFIRMED: OK/DNF/DNS remain computed-only, DSQ the only manual override, recovery = Remove disqualification -> Recompute).
+
+**Verify note:** API builds 0 errors, UI tsc clean - but the test suite could NOT run this session: a Windows Application Control policy (0x800711C7) began blocking the freshly built test DLL mid-session (last green run 167/167 ~30 min earlier; clean rebuild re-blocked). Machine policy issue for Kunal (Windows Security -> Smart App Control / App Control for Business); rerun the suite once unblocked. Change itself is display-only atop the test-pinned ToDisplay.
+
+**Prod-verify:** detail page of a processed runner -> DDL shows OK/DNF/DNS '(computed)', header badge matches; DSQ a runner -> detail DDL shows 'DSQ' + 'Remove disqualification' appears -> confirm -> RunStatus='Recompute' -> computed status + ranks restore. NOT pushed.

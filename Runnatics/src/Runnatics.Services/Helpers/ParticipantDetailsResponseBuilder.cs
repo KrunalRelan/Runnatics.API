@@ -32,6 +32,17 @@ namespace Runnatics.Services.Helpers
                 SetTimingInfo(response, participant);
                 response.Rankings = BuildRankingInfo(participant.Result,
                     totalParticipantsInRace, totalInGender, totalInCategory);
+
+                // #4 (a85ef01) FOLLOW-THROUGH (2026-07-07): the grid/search path shows the
+                // COMPUTED result status in DISPLAY form (OK/DNF/DNS/DSQ), but this DETAILS
+                // response kept the implicit AutoMapper map of the RAW stored
+                // Participant.Status — the detail page's Run Status DDL rendered
+                // "Registered (computed)" for a runner who ran, and its "Remove
+                // disqualification" option (status === "DSQ") could never appear. Same rule
+                // as the grid: with a Results row, status = ToDisplay(Result.Status); with
+                // none, the raw participant status stays (honest for unprocessed runners).
+                if (!string.IsNullOrEmpty(participant.Result.Status))
+                    response.Status = Models.Data.Constants.ResultStatus.ToDisplay(participant.Result.Status);
             }
 
             // Build split times and calculate performance metrics.

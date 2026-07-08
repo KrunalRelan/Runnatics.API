@@ -837,59 +837,33 @@ namespace Runnatics.Services
 
                 _logger.LogInformation("Extracted device name: {DeviceName} from filename: {FileName}", deviceName, request.File.FileName);
 
-                // Find device by name and tenant
-                var deviceRepo = _repository.GetRepository<Device>();
-                var device = await deviceRepo.GetQuery(d =>
-                    d.DeviceMacAddress == deviceName &&
-                    d.TenantId == tenantId &&
-                    d.AuditProperties.IsActive &&
-                    !d.AuditProperties.IsDeleted)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync();
-
-                if (device == null)
+                // THE shared blind resolver (offline import-auto + online live-readings):
+                // device identifier → device row → newest active checkpoint mapping → EVENT.
+                var resolution = await ResolveDeviceToEventAsync(deviceName, tenantId);
+                if (!resolution.Succeeded)
                 {
-                    ErrorMessage = $"Device '{deviceName}' not found in the system. Please ensure the device is registered.";
-                    _logger.LogWarning("Auto upload failed: Device '{DeviceName}' not found for tenant {TenantId}", deviceName, tenantId);
+                    ErrorMessage = resolution.Error;
+                    _logger.LogWarning("Auto upload failed: {Error}", resolution.Error);
                     response.Status = "Failed";
                     return response;
                 }
 
-                _logger.LogInformation("Found device: {DeviceId} for name: {DeviceName}", device.Id, deviceName);
-
-                // Find checkpoint associated with this device
-                var checkpointRepo = _repository.GetRepository<Checkpoint>();
-                var checkpoint = await checkpointRepo.GetQuery(cp =>
-                    cp.DeviceId == device.Id &&
-                    cp.AuditProperties.IsActive &&
-                    !cp.AuditProperties.IsDeleted)
-                    .OrderByDescending(cp => cp.AuditProperties.CreatedDate)
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync();
-
-                if (checkpoint == null)
-                {
-                    ErrorMessage = $"No checkpoint is assigned to device '{deviceName}'. Please configure the device checkpoint assignment first.";
-                    _logger.LogWarning("Auto upload failed: No checkpoint found for device {DeviceId}", device.Id);
-                    response.Status = "Failed";
-                    return response;
-                }
-
-                _logger.LogInformation("Found checkpoint: {CheckpointId} with Event: {EventId}, Race: {RaceId}",
-                    checkpoint.Id, checkpoint.EventId, checkpoint.RaceId);
+                _logger.LogInformation(
+                    "Found device: {DeviceId} for name: {DeviceName}; checkpoint {CheckpointId} → Event {EventId}",
+                    resolution.DeviceDbId, deviceName, resolution.CheckpointId, resolution.EventId);
 
                 // Encrypt EventId for the upload (RaceId is intentionally NULL for event-level uploads)
-                var encryptedEventId = _encryptionService.Encrypt(checkpoint.EventId.ToString());
+                var encryptedEventId = _encryptionService.Encrypt(resolution.EventId.ToString());
 
                 // Update request with discovered device info
                 // Note: ExpectedCheckpointId is left null - it will be determined during processing
                 // based on EPC → Participant → RaceId → Checkpoint chain
-                request.DeviceId = device.DeviceMacAddress;
+                request.DeviceId = resolution.DeviceMacAddress;
 
                 _logger.LogInformation(
                     "Auto-detection complete. Delegating to event-level upload with EventId: {EventId} (RaceId: NULL). " +
                     "Race association will be determined during processing via EPC → Participant → RaceId.",
-                    checkpoint.EventId);
+                    resolution.EventId);
 
                 // Delegate to event-level upload method with NULL raceId
                 // This allows a single file to contain readings for multiple races
@@ -902,6 +876,77 @@ namespace Runnatics.Services
                 response.Status = "Failed";
                 return response;
             }
+        }
+
+        /// <summary>
+        /// THE blind device→event resolver — ONE implementation shared by the OFFLINE
+        /// import-auto upload and the ONLINE live-readings ingest (2026-07-07), so the two
+        /// paths can never resolve differently for the same device.
+        ///
+        /// Rule (documented from the offline path it was extracted from):
+        ///   1. Device row by identifier — raw MAC equality (the offline filename token),
+        ///      separator-stripped/lowercased MAC, or the registered device Name; ACTIVE
+        ///      rows only (IsActive=1, IsDeleted=0), tenant-scoped when the caller has a
+        ///      tenant (offline JWT does; the keyless Pi passes null). Duplicate rows pick
+        ///      deterministically by lowest Id — the DeviceSerialResolver house rule (the
+        ///      old FirstOrDefault had no ORDER BY and picked by DB whim).
+        ///   2. EVENT = the device's NEWEST ACTIVE checkpoint mapping
+        ///      (OrderByDescending(CreatedDate)) — the multi-event/duplicate-MAC tiebreak:
+        ///      the latest-configured event wins.
+        ///   3. NO race is resolved here, by design: the batch is stored EVENT-level
+        ///      (RaceId NULL) and the RACE is resolved PER READ downstream —
+        ///      EPC → ChipAssignment → Participant → RaceId, then the device's serial →
+        ///      checkpoint WITHIN that race (Phase 1/1.5, incl. shared-mat time-proximity).
+        /// Failure returns a client-safe Error naming the device (never throws for
+        /// unknown devices).
+        /// </summary>
+        public async Task<DeviceEventResolution> ResolveDeviceToEventAsync(string deviceIdentifier, int? tenantId)
+        {
+            var identifier = (deviceIdentifier ?? string.Empty).Trim();
+            if (identifier.Length == 0)
+                return new DeviceEventResolution { Error = "Device identifier (MAC or name) is required." };
+
+            var macNormalized = identifier.Replace(":", "").Replace("-", "").ToLowerInvariant();
+
+            var device = await _repository.GetRepository<Device>().GetQuery(d =>
+                    (d.DeviceMacAddress == identifier ||
+                     d.DeviceMacAddress == macNormalized ||
+                     d.Name == identifier) &&
+                    (!tenantId.HasValue || d.TenantId == tenantId.Value) &&
+                    d.AuditProperties.IsActive &&
+                    !d.AuditProperties.IsDeleted)
+                .OrderBy(d => d.Id)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            if (device == null)
+                return new DeviceEventResolution
+                {
+                    Error = $"Device '{identifier}' not found in the system. Please ensure the device is registered."
+                };
+
+            var checkpoint = await _repository.GetRepository<Checkpoint>().GetQuery(cp =>
+                    cp.DeviceId == device.Id &&
+                    cp.AuditProperties.IsActive &&
+                    !cp.AuditProperties.IsDeleted)
+                .OrderByDescending(cp => cp.AuditProperties.CreatedDate)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+
+            if (checkpoint == null)
+                return new DeviceEventResolution
+                {
+                    Error = $"No checkpoint is assigned to device '{identifier}'. Please configure the device checkpoint assignment first."
+                };
+
+            return new DeviceEventResolution
+            {
+                DeviceDbId = device.Id,
+                DeviceMacAddress = device.DeviceMacAddress,
+                DeviceName = device.Name,
+                EventId = checkpoint.EventId,
+                CheckpointId = checkpoint.Id
+            };
         }
 
         /// <summary>

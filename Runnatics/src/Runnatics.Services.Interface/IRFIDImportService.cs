@@ -21,6 +21,14 @@ namespace Runnatics.Services.Interface
 
         Task<RFIDImportResponse> UploadRFIDFileAutoAsync(RFIDImportRequest request);
 
+        /// <summary>
+        /// THE blind device→event resolver shared by the offline import-auto upload and the
+        /// online live-readings ingest: device MAC/name → newest active checkpoint mapping →
+        /// EVENT (no race — the race is resolved per read downstream via EPC → Participant).
+        /// tenantId null = no tenant scoping (the keyless Pi endpoint).
+        /// </summary>
+        Task<DeviceEventResolution> ResolveDeviceToEventAsync(string deviceIdentifier, int? tenantId);
+
         Task<ProcessRFIDImportResponse> ProcessRFIDStagingDataAsync(ProcessRFIDImportRequest request);
 
         //Task<BulkProcessRFIDImportResponse> ProcessAllRFIDDataAsync(string eventId, string raceId);

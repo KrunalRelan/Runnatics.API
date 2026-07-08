@@ -17,6 +17,7 @@ namespace Runnatics.Services
     {
         private readonly IUnitOfWork<RaceSyncDbContext> _unitOfWork;
         private readonly IEncryptionService _encryptionService;
+        private readonly IRFIDImportService _rfidImportService;
         private readonly IHubContext<RaceHub> _raceHub;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<LiveReadingService> _logger;
@@ -24,20 +25,20 @@ namespace Runnatics.Services
         public LiveReadingService(
             IUnitOfWork<RaceSyncDbContext> unitOfWork,
             IEncryptionService encryptionService,
+            IRFIDImportService rfidImportService,
             IHubContext<RaceHub> raceHub,
             IServiceScopeFactory scopeFactory,
             ILogger<LiveReadingService> logger)
         {
             _unitOfWork = unitOfWork;
             _encryptionService = encryptionService;
+            _rfidImportService = rfidImportService;
             _raceHub = raceHub;
             _scopeFactory = scopeFactory;
             _logger = logger;
         }
 
         public async Task<LiveReadingResponse?> IngestAsync(
-            string eventId,
-            string raceId,
             LiveReadingsRequest request,
             CancellationToken ct)
         {
@@ -50,20 +51,23 @@ namespace Runnatics.Services
             if (request.Readings == null || request.Readings.Count == 0)
                 return new LiveReadingResponse();
 
-            int decryptedEventId;
-            int decryptedRaceId;
-            try
+            // BLIND resolution (2026-07-07) — IDENTICAL to the offline import-auto upload:
+            // the device (MAC or registered name) resolves to the EVENT via its newest
+            // active checkpoint mapping, through the ONE shared resolver. No event/race
+            // ids from the caller; NO race resolved here — the batch is EVENT-level
+            // (RaceId NULL) and the race is resolved per read downstream via
+            // EPC → ChipAssignment → Participant → RaceId, exactly like an offline file.
+            // Tenant is null: the Pi authenticates via X-Device-Key, not a JWT.
+            var resolution = await _rfidImportService.ResolveDeviceToEventAsync(request.DeviceId, tenantId: null);
+            if (!resolution.Succeeded)
             {
-                decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
-                decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
-            }
-            catch
-            {
-                ErrorMessage = "Invalid eventId or raceId.";
+                ErrorMessage = resolution.Error;
                 return null;
             }
 
-            // Load event for TenantId + timezone
+            var decryptedEventId = resolution.EventId;
+
+            // Load event for timezone
             var eventEntity = await _unitOfWork.GetRepository<Event>()
                 .GetQuery(e => e.Id == decryptedEventId)
                 .AsNoTracking()
@@ -71,18 +75,12 @@ namespace Runnatics.Services
 
             if (eventEntity == null)
             {
-                ErrorMessage = "Event not found.";
+                ErrorMessage = $"Device '{request.DeviceId}' resolves to event {decryptedEventId}, which was not found.";
                 return null;
             }
 
-            // Resolve device by MAC address
-            var macNormalized = request.DeviceId.Replace(":", "").Replace("-", "").ToLowerInvariant();
             var device = await _unitOfWork.GetRepository<Device>()
-                .GetQuery(d =>
-                    (d.DeviceMacAddress == macNormalized || d.Name == request.DeviceId) &&
-                    d.TenantId == eventEntity.TenantId &&
-                    d.AuditProperties.IsActive &&
-                    !d.AuditProperties.IsDeleted)
+                .GetQuery(d => d.Id == resolution.DeviceDbId)
                 .AsNoTracking()
                 .FirstOrDefaultAsync(ct);
 
@@ -98,8 +96,10 @@ namespace Runnatics.Services
             try { eventTz = TimeZoneInfo.FindSystemTimeZoneById(tzId); }
             catch { eventTz = TimeZoneInfo.Utc; tzId = "UTC"; }
 
-            // Get or create today's live batch for this device + race
-            var batch = await GetOrCreateBatchAsync(device, decryptedEventId, decryptedRaceId, ct);
+            // Get or create today's live batch for this device — EVENT-level (RaceId NULL),
+            // the offline event-upload shape: every race's pipeline run includes it
+            // (b.RaceId == raceId || b.RaceId == null).
+            var batch = await GetOrCreateBatchAsync(device, decryptedEventId, ct);
 
             // Map incoming rows to RawRFIDReading entities
             var rawReadings = request.Readings
@@ -141,25 +141,49 @@ namespace Runnatics.Services
                 "LiveReadings: saved {Count} readings from device {DeviceId} into batch {BatchId}",
                 rawReadings.Count, device.Name, batch.Id);
 
-            // Push immediate SignalR crossing events before pipeline runs
-            await PushCrossingEventsAsync(rawReadings, device, decryptedEventId, ct);
+            // EPC → participant map for THIS request (event-scoped): feeds the immediate
+            // SignalR push AND names the RACES that actually received data — the documented
+            // offline rule ("race association via EPC → Participant → RaceId") applied to
+            // decide which race pipelines to run.
+            var epcToParticipant = await LoadEpcParticipantsAsync(rawReadings, decryptedEventId, ct);
 
-            // Fire-and-forget: run full pipeline (dedup → normalize → split times → rankings)
-            // A new DI scope is created so scoped services are not disposed under us
-            _ = Task.Run(async () =>
+            // Push immediate SignalR crossing events before pipeline runs
+            await PushCrossingEventsAsync(rawReadings, device, epcToParticipant, ct);
+
+            // Fire-and-forget: run the full pipeline for EVERY race this request's chips
+            // belong to (a device can serve multiple races). A FRESH DI scope per race —
+            // sequential runs on one scope would accumulate tracked entities across runs
+            // (the NoTracking double-attach class).
+            var affectedRaceIds = epcToParticipant.Values
+                .Select(p => p.RaceId)
+                .Distinct()
+                .ToList();
+            var encryptedEventIdForPipeline = _encryptionService.Encrypt(decryptedEventId.ToString());
+
+            if (affectedRaceIds.Count > 0)
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    using var scope = _scopeFactory.CreateScope();
-                    var rfidService = scope.ServiceProvider.GetRequiredService<IRFIDImportService>();
-                    await rfidService.ProcessCompleteWorkflowAsync(eventId, raceId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "Background pipeline failed for event {EventId} race {RaceId}", eventId, raceId);
-                }
-            });
+                    foreach (var affectedRaceId in affectedRaceIds)
+                    {
+                        try
+                        {
+                            using var scope = _scopeFactory.CreateScope();
+                            var rfidService = scope.ServiceProvider.GetRequiredService<IRFIDImportService>();
+                            var encryptedRaceId = scope.ServiceProvider
+                                .GetRequiredService<IEncryptionService>()
+                                .Encrypt(affectedRaceId.ToString());
+                            await rfidService.ProcessCompleteWorkflowAsync(encryptedEventIdForPipeline, encryptedRaceId);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Background pipeline failed for event {EventId} race {RaceId}",
+                                decryptedEventId, affectedRaceId);
+                        }
+                    }
+                });
+            }
 
             return new LiveReadingResponse
             {
@@ -172,7 +196,7 @@ namespace Runnatics.Services
         // ── Batch management ──────────────────────────────────────────────────────
 
         private async Task<UploadBatch> GetOrCreateBatchAsync(
-            Device device, int eventId, int raceId, CancellationToken ct)
+            Device device, int eventId, CancellationToken ct)
         {
             var today = DateTime.UtcNow.Date;
             var deviceId = !string.IsNullOrEmpty(device.DeviceMacAddress)
@@ -183,7 +207,7 @@ namespace Runnatics.Services
                 .GetQuery(b =>
                     b.DeviceId == deviceId &&
                     b.EventId == eventId &&
-                    b.RaceId == raceId &&
+                    b.RaceId == null &&
                     b.SourceType == "online_webhook" &&
                     b.ProcessingStartedAt != null &&
                     b.ProcessingStartedAt.Value.Date == today &&
@@ -196,13 +220,16 @@ namespace Runnatics.Services
 
             var batch = new UploadBatch
             {
-                RaceId = raceId,
+                // EVENT-level (RaceId NULL) — the offline import-auto shape: race
+                // association happens per read during processing, and every race's
+                // pipeline run includes event-level batches.
+                RaceId = null,
                 EventId = eventId,
                 DeviceId = deviceId,
                 OriginalFileName = $"live_{deviceId}_{today:yyyy-MM-dd}",
                 StoredFilePath = null,
                 FileSizeBytes = 0,
-                FileHash = $"live_{deviceId}_{eventId}_{raceId}_{today:yyyyMMdd}",
+                FileHash = $"live_{deviceId}_{eventId}_{today:yyyyMMdd}",
                 FileFormat = "LIVE",
                 Status = "uploading",
                 SourceType = "online_webhook",
@@ -221,8 +248,8 @@ namespace Runnatics.Services
             await _unitOfWork.SaveChangesAsync();
 
             _logger.LogInformation(
-                "Created live UploadBatch {BatchId} for device {DeviceId} event {EventId} race {RaceId}",
-                batch.Id, deviceId, eventId, raceId);
+                "Created live event-level UploadBatch {BatchId} for device {DeviceId} event {EventId} (RaceId NULL)",
+                batch.Id, deviceId, eventId);
 
             return batch;
         }
@@ -262,34 +289,44 @@ namespace Runnatics.Services
             };
         }
 
+        // ── EPC → participant resolution (SignalR push + affected-race discovery) ──
+
+        private sealed record LiveEpcParticipant(
+            string Epc, int ParticipantId, string? BibNumber, string FirstName, string LastName, int RaceId);
+
+        private async Task<Dictionary<string, LiveEpcParticipant>> LoadEpcParticipantsAsync(
+            List<RawRFIDReading> readings, int eventId, CancellationToken ct)
+        {
+            var epcs = readings.Select(r => r.Epc).Distinct().ToList();
+
+            return await _unitOfWork.GetRepository<ChipAssignment>()
+                .GetQuery(ca =>
+                    ca.Event.Id == eventId &&
+                    !ca.UnassignedAt.HasValue &&
+                    ca.AuditProperties.IsActive &&
+                    !ca.AuditProperties.IsDeleted &&
+                    epcs.Contains(ca.Chip.EPC))
+                .AsNoTracking()
+                .Select(ca => new LiveEpcParticipant(
+                    ca.Chip.EPC,
+                    ca.ParticipantId,
+                    ca.Participant.BibNumber,
+                    ca.Participant.FirstName ?? "",
+                    ca.Participant.LastName ?? "",
+                    ca.Participant.RaceId))
+                .ToDictionaryAsync(x => x.Epc, x => x, ct);
+        }
+
         // ── SignalR immediate feedback ────────────────────────────────────────────
 
         private async Task PushCrossingEventsAsync(
-            List<RawRFIDReading> readings, Device device, int eventId, CancellationToken ct)
+            List<RawRFIDReading> readings,
+            Device device,
+            Dictionary<string, LiveEpcParticipant> epcToParticipant,
+            CancellationToken ct)
         {
             try
             {
-                var epcs = readings.Select(r => r.Epc).Distinct().ToList();
-
-                var epcToParticipant = await _unitOfWork.GetRepository<ChipAssignment>()
-                    .GetQuery(ca =>
-                        ca.Event.Id == eventId &&
-                        !ca.UnassignedAt.HasValue &&
-                        ca.AuditProperties.IsActive &&
-                        !ca.AuditProperties.IsDeleted &&
-                        epcs.Contains(ca.Chip.EPC))
-                    .AsNoTracking()
-                    .Select(ca => new
-                    {
-                        EPC = ca.Chip.EPC,
-                        ca.ParticipantId,
-                        ca.Participant.BibNumber,
-                        FirstName = ca.Participant.FirstName ?? "",
-                        LastName = ca.Participant.LastName ?? "",
-                        ca.Participant.RaceId
-                    })
-                    .ToDictionaryAsync(x => x.EPC, x => x, ct);
-
                 if (epcToParticipant.Count == 0) return;
 
                 var checkpoint = await _unitOfWork.GetRepository<Checkpoint>()

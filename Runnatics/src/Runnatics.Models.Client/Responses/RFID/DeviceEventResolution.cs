@@ -19,6 +19,13 @@ namespace Runnatics.Models.Client.Responses.RFID
         /// <summary>Set = resolution failed; a client-safe message naming the device.</summary>
         public string? Error { get; set; }
 
+        /// <summary>
+        /// True when a registered device matched the identifier (even if resolution then
+        /// failed on a missing checkpoint mapping) — lets a multi-identifier caller
+        /// surface the config error instead of a generic not-found.
+        /// </summary>
+        public bool DeviceFound { get; set; }
+
         public bool Succeeded => Error == null;
     }
 }

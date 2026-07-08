@@ -42,9 +42,9 @@ namespace Runnatics.Services
             LiveReadingsRequest request,
             CancellationToken ct)
         {
-            if (string.IsNullOrEmpty(request.DeviceId))
+            if (string.IsNullOrWhiteSpace(request.DeviceId) && string.IsNullOrWhiteSpace(request.DeviceName))
             {
-                ErrorMessage = "DeviceId is required.";
+                ErrorMessage = "DeviceId (MAC) or DeviceName is required.";
                 return null;
             }
 
@@ -52,16 +52,42 @@ namespace Runnatics.Services
                 return new LiveReadingResponse();
 
             // BLIND resolution (2026-07-07) — IDENTICAL to the offline import-auto upload:
-            // the device (MAC or registered name) resolves to the EVENT via its newest
-            // active checkpoint mapping, through the ONE shared resolver. No event/race
-            // ids from the caller; NO race resolved here — the batch is EVENT-level
-            // (RaceId NULL) and the race is resolved per read downstream via
-            // EPC → ChipAssignment → Participant → RaceId, exactly like an offline file.
-            // Tenant is null: the Pi authenticates via X-Device-Key, not a JWT.
-            var resolution = await _rfidImportService.ResolveDeviceToEventAsync(request.DeviceId, tenantId: null);
-            if (!resolution.Succeeded)
+            // the device resolves to the EVENT via its newest active checkpoint mapping,
+            // through the ONE shared resolver. The Pi sends MAC + device name: MAC is
+            // tried first, the name is the fallback — both through the SAME resolver, so
+            // no divergent matching exists. No event/race ids from the caller; NO race
+            // resolved here — the batch is EVENT-level (RaceId NULL) and the race is
+            // resolved per read downstream via EPC → ChipAssignment → Participant →
+            // RaceId, exactly like an offline file. Tenant is null: the Pi authenticates
+            // via X-Device-Key, not a JWT.
+            var identifiers = new[] { request.DeviceId, request.DeviceName }
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            DeviceEventResolution? resolution = null;
+            string? deviceFoundError = null;
+            foreach (var identifier in identifiers)
             {
-                ErrorMessage = resolution.Error;
+                var attempt = await _rfidImportService.ResolveDeviceToEventAsync(identifier, tenantId: null);
+                if (attempt.Succeeded)
+                {
+                    resolution = attempt;
+                    break;
+                }
+                // A matched-but-unconfigured device (no checkpoint mapping) is the more
+                // specific failure — surface it over a generic not-found.
+                if (attempt.DeviceFound)
+                    deviceFoundError ??= attempt.Error;
+            }
+
+            if (resolution == null)
+            {
+                // Name EVERYTHING the Pi sent — the operator sees exactly what failed to
+                // match a registered device.
+                ErrorMessage = deviceFoundError ??
+                    $"Device '{string.Join("' / '", identifiers)}' not found in the system. Please ensure the device is registered.";
                 return null;
             }
 

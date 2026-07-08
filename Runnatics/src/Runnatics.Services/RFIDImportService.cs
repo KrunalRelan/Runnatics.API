@@ -936,11 +936,13 @@ namespace Runnatics.Services
             if (checkpoint == null)
                 return new DeviceEventResolution
                 {
+                    DeviceFound = true,
                     Error = $"No checkpoint is assigned to device '{identifier}'. Please configure the device checkpoint assignment first."
                 };
 
             return new DeviceEventResolution
             {
+                DeviceFound = true,
                 DeviceDbId = device.Id,
                 DeviceMacAddress = device.DeviceMacAddress,
                 DeviceName = device.Name,

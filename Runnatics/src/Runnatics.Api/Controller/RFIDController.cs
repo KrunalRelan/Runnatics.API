@@ -502,24 +502,23 @@ namespace Runnatics.Api.Controller
         /// <summary>
         /// Receive live chip readings from the Raspberry Pi timing mat.
         /// Authenticated via X-Device-Key header (set in Azure env as DeviceApi__Key).
-        /// DEVICE-BLIND (2026-07-07): no event/race ids — the device (MAC or registered
-        /// name) resolves the event exactly like the offline import-auto upload, the batch
-        /// is event-level, and races are resolved per read (EPC → Participant). The legacy
-        /// {eventId}/{raceId}/live-readings route is kept for old Pi firmware, but its ids
-        /// are IGNORED — resolution is device-based on both routes.
+        /// DEVICE-BLIND (2026-07-07): no event/race ids anywhere in the contract. The
+        /// device identity travels as QUERY PARAMETERS — ?deviceMac=… (tried first) and
+        /// ?deviceName=… (fallback) — and resolves the event exactly like the offline
+        /// import-auto upload (one shared resolver); the batch is event-level and races
+        /// are resolved per read (EPC → Participant). The body carries READINGS ONLY.
         /// Saves to RawRFIDReading + UploadBatch, pushes immediate SignalR crossing events,
         /// then fires off the full processing pipeline asynchronously per affected race.
         /// Returns fast — pipeline runs in the background.
         /// </summary>
         [HttpPost("live-readings")]
-        [HttpPost("{eventId}/{raceId}/live-readings")]
         [ProducesResponseType(typeof(ResponseBase<LiveReadingResponse>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> IngestLiveReadings(
-            string? eventId,
-            string? raceId,
+            [FromQuery] string? deviceMac,
+            [FromQuery] string? deviceName,
             [FromBody] LiveReadingsRequest request,
             CancellationToken cancellationToken)
         {
@@ -527,7 +526,7 @@ namespace Runnatics.Api.Controller
                 return BadRequest(new { error = "Validation failed" });
 
             var response = new ResponseBase<LiveReadingResponse>();
-            var result = await _liveReadingService.IngestAsync(request, cancellationToken);
+            var result = await _liveReadingService.IngestAsync(deviceMac, deviceName, request, cancellationToken);
 
             if (_liveReadingService.HasError || result == null)
             {

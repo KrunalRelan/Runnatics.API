@@ -39,12 +39,14 @@ namespace Runnatics.Services
         }
 
         public async Task<LiveReadingResponse?> IngestAsync(
+            string? deviceMac,
+            string? deviceName,
             LiveReadingsRequest request,
             CancellationToken ct)
         {
-            if (string.IsNullOrWhiteSpace(request.DeviceId) && string.IsNullOrWhiteSpace(request.DeviceName))
+            if (string.IsNullOrWhiteSpace(deviceMac) && string.IsNullOrWhiteSpace(deviceName))
             {
-                ErrorMessage = "DeviceId (MAC) or DeviceName is required.";
+                ErrorMessage = "deviceMac or deviceName query parameter is required.";
                 return null;
             }
 
@@ -60,7 +62,7 @@ namespace Runnatics.Services
             // resolved per read downstream via EPC → ChipAssignment → Participant →
             // RaceId, exactly like an offline file. Tenant is null: the Pi authenticates
             // via X-Device-Key, not a JWT.
-            var identifiers = new[] { request.DeviceId, request.DeviceName }
+            var identifiers = new[] { deviceMac, deviceName }
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .Select(id => id!.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -101,7 +103,7 @@ namespace Runnatics.Services
 
             if (eventEntity == null)
             {
-                ErrorMessage = $"Device '{request.DeviceId}' resolves to event {decryptedEventId}, which was not found.";
+                ErrorMessage = $"Device '{identifiers[0]}' resolves to event {decryptedEventId}, which was not found.";
                 return null;
             }
 
@@ -112,7 +114,7 @@ namespace Runnatics.Services
 
             if (device == null)
             {
-                ErrorMessage = $"Device '{request.DeviceId}' is not registered. Add it via the admin UI first.";
+                ErrorMessage = $"Device '{identifiers[0]}' is not registered. Add it via the admin UI first.";
                 return null;
             }
 

@@ -1536,4 +1536,17 @@ Everything else ("not found in the system" / "which was not found" / "is not reg
 
 **IMPLEMENTED (LiveReadingService.IngestAsync only):** LogWarning at every step (codeless attach -> App Insights traces): received deviceMac/deviceName/readings-count (logged BEFORE the missing-param check, so even param-less requests name what arrived); per-identifier resolver attempt (resolved -> Device.Id/Checkpoint/Event, or DeviceFound+Error); every ErrorMessage branch tagged with the status the controller will map it to. Search traces for "live-readings:". Drop to Debug once the Pi contract settles (noise: one Warning per request minimum).
 
-**Build 0 errors; 169/169 tests. Deploy pipeline GREEN (verified via public GitHub API - gh CLI unauthenticated locally): 47496bf revert deployed; this logging awaits push.**
+**Build 0 errors; 169/169 tests. Deploy pipeline GREEN (verified via public GitHub API - gh CLI unauthenticated locally): 47496bf revert deployed; this logging awaits push.** PUSHED 7b42383; deploy GREEN.
+
+---
+
+## 2026-07-09 (24) - live-readings 400 ROOT-CAUSED and FIXED: Pi sends deviceId in the BODY - endpoint now accepts identity from body OR query params
+
+**ROOT CAUSE (Kunal shared the Pi source):** payload = {"deviceId": str(r_id), "readings":[{epc, time=epoch-ms int, antenna, rssi, channel}]} - identity in the BODY (the intermediate 4ee6b7b shape), NO query params. Final contract (33a6675) expected ?deviceMac=/?deviceName= -> body bound FINE (readings shape matches LiveReadingDto exactly), then IngestAsync's missing-query-param check 400'd EVERY request before any DB call (the <1ms). Exactly the prime suspect from entry 23.
+
+**FIX (least-restrictive - accept BOTH shapes):**
+- LiveReadingsRequest: DeviceId + DeviceName (string?) restored to the body contract.
+- LiveReadingService.IngestAsync: identifiers = [query deviceMac, query deviceName, body DeviceId, body DeviceName] - trimmed, case-insensitive-distinct, ALL through the ONE shared resolver (no divergent matching); reject only when NO identifier arrived anywhere (message names both options). Received-log now shows body.deviceId/body.deviceName too.
+- Controller: doc comment only; [FromBody] untouched.
+
+**Build 0 errors; 169/169 tests.** The Pi's exact current payload now resolves through the same path as offline import-auto. Diagnostic Warning logs from entry 23 still in place - drop to Debug once the client confirms 200s.

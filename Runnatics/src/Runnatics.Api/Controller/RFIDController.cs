@@ -504,9 +504,10 @@ namespace Runnatics.Api.Controller
         /// Authenticated via X-Device-Key header (set in Azure env as DeviceApi__Key).
         /// DEVICE-BLIND (2026-07-07): no event/race ids anywhere in the contract. The
         /// device identity travels as QUERY PARAMETERS — ?deviceMac=… (tried first) and
-        /// ?deviceName=… (fallback) — and resolves the event exactly like the offline
-        /// import-auto upload (one shared resolver); the batch is event-level and races
-        /// are resolved per read (EPC → Participant). The body carries READINGS ONLY.
+        /// ?deviceName=… (fallback) — OR in the body (deviceId / deviceName — the shape
+        /// the Pi firmware sends, accepted 2026-07-09), and resolves the event exactly
+        /// like the offline import-auto upload (one shared resolver); the batch is
+        /// event-level and races are resolved per read (EPC → Participant).
         /// Saves to RawRFIDReading + UploadBatch, pushes immediate SignalR crossing events,
         /// then fires off the full processing pipeline asynchronously per affected race.
         /// Returns fast — pipeline runs in the background.

@@ -48,12 +48,31 @@ namespace Runnatics.Services
             // resolution step to App Insights traces — the client's 400s originate in THIS
             // method (device resolution), not in model binding. Drop to Debug once settled.
             _logger.LogWarning(
-                "live-readings: received deviceMac={DeviceMac} deviceName={DeviceName} readings={ReadingCount}",
-                deviceMac, deviceName, request.Readings?.Count ?? 0);
+                "live-readings: received deviceMac={DeviceMac} deviceName={DeviceName} " +
+                "body.deviceId={BodyDeviceId} body.deviceName={BodyDeviceName} readings={ReadingCount}",
+                deviceMac, deviceName, request.DeviceId, request.DeviceName, request.Readings?.Count ?? 0);
 
-            if (string.IsNullOrWhiteSpace(deviceMac) && string.IsNullOrWhiteSpace(deviceName))
+            // BLIND resolution (2026-07-07) — IDENTICAL to the offline import-auto upload:
+            // the device resolves to the EVENT via its newest active checkpoint mapping,
+            // through the ONE shared resolver. Identity arrives as query params
+            // (?deviceMac=… tried first, ?deviceName=… fallback) OR in the body
+            // (deviceId / deviceName — the shape the Pi firmware actually sends,
+            // 2026-07-09); every identifier goes through the SAME resolver, so no
+            // divergent matching exists. No event/race ids from the caller; NO race
+            // resolved here — the batch is EVENT-level (RaceId NULL) and the race is
+            // resolved per read downstream via EPC → ChipAssignment → Participant →
+            // RaceId, exactly like an offline file. Tenant is null: the Pi authenticates
+            // via X-Device-Key, not a JWT.
+            var identifiers = new[] { deviceMac, deviceName, request.DeviceId, request.DeviceName }
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (identifiers.Count == 0)
             {
-                ErrorMessage = "deviceMac or deviceName query parameter is required.";
+                ErrorMessage = "Device identity is required: pass ?deviceMac= / ?deviceName= " +
+                    "query parameters or deviceId / deviceName in the body.";
                 _logger.LogWarning(
                     "live-readings: REJECTED (controller maps to 400) — {Error}", ErrorMessage);
                 return null;
@@ -61,21 +80,6 @@ namespace Runnatics.Services
 
             if (request.Readings == null || request.Readings.Count == 0)
                 return new LiveReadingResponse();
-
-            // BLIND resolution (2026-07-07) — IDENTICAL to the offline import-auto upload:
-            // the device resolves to the EVENT via its newest active checkpoint mapping,
-            // through the ONE shared resolver. The Pi sends MAC + device name: MAC is
-            // tried first, the name is the fallback — both through the SAME resolver, so
-            // no divergent matching exists. No event/race ids from the caller; NO race
-            // resolved here — the batch is EVENT-level (RaceId NULL) and the race is
-            // resolved per read downstream via EPC → ChipAssignment → Participant →
-            // RaceId, exactly like an offline file. Tenant is null: the Pi authenticates
-            // via X-Device-Key, not a JWT.
-            var identifiers = new[] { deviceMac, deviceName }
-                .Where(id => !string.IsNullOrWhiteSpace(id))
-                .Select(id => id!.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
 
             DeviceEventResolution? resolution = null;
             string? deviceFoundError = null;

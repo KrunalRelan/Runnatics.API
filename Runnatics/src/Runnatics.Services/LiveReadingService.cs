@@ -47,10 +47,23 @@ namespace Runnatics.Services
             // DIAGNOSTIC (2026-07-08): Warning-level so Azure codeless attach forwards every
             // resolution step to App Insights traces — the client's 400s originate in THIS
             // method (device resolution), not in model binding. Drop to Debug once settled.
+            // Payload capped under App Insights' 8 KB custom-property truncation limit.
+            string payloadJson;
+            try
+            {
+                payloadJson = System.Text.Json.JsonSerializer.Serialize(request);
+                if (payloadJson.Length > 8000)
+                    payloadJson = payloadJson[..8000] + "…(truncated)";
+            }
+            catch
+            {
+                payloadJson = "(payload serialization failed)";
+            }
+
             _logger.LogWarning(
                 "live-readings: received deviceMac={DeviceMac} deviceName={DeviceName} " +
-                "body.deviceId={BodyDeviceId} body.deviceName={BodyDeviceName} readings={ReadingCount}",
-                deviceMac, deviceName, request.DeviceId, request.DeviceName, request.Readings?.Count ?? 0);
+                "body.deviceId={BodyDeviceId} body.deviceName={BodyDeviceName} readings={ReadingCount} payload={Payload}",
+                deviceMac, deviceName, request.DeviceId, request.DeviceName, request.Readings?.Count ?? 0, payloadJson);
 
             // BLIND resolution (2026-07-07) — IDENTICAL to the offline import-auto upload:
             // the device resolves to the EVENT via its newest active checkpoint mapping,

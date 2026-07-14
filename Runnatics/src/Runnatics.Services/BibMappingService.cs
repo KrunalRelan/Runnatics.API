@@ -106,7 +106,9 @@ namespace Runnatics.Services
                     .GetQuery(a => a.Chip.EPC == request.Epc
                         && a.EventId == eventId
                         && a.UnassignedAt == null
-                        && !a.AuditProperties.IsDeleted, includeNavigationProperties: true)
+                        && !a.AuditProperties.IsDeleted)
+                    .Include(a => a.Chip)
+                    .Include(a => a.Participant)
                     .AsNoTracking()
                     .FirstOrDefaultAsync(cancellationToken);
 
@@ -115,7 +117,9 @@ namespace Runnatics.Services
                     .GetQuery(a => a.ParticipantId == participant.Id
                         && a.EventId == eventId
                         && a.UnassignedAt == null
-                        && !a.AuditProperties.IsDeleted, includeNavigationProperties: true)
+                        && !a.AuditProperties.IsDeleted)
+                    .Include(a => a.Chip)
+                    .Include(a => a.Participant)
                     .AsNoTracking()
                     .FirstOrDefaultAsync(cancellationToken);
 
@@ -213,8 +217,7 @@ namespace Runnatics.Services
                                 && a.ParticipantId == existingEpcAssignment.ParticipantId
                                 && a.ChipId == existingEpcAssignment.ChipId
                                 && a.UnassignedAt == null
-                                && !a.AuditProperties.IsDeleted,
-                                includeNavigationProperties: true)
+                                && !a.AuditProperties.IsDeleted)
                             .FirstOrDefaultAsync(cancellationToken);
 
                         if (trackedEpcAssignment != null)
@@ -243,8 +246,8 @@ namespace Runnatics.Services
                                 && a.ParticipantId == existingBibAssignment.ParticipantId
                                 && a.ChipId == existingBibAssignment.ChipId
                                 && a.UnassignedAt == null
-                                && !a.AuditProperties.IsDeleted,
-                                includeNavigationProperties: true)
+                                && !a.AuditProperties.IsDeleted)
+                            .Include(a => a.Chip)
                             .FirstOrDefaultAsync(cancellationToken);
 
                         if (trackedBibAssignment != null)
@@ -475,13 +478,18 @@ namespace Runnatics.Services
                 }
 
                 var assignmentRepo = _repository.GetRepository<ChipAssignment>();
+                // Only Chip + Participant are mapped into the response. includeNavigationProperties
+                // would ALSO include Event (whose BannerImage blob is then materialized once PER
+                // ROW under AsNoTracking) — on a partially-mapped race that made this query ship
+                // N × banner and hang the BIB-mapping screen on resume.
                 var rawAssignments = await assignmentRepo
                     .GetQuery(
                         a => a.EventId == race.EventId
                             && a.Participant.RaceId == decryptedRaceId
                             && a.UnassignedAt == null
-                            && !a.AuditProperties.IsDeleted,
-                        includeNavigationProperties: true)
+                            && !a.AuditProperties.IsDeleted)
+                    .Include(a => a.Chip)
+                    .Include(a => a.Participant)
                     .AsNoTracking()
                     .ToListAsync(cancellationToken);
 
@@ -537,8 +545,7 @@ namespace Runnatics.Services
                 // Get active chip assignments for the event
                 var assignmentRepo = _repository.GetRepository<ChipAssignment>();
                 var mappedParticipantIds = await assignmentRepo
-                    .GetQuery(a => a.EventId == race.EventId && a.UnassignedAt == null && !a.AuditProperties.IsDeleted,
-                        includeNavigationProperties: true)
+                    .GetQuery(a => a.EventId == race.EventId && a.UnassignedAt == null && !a.AuditProperties.IsDeleted)
                     .Select(a => new { a.ParticipantId, a.ChipId, a.EventId, a.Chip.EPC, a.AssignedAt })
                     .AsNoTracking()
                     .ToListAsync(cancellationToken);

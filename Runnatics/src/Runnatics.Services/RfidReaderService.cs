@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using GDotnet.Reader.Api.DAL;
 using GDotnet.Reader.Api.Protocol.Gx;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Runnatics.Hubs;
@@ -27,10 +28,12 @@ namespace Runnatics.Services
 
         public RfidReaderService(
             IHubContext<BibMappingHub> hubContext,
-            ILogger<RfidReaderService> logger)
+            ILogger<RfidReaderService> logger,
+            IConfiguration configuration)
         {
             _hubContext = hubContext;
             _logger = logger;
+            _debounceMs = configuration.GetValue("R700Settings:DebounceMs", 2000);
 
             _tagChannel = CreateChannel();
         }
@@ -45,11 +48,12 @@ namespace Runnatics.Services
             });
         }
 
-        // Pending reads accumulator for 500ms RSSI debounce: EPC → best RSSI seen so far
+        // Pending reads accumulator for the RSSI debounce window: EPC → best RSSI seen so far.
+        // Window length comes from config (R700Settings:DebounceMs, default 2000).
         private readonly Dictionary<string, int> _pendingReads = [];
         private CancellationTokenSource? _debounceTokenSource;
         private readonly SemaphoreSlim _debounceLock = new(1, 1);
-        private const int DebounceMs = 500;
+        private readonly int _debounceMs;
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
@@ -65,7 +69,7 @@ namespace Runnatics.Services
 
                     ConnectAndStartInventory();
 
-                    // Process tags from channel with 500ms RSSI debounce
+                    // Process tags from channel with the configured RSSI debounce window
                     await foreach (var (epc, rssi) in _tagChannel.Reader.ReadAllAsync(stoppingToken))
                     {
                         await AccumulateAndDebounceAsync(epc, rssi, stoppingToken);
@@ -94,8 +98,9 @@ namespace Runnatics.Services
         }
 
         /// <summary>
-        /// Accumulates EPC reads for 500ms and broadcasts the best RSSI read per EPC.
-        /// If the same EPC arrives again before the window fires, its RSSI is updated if higher.
+        /// Accumulates EPC reads for the configured debounce window and broadcasts the best
+        /// RSSI read per EPC. If the same EPC arrives again before the window fires, its RSSI
+        /// is updated if higher.
         /// </summary>
         private async Task AccumulateAndDebounceAsync(string epc, int rssi, CancellationToken stoppingToken)
         {
@@ -116,7 +121,7 @@ namespace Runnatics.Services
                 {
                     try
                     {
-                        await Task.Delay(DebounceMs, debounceToken);
+                        await Task.Delay(_debounceMs, debounceToken);
 
                         // Flush window — grab all accumulated reads
                         Dictionary<string, int> batch;

@@ -320,11 +320,37 @@ namespace Runnatics.Services
                     return false;
                 }
 
+                // Stored OverallRank/CategoryRank are otherwise only recomputed on reprocess,
+                // so capture the effective ranking basis before the update to detect a change.
+                var basisBefore = RankCalculator.ResolveBasis(
+                    eventEntity.LeaderboardSettings, eventEntity.EventSettings?.RankOnNet ?? false);
+
                 // Update event and related entities
                 UpdateEventEntity(eventEntity, request, currentUserId);
 
                 // Persist changes
                 await SaveEventChangesAsync(eventEntity);
+
+                var basisAfter = RankCalculator.ResolveBasis(
+                    eventEntity.LeaderboardSettings, eventEntity.EventSettings?.RankOnNet ?? false);
+                if (basisBefore != basisAfter)
+                {
+                    var raceIds = await _repository.GetRepository<Race>().GetQuery(r =>
+                            r.EventId == eventId &&
+                            r.AuditProperties.IsActive &&
+                            !r.AuditProperties.IsDeleted)
+                        .Select(r => r.Id)
+                        .ToListAsync();
+
+                    foreach (var raceId in raceIds)
+                    {
+                        await RankCalculator.ApplyStoredRanksAsync(_repository, eventId, raceId, currentUserId);
+                    }
+
+                    _logger.LogInformation(
+                        "Leaderboard ranking basis changed for Event {EventId} (Overall {OldOverall}->{NewOverall}, Category {OldCategory}->{NewCategory}); re-ranked {RaceCount} races.",
+                        eventId, basisBefore.Overall, basisAfter.Overall, basisBefore.Category, basisAfter.Category, raceIds.Count);
+                }
 
                 _logger.LogInformation("Event updated successfully: {EventId} - {Name} by User {UserId}",
                                             id, eventEntity.Name, currentUserId);

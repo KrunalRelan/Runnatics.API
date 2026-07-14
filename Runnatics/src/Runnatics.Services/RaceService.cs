@@ -276,6 +276,7 @@ namespace Runnatics.Services
                 // ============================================
                 // Handle leaderboard settings override
                 // ============================================
+                var leaderboardSettingsChanged = false;
                 if (request.LeaderboardSettings != null && request.OverrideSettings.HasValue && request.OverrideSettings.Value)
                 {
                     var leaderboardRepo = _repository.GetRepository<LeaderboardSettings>();
@@ -314,6 +315,7 @@ namespace Runnatics.Services
                     }
 
                     await _repository.SaveChangesAsync();
+                    leaderboardSettingsChanged = true;
                 }
                 else if (!(request.OverrideSettings ?? false))
                 {
@@ -338,7 +340,15 @@ namespace Runnatics.Services
                         // await leaderboardRepo.UpdateAsync(existingRaceSettings);
 
                         await _repository.SaveChangesAsync();
+                        leaderboardSettingsChanged = true;
                     }
+                }
+
+                if (leaderboardSettingsChanged)
+                {
+                    // Stored ranks are otherwise only recomputed on reprocess; re-rank now so a
+                    // sort-basis change is reflected on the leaderboard immediately.
+                    await RankCalculator.ApplyStoredRanksAsync(_repository, raceEntity.EventId, raceEntity.Id, currentUserId);
                 }
 
                 _logger.LogInformation("Race updated successfully: {RaceId}", id);

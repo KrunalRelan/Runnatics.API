@@ -539,7 +539,7 @@ namespace Runnatics.Services
                 var mappedParticipantIds = await assignmentRepo
                     .GetQuery(a => a.EventId == race.EventId && a.UnassignedAt == null && !a.AuditProperties.IsDeleted,
                         includeNavigationProperties: true)
-                    .Select(a => new { a.ParticipantId, a.Chip.EPC, a.AssignedAt })
+                    .Select(a => new { a.ParticipantId, a.ChipId, a.EventId, a.Chip.EPC, a.AssignedAt })
                     .AsNoTracking()
                     .ToListAsync(cancellationToken);
 
@@ -582,7 +582,9 @@ namespace Runnatics.Services
                         Name = $"{p.FirstName} {p.LastName}".Trim(),
                         IsEpcMapped = mapping != null,
                         Epc = mapping?.EPC,
-                        MappedAt = mapping?.AssignedAt
+                        MappedAt = mapping?.AssignedAt,
+                        ChipId = mapping == null ? null : _encryptionService.Encrypt(mapping.ChipId.ToString()),
+                        EventId = mapping == null ? null : _encryptionService.Encrypt(mapping.EventId.ToString())
                     };
                 });
 

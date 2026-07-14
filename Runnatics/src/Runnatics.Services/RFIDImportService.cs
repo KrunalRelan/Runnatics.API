@@ -279,12 +279,14 @@ namespace Runnatics.Services
                             await chipRepo.UpdateAsync(chip);
                         }
 
-                        // Check if assignment already exists
+                        // Composite PK is (EventId, ParticipantId, ChipId). A soft-deleted or
+                        // unassigned row with the same triple would fail INSERT with a PK
+                        // violation, so reactivate it in place instead of adding a new row.
                         var existingAssignment = await chipAssignmentRepo.GetQuery(ca =>
                             ca.EventId == decryptedEventId &&
                             ca.ParticipantId == participant.Id &&
-                            ca.ChipId == chip.Id &&
-                            !ca.UnassignedAt.HasValue)
+                            ca.ChipId == chip.Id,
+                            ignoreQueryFilters: true)
                             .FirstOrDefaultAsync();
 
                         if (existingAssignment == null)
@@ -306,6 +308,17 @@ namespace Runnatics.Services
                                 }
                             };
                             await chipAssignmentRepo.AddAsync(assignment);
+                        }
+                        else if (existingAssignment.UnassignedAt.HasValue || existingAssignment.AuditProperties.IsDeleted)
+                        {
+                            existingAssignment.AssignedAt = DateTime.UtcNow;
+                            existingAssignment.UnassignedAt = null;
+                            existingAssignment.AssignedByUserId = userId;
+                            existingAssignment.AuditProperties.IsDeleted = false;
+                            existingAssignment.AuditProperties.IsActive = true;
+                            existingAssignment.AuditProperties.UpdatedBy = userId;
+                            existingAssignment.AuditProperties.UpdatedDate = DateTime.UtcNow;
+                            await chipAssignmentRepo.UpdateAsync(existingAssignment);
                         }
 
                         successCount++;

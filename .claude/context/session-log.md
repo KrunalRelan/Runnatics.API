@@ -2,6 +2,47 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-07-14 — Public results (GlobalResultsPage `/results`): Overall + Category views, per-gender N counts — Opus, NOT committed
+
+**Scope:** public site `GlobalResultsPage.tsx` reworked into Overall (default) + Category-dropdown views; small additive API change to surface the count settings.
+
+**API (`Runnatics.API`, additive/back-compatible):**
+- `Public/PublicGroupedLeaderboardDto.cs` — added `NumberOfResultsToShowOverall`, `NumberOfResultsToShowCategory` (int).
+- `PublicResultsService.GetPublicGroupedLeaderboardAsync` (~L430) — populate both from `leaderboardSettings?.NumberOfResultsToShow* ?? 0` (raw configured values, independent of the internal showAll truncation). The server-side overall truncation is a TOTAL cap, not per-gender, so the client caps per-gender itself.
+- Build `Runnatics.Services` ✅ 0 errors.
+
+**UI (`C:\Projects\Runnatics.UI\Runnatics.Ui`):**
+- `api/publicApi.ts` — added `numberOfResultsToShowOverall?`/`numberOfResultsToShowCategory?` to `GroupedLeaderboardResponse`.
+- `pages/public/GlobalResultsPage.tsx` — full rework:
+  - Removed the **Gender** filter dropdown; Male + Female ALWAYS both shown (empty gender → "No results." column).
+  - `LeaderboardView` now sends `showAll:true`; new `selectedCategory` state + **Category dropdown** (options = "Overall" + distinct real categories from `genderCategories`, sorted by start-age; resets to Overall on race switch via effect).
+  - Heading band CENTERED — "Overall" by default, category name when a category is selected.
+  - Overall view: split flat `overallResults` by gender, cap at `numberOfResultsToShowOverall` (fallback 5), **renumber 1..N per gender**, render `GenderBlock` = podium(top3)+table(rest) side by side.
+  - Category view: Overall hidden; selected category's participants per gender, cap at `numberOfResultsToShowCategory` (fallback 5), same podium+table. **Podium counts toward N** (user-confirmed): Overall 4 = 3 podium+1 row; Category 5 = 3 podium+2 rows.
+  - New helpers/components: `timeOf`, `takeRanked` (per-gender renumber), `ResultTable`, `GenderBlock`; `PodiumSection` parametrized by `rankBy` (was hardcoded chip time). Removed old `derivePodiumForGender`/`CategoryTable`.
+  - Race switching (Year/Event/Race dropdowns) preserved.
+- `npm run build` (Vite) ✅ 0 errors.
+
+**Design note (confirmed):** target page = GlobalResultsPage (not EventResultsPage/LeaderboardPage); podium included in N. Category view given a podium too (mirrors Overall) — user can request plain-tables-only if preferred.
+
+**Not committed** — awaiting user go-ahead. Live drive of `/results` (event+race → Overall; pick category → category-only; race switch) still to confirm against real data.
+
+### 2026-07-14 — BIB Mapping: chip-left-on-reader duplicate/concatenation fix (UI repo `C:\Projects\Runnatics.UI\Runnatics.Ui`) — Opus, NOT committed
+
+**Reader:** Identium IDTS-103 USB keyboard-wedge (types EPC + Enter into the focused field). **Repro:** map a BIB → cursor auto-advances → chip still on pad → reader re-reads → same EPC types into the NEW field. Evidence: BIB 5232 field showed `44500146F6BB44500146F6BB` (12-char EPC doubled); "Duplicate attempts: 5".
+
+**Root cause (diagnosed, not assumed):** the lockout in `BibMapping.tsx` `handleSubmit` gated only the Enter→map action AND returned early **without clearing `pendingEpc`** → re-reads accumulated/concatenated in the next field; the 24-char doubled value then passed the 12–32 hex check and popped the duplicate dialog. NaN theory was dead — `Number(...) || 2000` (`environment.ts:9`) already hard-defaults to 2000 so a missing `VITE_BIB_MAP_LOCKOUT_MS` can't disable it. Lockout was already global (single ref), not per-BIB.
+
+**Fix (all in `pages/admin/bibMapping/BibMapping.tsx`; no API/SQL):**
+- **Same-EPC guard (primary):** `lastMappedEpcRef` set on every successful map/override; `handleSubmit` ignores a read whose EPC `=== lastEpc` OR `startsWith(lastEpc)` (re-read fragment) → clears field + non-blocking hint, no map, no duplicate-count. Armed until a DIFFERENT chip maps or Resume. Works past the 2 s window (that's the point — coarse lockout expires, this doesn't).
+- **Concatenation guard:** reject even-length ≥24 where `firstHalf===secondHalf` → clear + hint.
+- **Clear-on-ignore:** every gated path (paused / lockout / same-EPC / doubled) now clears `pendingEpc` → kills the concatenation.
+- **Pause/Resume:** `paused` state; gates `onChangeEpc` (no keystrokes land) + `handleSubmit` + SignalR multi-EPC effect; filled warning banner + button; status label/dot. Resume clears the same-chip guard (escape hatch for deliberate re-map of the same chip) — hint text names it.
+- **Reset on race change:** `useEffect([eventId, raceId])` clears the guards so the first scan of a new session isn't swallowed.
+- Design decision (approved): did NOT blanket-block keystrokes for the 2 s window — that would drop a legitimate DIFFERENT chip scanned within it. Same-EPC guard + clear-on-ignore targets the still-on-pad chip instead. Full keystroke block reserved for Paused.
+
+**Build:** `npm run build` (Vite) ✅ 0 errors (pre-existing chunk-size warnings only). VERIFY done at code-trace level (pure client logic); the decisive hardware repro (chip left on pad → nothing lands in next BIB, hint, counter frozen) still to be confirmed by operator. **Not committed — awaiting user go-ahead.**
+
 ### 2026-06-30 — Manual-edit path now applies the valid-start floor + is negative-safe (parallel-impl catch-up) — Opus
 
 **⚠️ PUSHED TO MASTER UNVERIFIED (user-authorized).** Build green. The manual-time edit (`ResultsService.RecordManualTimeAsync`) was the divergent parallel impl that never got the floor / negative-safe fixes the pipeline already has: it rejected ANY crossing at/before the GUN (`chipTimeMs <= 0`) and hard-errored (`ErrorMessage` → 500). So a valid slightly-early start (06:07:41, after the floor) AND a pre-floor stray (06:06:41) both 500'd.
@@ -1575,3 +1616,6 @@ Reader confirmed: IDTS-103 in HID keyboard-wedge mode.
 **Item 3 — dialog wording:** first line now "EPC {epc} is already mapped to BIB #{bib} (name)." (was "This chip (EPC: …)"). No other change — client confirmed the dialog itself.
 **Item 2 — NO app code:** wedge mode = browser sees only typed chars; true single-tag enforcement is IDTS-103 reader-side config (client note). TCP/SignalR MultipleEpcDetected path left as-is.
 **Verify:** API build 0 errors; UI tsc + vite build clean. Test suite still blocked (no .NET 8 runtime on machine).
+
+## 2026-07-13 (same session) — Item 1 CLARIFIED: "freeze" = sticky header, IMPLEMENTED (committed, not pushed)
+Punit's "Freez this in BIB Mapping" = pin the progress header (All BIBs mapped / total mapped / remaining / progress bar) + search bar + status filter while the table scrolls (Excel freeze-panes style) — NOT a hang (though the resume hang we fixed was real and stays fixed). UI-only: `BibMapping.tsx` wraps the progress Paper + search/filter Box in `position: sticky; top: {xs:56, sm:64}` (clears the fixed AppBar), zIndex 20, opaque `background.default`. InstructionsCard still scrolls away (not requested). tsc + vite build clean. UI commit after the lockout commit.

@@ -428,6 +428,8 @@ namespace Runnatics.Services
                     CategoryRankBy    = categoryRankOnNet ? "ChipTime" : "GunTime",
                     ShowOverall       = showOverall,
                     ShowCategory      = showCategory,
+                    NumberOfResultsToShowOverall  = leaderboardSettings?.NumberOfResultsToShowOverall ?? 0,
+                    NumberOfResultsToShowCategory = leaderboardSettings?.NumberOfResultsToShowCategory ?? 0,
                     EventBannerBase64 = eventEntity.BannerImage,
                     Podium            = podium,
                     GenderCategories  = grouped,

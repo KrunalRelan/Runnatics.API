@@ -20,6 +20,12 @@ namespace Runnatics.Models.Client.Public
         public bool ShowOverall { get; set; } = true;
         public bool ShowCategory { get; set; } = true;
 
+        // Configured per-section "results to show" counts (LeaderboardSettings). Surfaced so the
+        // public page can cap PER GENDER client-side (the server-side truncation is a total cap,
+        // not per-gender). 0 = unset; the client applies its own default.
+        public int NumberOfResultsToShowOverall { get; set; }
+        public int NumberOfResultsToShowCategory { get; set; }
+
         public string? EventBannerBase64 { get; set; }
         public PublicPodiumDto Podium { get; set; } = new();
         public List<PublicGenderGroupDto> GenderCategories { get; set; } = [];

@@ -20,6 +20,9 @@ namespace Runnatics.Models.Client.Public
         public bool ShowOverall { get; set; } = true;
         public bool ShowCategory { get; set; } = true;
 
+        // True when the event's results are published — gates the "OFFICIAL RESULTS" badge.
+        public bool ResultsPublished { get; set; }
+
         // Configured per-section "results to show" counts (LeaderboardSettings). Surfaced so the
         // public page can cap PER GENDER client-side (the server-side truncation is a total cap,
         // not per-gender). 0 = unset; the client applies its own default.

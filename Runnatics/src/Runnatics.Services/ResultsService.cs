@@ -30,6 +30,7 @@ namespace Runnatics.Services
         // Resolve IRaceNotificationService from a fresh scope per call (see RecordManualTimeAsync) —
         // it shares the request DbContext, so it must never run on a background thread against it.
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly ICategoryNormalizer _categoryNormalizer;
 
         public ResultsService(
             IUnitOfWork<RaceSyncDbContext> repository,
@@ -38,7 +39,8 @@ namespace Runnatics.Services
             IUserContextService userContext,
             IEncryptionService encryptionService,
             IRFIDImportService rfidImportService,
-            IServiceScopeFactory scopeFactory)
+            IServiceScopeFactory scopeFactory,
+            ICategoryNormalizer categoryNormalizer)
             : base(repository)
         {
             _mapper = mapper;
@@ -47,6 +49,7 @@ namespace Runnatics.Services
             _encryptionService = encryptionService;
             _rfidImportService = rfidImportService;
             _scopeFactory = scopeFactory;
+            _categoryNormalizer = categoryNormalizer;
         }
 
         public async Task<SplitTimeCalculationResponse> CalculateSplitTimesAsync(CalculateSplitTimesRequest request)
@@ -2925,9 +2928,12 @@ namespace Runnatics.Services
                     return false;
                 }
 
+                // Resolve to the event's canonical AgeCategory casing before the transaction.
+                var resolvedAgeCategory = await _categoryNormalizer.ResolveAgeCategoryAsync(decryptedEventId, newAgeCategory, ct);
+
                 await _repository.ExecuteInTransactionAsync(async () =>
                 {
-                    participant.AgeCategory = string.IsNullOrWhiteSpace(newAgeCategory) ? "Unknown" : newAgeCategory.Trim();
+                    participant.AgeCategory = resolvedAgeCategory;
                     participant.AuditProperties.UpdatedBy = userId;
                     participant.AuditProperties.UpdatedDate = DateTime.UtcNow;
                     await participantRepo.UpdateAsync(participant);

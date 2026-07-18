@@ -23,12 +23,14 @@ namespace Runnatics.Services
         IMapper mapper,
         ILogger<ParticipantImportService> logger,
         IUserContextService userContext,
-        IEncryptionService encryptionService) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
+        IEncryptionService encryptionService,
+        ICategoryNormalizer categoryNormalizer) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
     {
         protected readonly IMapper _mapper = mapper;
         private readonly ILogger<ParticipantImportService> _logger = logger;
         private readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
+        private readonly ICategoryNormalizer _categoryNormalizer = categoryNormalizer;
 
         public async Task<ParticipantImportResponse> UploadParticipantsCsvAsync(string eventId, ParticipantImportRequest request)
         {
@@ -302,6 +304,8 @@ namespace Runnatics.Services
                             continue;
                         }
 
+                        var ageCategory = await _categoryNormalizer.ResolveAgeCategoryAsync(decryptedEventId, record.AgeCategory);
+
                         var participant = new Models.Data.Entities.Participant
                         {
                             TenantId = tenantId,
@@ -312,7 +316,7 @@ namespace Runnatics.Services
                             Email = record.Email,
                             Phone = record.Mobile,
                             Gender = string.IsNullOrWhiteSpace(record.Gender) ? "Unknown" : NormalizeGenderForWrite(record.Gender),
-                            AgeCategory = string.IsNullOrWhiteSpace(record.AgeCategory) ? "Unknown" : record.AgeCategory.Trim(),
+                            AgeCategory = ageCategory,
                             ImportBatchId = decryptedImportBatchId,
                             Status = "Registered",
                             AuditProperties = new Models.Data.Common.AuditProperties
@@ -783,7 +787,7 @@ namespace Runnatics.Services
                 participant.RaceId = raceIdInt;
                 participant.TenantId = _userContext.TenantId;
                 participant.Gender = string.IsNullOrWhiteSpace(participant.Gender) ? "Unknown" : NormalizeGenderForWrite(participant.Gender);
-                participant.AgeCategory = string.IsNullOrWhiteSpace(participant.AgeCategory) ? "Unknown" : participant.AgeCategory.Trim();
+                participant.AgeCategory = await _categoryNormalizer.ResolveAgeCategoryAsync(eventIdInt, participant.AgeCategory);
 
                 // Duplicate bib check: ensure no active participant exists with same bib in same tenant/event/race
                 if (!string.IsNullOrWhiteSpace(participant.BibNumber))
@@ -848,7 +852,7 @@ namespace Runnatics.Services
 
                 _mapper.Map(editParticipant, existingParticipant);
                 existingParticipant.Gender = string.IsNullOrWhiteSpace(existingParticipant.Gender) ? "Unknown" : NormalizeGenderForWrite(existingParticipant.Gender);
-                existingParticipant.AgeCategory = string.IsNullOrWhiteSpace(existingParticipant.AgeCategory) ? "Unknown" : existingParticipant.AgeCategory.Trim();
+                existingParticipant.AgeCategory = await _categoryNormalizer.ResolveAgeCategoryAsync(existingParticipant.EventId, existingParticipant.AgeCategory);
 
                 ///If existing race id is different than the new race id, then user is moving participant to another race.
                 ///so, we need to delete that record from existing and add a new record in the new race.
@@ -1223,6 +1227,10 @@ namespace Runnatics.Services
                             notFoundBibs.Add(record.BibNumber);
                             continue;
                         }
+
+                        // Normalize AgeCategory casing to the event's canonical before applying.
+                        if (!string.IsNullOrWhiteSpace(record.AgeCategory))
+                            record.AgeCategory = await _categoryNormalizer.ResolveAgeCategoryAsync(decryptedEventId, record.AgeCategory);
 
                         // Apply updates using helper method
                         if (ApplyUpdateToParticipant(participant, record))
@@ -2138,7 +2146,7 @@ namespace Runnatics.Services
                 if (request.LastName != null) participant.LastName = request.LastName;
                 if (request.Mobile != null) participant.Phone = request.Mobile;
                 if (request.Email != null) participant.Email = request.Email;
-                if (request.AgeCategory != null) participant.AgeCategory = string.IsNullOrWhiteSpace(request.AgeCategory) ? "Unknown" : request.AgeCategory.Trim();
+                if (request.AgeCategory != null) participant.AgeCategory = await _categoryNormalizer.ResolveAgeCategoryAsync(participant.EventId, request.AgeCategory);
                 if (request.DateOfBirth.HasValue) participant.DateOfBirth = request.DateOfBirth;
                 if (request.ManualDistance.HasValue) participant.ManualDistance = request.ManualDistance;
                 if (request.LoopCount.HasValue) participant.LoopCount = request.LoopCount;

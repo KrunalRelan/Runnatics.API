@@ -4,6 +4,9 @@ namespace Runnatics.Models.Client.Public
     {
         public string EncryptedId { get; set; } = string.Empty;
 
+        // Human-readable slug for the event detail route (/events/:slug).
+        public string Slug { get; set; } = string.Empty;
+
         public string Name { get; set; } = string.Empty;
 
         public string? City { get; set; }

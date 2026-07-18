@@ -991,8 +991,6 @@ namespace Runnatics.Services
                 var query = eventRepo.GetQuery(e =>
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
-                    e.EventSettings != null &&
-                    (e.EventSettings.Published || e.EventSettings.ConfirmedEvent) &&
                     (request.City == null || (e.City != null && e.City.Contains(request.City))) &&
                     (searchQuery == null || e.Name.Contains(searchQuery)) &&
                     (request.Year == null || e.EventDate.Year == request.Year.Value))
@@ -1001,13 +999,25 @@ namespace Runnatics.Services
                         .ThenInclude(r => r.RaceSettings)
                     .AsNoTracking();
 
+                // Upcoming events display regardless of publish state (EventDate >= today,
+                // active, not deleted). Past/all still require a published-or-confirmed event
+                // so drafts never surface publicly.
                 IQueryable<Event> orderedQuery;
                 if (normalizedStatus == "upcoming")
-                    orderedQuery = query.Where(e => e.EventDate.Date >= today).OrderBy(e => e.EventDate);
+                    orderedQuery = query
+                        .Where(e => e.EventDate.Date >= today)
+                        .OrderBy(e => e.EventDate);
                 else if (normalizedStatus == "past")
-                    orderedQuery = query.Where(e => e.EventDate.Date < today).OrderByDescending(e => e.EventDate);
+                    orderedQuery = query
+                        .Where(e => e.EventDate.Date < today
+                            && e.EventSettings != null
+                            && (e.EventSettings.Published || e.EventSettings.ConfirmedEvent))
+                        .OrderByDescending(e => e.EventDate);
                 else
-                    orderedQuery = query.OrderByDescending(e => e.EventDate);
+                    orderedQuery = query
+                        .Where(e => e.EventSettings != null
+                            && (e.EventSettings.Published || e.EventSettings.ConfirmedEvent))
+                        .OrderByDescending(e => e.EventDate);
 
                 var totalCount = await orderedQuery.CountAsync(ct);
 
@@ -1151,6 +1161,7 @@ namespace Runnatics.Services
             return new PublicEventSummaryDto
             {
                 EncryptedId = _encryptionService.Encrypt(e.Id.ToString()),
+                Slug = e.Slug,
                 Name = e.Name,
                 City = e.City,
                 State = e.State,

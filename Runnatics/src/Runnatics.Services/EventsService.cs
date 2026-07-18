@@ -983,7 +983,10 @@ namespace Runnatics.Services
                 var page = Math.Max(1, request.PageNumber);
                 var pageSize = Math.Clamp(request.PageSize, 1, MaxPublicPageSize);
 
-                var today = DateTime.UtcNow.Date;
+                // Compare full DATETIME in UTC (not date-only): an event whose start time
+                // has passed is PAST even on the same calendar day. EventDate is UTC; the
+                // TimeZone column is display metadata only, never used for this decision.
+                var now = DateTime.UtcNow;
                 var normalizedStatus = request.Status?.ToLowerInvariant();
                 var searchQuery = string.IsNullOrEmpty(request.SearchString) ? null : request.SearchString;
                 var eventRepo = _repository.GetRepository<Event>();
@@ -1005,11 +1008,11 @@ namespace Runnatics.Services
                 IQueryable<Event> orderedQuery;
                 if (normalizedStatus == "upcoming")
                     orderedQuery = query
-                        .Where(e => e.EventDate.Date >= today)
+                        .Where(e => e.EventDate > now)
                         .OrderBy(e => e.EventDate);
                 else if (normalizedStatus == "past")
                     orderedQuery = query
-                        .Where(e => e.EventDate.Date < today
+                        .Where(e => e.EventDate <= now
                             && e.EventSettings != null
                             && (e.EventSettings.Published || e.EventSettings.ConfirmedEvent))
                         .OrderByDescending(e => e.EventDate);
@@ -1109,7 +1112,8 @@ namespace Runnatics.Services
         {
             try
             {
-                var today = DateTime.UtcNow.Date;
+                // Full DATETIME in UTC — consistent with the public event split.
+                var now = DateTime.UtcNow;
                 var eventRepo = _repository.GetRepository<Event>();
                 var baseQuery = eventRepo.GetQuery(e =>
                     e.AuditProperties.IsActive &&
@@ -1117,8 +1121,8 @@ namespace Runnatics.Services
                     e.EventSettings != null &&
                     (e.EventSettings.Published || e.EventSettings.ConfirmedEvent));
 
-                int upcoming = await baseQuery.Where(e => e.EventDate.Date >= today).CountAsync(ct);
-                int past = await baseQuery.Where(e => e.EventDate.Date < today).CountAsync(ct);
+                int upcoming = await baseQuery.Where(e => e.EventDate > now).CountAsync(ct);
+                int past = await baseQuery.Where(e => e.EventDate <= now).CountAsync(ct);
 
                 return new PublicStatsDto
                 {

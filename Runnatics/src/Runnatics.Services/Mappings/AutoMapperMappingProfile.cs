@@ -94,6 +94,8 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.RegistrationDeadline, opt => opt.Ignore()) // Not set at creation time
                 .ForMember(dest => dest.BannerImage, opt => opt.Ignore()) // Handled manually in service
                 .ForMember(dest => dest.BannerContentType, opt => opt.Ignore())
+                .ForMember(dest => dest.Thumbnail, opt => opt.Ignore()) // Handled manually in service
+                .ForMember(dest => dest.ThumbnailContentType, opt => opt.Ignore())
                 .ForMember(dest => dest.EventSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.LeaderboardSettings, opt => opt.Ignore()) // Handled separately
                 .ForMember(dest => dest.AuditProperties, opt => opt.Ignore()) // Set by service
@@ -131,7 +133,8 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.IsActive, opt => opt.MapFrom(src => src.AuditProperties.IsActive))
                 .ForMember(dest => dest.EventOrganizerId, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.EventOrganizerId))
                 .ForMember(dest => dest.EventOrganizerName, opt => opt.MapFrom(src => src.EventOrganizer != null ? src.EventOrganizer.Name : null))
-                .ForMember(dest => dest.BannerBase64, opt => opt.MapFrom(src => src.BannerImage));
+                .ForMember(dest => dest.BannerBase64, opt => opt.MapFrom(src => src.BannerImage))
+                .ForMember(dest => dest.ThumbnailBase64, opt => opt.MapFrom(src => src.Thumbnail));
 
             // EventSettings mappings
             CreateMap<EventSettingsRequest, EventSettings>()

@@ -16,6 +16,9 @@ namespace Runnatics.Models.Client.Public
 
         public string? BannerBase64 { get; set; }
 
+        // Thumbnail for event tiles; falls back to banner when absent.
+        public string? ThumbnailBase64 { get; set; }
+
         // Truncated to 200 chars max at the mapping layer
         public string? Description { get; set; }
 

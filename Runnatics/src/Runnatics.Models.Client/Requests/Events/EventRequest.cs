@@ -43,6 +43,9 @@ namespace Runnatics.Models.Client.Requests.Events
         // Banner — base64 encoded. On create: saved as-is. On update: only saved if no banner exists.
         public string? BannerBase64 { get; set; }
 
+        // Thumbnail — base64 encoded. Optional; used for event tiles. Replaceable on update.
+        public string? ThumbnailBase64 { get; set; }
+
         // Event Settings
         public EventSettingsRequest? EventSettings { get; set; }
 

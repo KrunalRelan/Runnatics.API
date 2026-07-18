@@ -592,6 +592,12 @@ namespace Runnatics.Services
                 eventEntity.BannerImage = request.BannerBase64;
             }
 
+            // Save thumbnail on create if provided
+            if (!string.IsNullOrEmpty(request.ThumbnailBase64))
+            {
+                eventEntity.Thumbnail = request.ThumbnailBase64;
+            }
+
             // Add event settings if provided
             if (request.EventSettings != null)
             {
@@ -860,6 +866,12 @@ namespace Runnatics.Services
                 eventEntity.BannerImage = request.BannerBase64;
             }
 
+            // Thumbnail is replaceable on update — overwrite whenever a new one is supplied
+            if (!string.IsNullOrEmpty(request.ThumbnailBase64))
+            {
+                eventEntity.Thumbnail = request.ThumbnailBase64;
+            }
+
             // Update audit properties
             UpdateAuditProperties(eventEntity.AuditProperties, currentUserId);
 
@@ -1120,6 +1132,14 @@ namespace Runnatics.Services
             return e.BannerImage;
         }
 
+        // Thumbnail for event tiles; falls back to the banner when no thumbnail is set.
+        private static string? GetEventThumbnailBase64(Event e)
+        {
+            if (!string.IsNullOrEmpty(e.Thumbnail))
+                return e.Thumbnail;
+            return GetEventBannerBase64(e);
+        }
+
         private PublicEventSummaryDto MapToEventSummaryDto(Event e)
         {
             var publishedRaces = e.Races?
@@ -1137,6 +1157,7 @@ namespace Runnatics.Services
                 EventDate = e.EventDate,
                 HeroImageUrl = null,
                 BannerBase64 = GetEventBannerBase64(e),
+                ThumbnailBase64 = GetEventThumbnailBase64(e),
                 Description = e.Description != null && e.Description.Length > 200
                     ? e.Description[..200] + "..."
                     : e.Description,

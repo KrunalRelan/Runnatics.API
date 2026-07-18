@@ -57,5 +57,7 @@ namespace Runnatics.Models.Client.Responses.Events
         public string EventType { get; set; } = string.Empty;
 
         public string? BannerBase64 { get; set; }
+
+        public string? ThumbnailBase64 { get; set; }
     }
 }

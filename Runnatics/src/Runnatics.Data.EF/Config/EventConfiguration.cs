@@ -98,6 +98,14 @@ namespace Runnatics.Data.EF.Config
                 .HasColumnName("BannerContentType")
                 .HasMaxLength(50);
 
+            builder.Property(e => e.Thumbnail)
+                .HasColumnName("Thumbnail")
+                .HasColumnType("nvarchar(max)");
+
+            builder.Property(e => e.ThumbnailContentType)
+                .HasColumnName("ThumbnailContentType")
+                .HasMaxLength(50);
+
             // Configure AuditProperties to match your database schema
             builder.OwnsOne(e => e.AuditProperties, ap =>
             {

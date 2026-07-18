@@ -61,6 +61,12 @@ namespace Runnatics.Models.Data.Entities
         [MaxLength(50)]
         public string? BannerContentType { get; set; }
 
+        // Thumbnail — base64-encoded image stored in DB (used for event tiles)
+        public string? Thumbnail { get; set; }
+
+        [MaxLength(50)]
+        public string? ThumbnailContentType { get; set; }
+
         public AuditProperties AuditProperties { get; set; } = new AuditProperties();
 
         // Navigation Properties

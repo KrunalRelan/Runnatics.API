@@ -40,15 +40,24 @@ namespace Runnatics.Services
 
             if (alreadySent) return;
 
-            var checkpoint = await unitOfWork.GetRepository<Checkpoint>()
-                .GetQuery(c => c.Id == checkpointId)
+            var race = await unitOfWork.GetRepository<Race>()
+                .GetQuery(r => r.Id == raceId)
                 .AsNoTracking()
                 .FirstOrDefaultAsync(ct);
 
+            // Provisional elapsed time at this checkpoint (cumulative ms from race start).
+            var split = await unitOfWork.GetRepository<SplitTimes>()
+                .GetQuery(s => s.ParticipantId == participantId && s.ToCheckpointId == checkpointId)
+                .AsNoTracking()
+                .OrderByDescending(s => s.Id)
+                .FirstOrDefaultAsync(ct);
+
+            // MSG91 template 6a4cc0c9 is positional: var1=name, var2=provisional time, var3=race.
             var variables = new Dictionary<string, string>
             {
-                ["name1"] = $"{participant.FirstName} {participant.LastName}".Trim(),
-                ["event"] = checkpoint?.Name ?? "Checkpoint"
+                ["var1"] = $"{participant.FirstName} {participant.LastName}".Trim(),
+                ["var2"] = FormatMs(split?.SplitTimeMs),
+                ["var3"] = race?.Title ?? string.Empty
             };
 
             var result = await smsService.SendCheckpointSmsAsync(participantId, raceId, phone, variables, ct);
@@ -78,11 +87,12 @@ namespace Runnatics.Services
             // SMS via MSG91
             if (!string.IsNullOrWhiteSpace(participant.Phone))
             {
+                // MSG91 template 69e08448 is positional: var1=name, var2=time, var3=race.
                 var smsVars = new Dictionary<string, string>
                 {
-                    ["name1"] = participantName,
-                    ["time"] = finishTime,
-                    ["event"] = raceName
+                    ["var1"] = participantName,
+                    ["var2"] = finishTime,
+                    ["var3"] = raceName
                 };
                 var smsResult = await smsService.SendCompletionSmsAsync(participantId, raceId, participant.Phone, smsVars, ct);
                 await LogAsync("SMS", "RaceCompletion", participantId, raceId, participant.Phone, smsResult, ct);
@@ -138,15 +148,15 @@ namespace Runnatics.Services
                 .AsNoTracking()
                 .FirstOrDefaultAsync(ct);
 
-            // Keys MUST match the MSG91 template's named tokens exactly: name, bib, race, date, venue.
+            // MSG91 template 6a5b4ff is positional: var1=name, var2=bib, var3=race, var4=date, var5=venue.
             var variables = new Dictionary<string, string>
             {
-                ["name"] = $"{participant.FirstName} {participant.LastName}".Trim(),
-                ["bib"] = participant.BibNumber ?? string.Empty,
-                ["race"] = race?.Title ?? evt?.Name ?? string.Empty,
-                ["date"] = FormatEventLocalDate(evt?.EventDate, evt?.TimeZone),
-                // Never empty — the template renders "at {venue}", so a blank would dangle.
-                ["venue"] = FirstNonBlank(evt?.VenueName, evt?.City, evt?.Name) ?? "-"
+                ["var1"] = $"{participant.FirstName} {participant.LastName}".Trim(),
+                ["var2"] = participant.BibNumber ?? string.Empty,
+                ["var3"] = race?.Title ?? evt?.Name ?? string.Empty,
+                ["var4"] = FormatEventLocalDate(evt?.EventDate, evt?.TimeZone),
+                // Never empty — the template renders "at {var5}", so a blank would dangle.
+                ["var5"] = FirstNonBlank(evt?.VenueName, evt?.City, evt?.Name) ?? "-"
             };
 
             var result = await smsService.SendBibAssignedSmsAsync(participantId, raceId, phone, variables, ct);

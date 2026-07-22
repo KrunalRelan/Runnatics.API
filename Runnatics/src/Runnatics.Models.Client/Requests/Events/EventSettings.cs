@@ -11,5 +11,8 @@
         public bool ConfirmedEvent { get; set; } = false;
 
         public bool AllowNameCheck { get; set; } = true;
+
+        // Default false — completion SMS auto-send is off unless the organizer enables it.
+        public bool AutoSendCompletionSms { get; set; } = false;
     }
 }

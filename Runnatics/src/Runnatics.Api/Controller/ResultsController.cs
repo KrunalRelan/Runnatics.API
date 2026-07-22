@@ -73,6 +73,40 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Manual "Send Results SMS" — queue a completion SMS for every finished participant in the race.
+        /// Returns immediately; the queue drains in the background. Dedupe prevents double-sends.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/send-results-sms")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<SendResultsSmsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> SendResultsSms(string eventId, string raceId)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId))
+            {
+                return BadRequest(new { error = "Event ID and Race ID are required." });
+            }
+
+            var response = new ResponseBase<SendResultsSmsResponse>();
+            var result = await _service.SendResultsSmsAsync(eventId, raceId);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<SendResultsSmsResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return StatusCode((int)HttpStatusCode.InternalServerError, response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
         /// Calculate final results, rankings, and identify finishers
         /// </summary>
         [HttpPost("{eventId}/{raceId}/calculate-results")]

@@ -18,6 +18,11 @@ namespace Runnatics.Services.Interface
         Task<ResultsCalculationResponse> CalculateResultsAsync(CalculateResultsRequest request);
 
         /// <summary>
+        /// Manual "Send Results SMS": queues a completion SMS for every finished participant in the race.
+        /// </summary>
+        Task<SendResultsSmsResponse> SendResultsSmsAsync(string eventId, string raceId);
+
+        /// <summary>
         /// Gets leaderboard with filtering and pagination
         /// </summary>
         Task<LeaderboardResponse> GetLeaderboardAsync(GetLeaderboardRequest request);

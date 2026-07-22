@@ -84,21 +84,18 @@ namespace Runnatics.Services
             var finishTime = FormatMs(raceResult.FinishTime);
             var rank = raceResult.OverallRank ?? 0;
 
-            // SMS via MSG91
-            if (!string.IsNullOrWhiteSpace(participant.Phone))
-            {
-                // MSG91 template 69e08448 is positional: var1=name, var2=time, var3=race.
-                var smsVars = new Dictionary<string, string>
-                {
-                    ["var1"] = participantName,
-                    ["var2"] = finishTime,
-                    ["var3"] = raceName
-                };
-                var smsResult = await smsService.SendCompletionSmsAsync(participantId, raceId, participant.Phone, smsVars, ct);
-                await LogAsync("SMS", "RaceCompletion", participantId, raceId, participant.Phone, smsResult, ct);
-            }
+            // SMS auto-send is gated per-event (default OFF). Email is NOT gated — it keeps its
+            // current auto-send behavior. The manual "Send Results SMS" path bypasses this gate.
+            var autoSendSms = await unitOfWork.GetRepository<EventSettings>()
+                .GetQuery(s => s.EventId == participant.EventId)
+                .AsNoTracking()
+                .Select(s => (bool?)s.AutoSendCompletionSms)
+                .FirstOrDefaultAsync(ct) ?? false;
 
-            // Email via Hostinger SMTP
+            if (autoSendSms)
+                await SendCompletionSmsCoreAsync(participant, raceId, raceResult, force: false, ct);
+
+            // Email via Hostinger SMTP (unchanged)
             if (!string.IsNullOrWhiteSpace(participant.Email))
             {
                 var htmlBody = emailTemplateService.BuildRaceResultNotification(
@@ -110,6 +107,59 @@ namespace Runnatics.Services
                 var emailResult = sent ? NotificationResult.Ok() : NotificationResult.Fail("SMTP send failed");
                 await LogAsync("Email", "RaceCompletion", participantId, raceId, participant.Email, emailResult, ct);
             }
+        }
+
+        // Manual "Send Results SMS" path — SMS only (no email), bypasses the per-event auto toggle,
+        // but still dedupes so clicking twice / re-running won't double-send. Used by the queue.
+        public async Task NotifyCompletionSmsAsync(
+            int participantId, int raceId, bool force = false,
+            CancellationToken ct = default)
+        {
+            var participant = await LoadParticipantAsync(participantId, ct);
+            if (participant == null) return;
+
+            var raceResult = await unitOfWork.GetRepository<Results>()
+                .GetQuery(r => r.ParticipantId == participantId && r.RaceId == raceId)
+                .AsNoTracking()
+                .Include(r => r.Race)
+                .FirstOrDefaultAsync(ct);
+
+            if (raceResult == null) return;
+
+            await SendCompletionSmsCoreAsync(participant, raceId, raceResult, force, ct);
+        }
+
+        // Shared completion-SMS send: phone gate + dedupe (unless force) + positional var1/var2/var3
+        // + log. Used by both the auto (finish-triggered) and manual (bulk) paths.
+        private async Task SendCompletionSmsCoreAsync(
+            Participant participant, int raceId, Results raceResult, bool force, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(participant.Phone)) return;
+
+            if (!force)
+            {
+                var alreadySent = await unitOfWork.GetRepository<NotificationLog>()
+                    .GetQuery()
+                    .AnyAsync(n =>
+                        n.Channel == "SMS" &&
+                        n.EventType == "RaceCompletion" &&
+                        n.ParticipantId == participant.Id &&
+                        n.RaceId == raceId &&
+                        n.Success, ct);
+
+                if (alreadySent) return;
+            }
+
+            // MSG91 template 69e08448 is positional: var1=name, var2=time, var3=race.
+            var smsVars = new Dictionary<string, string>
+            {
+                ["var1"] = $"{participant.FirstName} {participant.LastName}".Trim(),
+                ["var2"] = FormatMs(raceResult.FinishTime),
+                ["var3"] = raceResult.Race?.Title ?? string.Empty
+            };
+
+            var smsResult = await smsService.SendCompletionSmsAsync(participant.Id, raceId, participant.Phone, smsVars, ct);
+            await LogAsync("SMS", "RaceCompletion", participant.Id, raceId, participant.Phone, smsResult, ct);
         }
 
         public async Task NotifyBibAssignedAsync(

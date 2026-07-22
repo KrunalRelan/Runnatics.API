@@ -31,6 +31,7 @@ namespace Runnatics.Services
         // it shares the request DbContext, so it must never run on a background thread against it.
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ICategoryNormalizer _categoryNormalizer;
+        private readonly ICompletionSmsQueue _completionSmsQueue;
 
         public ResultsService(
             IUnitOfWork<RaceSyncDbContext> repository,
@@ -40,7 +41,8 @@ namespace Runnatics.Services
             IEncryptionService encryptionService,
             IRFIDImportService rfidImportService,
             IServiceScopeFactory scopeFactory,
-            ICategoryNormalizer categoryNormalizer)
+            ICategoryNormalizer categoryNormalizer,
+            ICompletionSmsQueue completionSmsQueue)
             : base(repository)
         {
             _mapper = mapper;
@@ -50,6 +52,58 @@ namespace Runnatics.Services
             _rfidImportService = rfidImportService;
             _scopeFactory = scopeFactory;
             _categoryNormalizer = categoryNormalizer;
+            _completionSmsQueue = completionSmsQueue;
+        }
+
+        /// <summary>
+        /// Manual "Send Results SMS": queue a completion SMS for every finished participant in the race.
+        /// Returns fast (queue drains in the background). Dedupe runs per-job so re-running won't double-send.
+        /// </summary>
+        public async Task<SendResultsSmsResponse> SendResultsSmsAsync(string eventId, string raceId)
+        {
+            var response = new SendResultsSmsResponse();
+            try
+            {
+                var decryptedEventId = Convert.ToInt32(_encryptionService.Decrypt(eventId));
+                var decryptedRaceId = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+
+                var finishedParticipantIds = await _repository.GetRepository<Results>()
+                    .GetQuery(r =>
+                        r.EventId == decryptedEventId &&
+                        r.RaceId == decryptedRaceId &&
+                        r.Status == ResultStatus.Finished &&
+                        r.AuditProperties.IsActive &&
+                        !r.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(r => r.ParticipantId)
+                    .Distinct()
+                    .ToListAsync();
+
+                response.FinishedCount = finishedParticipantIds.Count;
+
+                foreach (var pid in finishedParticipantIds)
+                {
+                    if (_completionSmsQueue.TryEnqueue(new CompletionSmsJob(pid, decryptedRaceId)))
+                        response.QueuedCount++;
+                    else
+                    {
+                        response.SkippedCount++;
+                        _logger.LogWarning("Completion SMS queue full — skipped participant {ParticipantId}", pid);
+                    }
+                }
+
+                _logger.LogInformation(
+                    "Send Results SMS: queued {Queued} of {Finished} finishers for Race {RaceId}",
+                    response.QueuedCount, response.FinishedCount, decryptedRaceId);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error queueing results SMS: {ex.Message}";
+                _logger.LogError(ex, "Error in SendResultsSmsAsync for Event {EventId} Race {RaceId}", eventId, raceId);
+                return response;
+            }
         }
 
         public async Task<SplitTimeCalculationResponse> CalculateSplitTimesAsync(CalculateSplitTimesRequest request)

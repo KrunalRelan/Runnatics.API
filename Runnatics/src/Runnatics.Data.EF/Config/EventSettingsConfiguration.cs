@@ -61,6 +61,11 @@ namespace Runnatics.Data.EF.Config
                  .HasDefaultValue(false)
                  .IsRequired();
 
+            builder.Property(e => e.AutoSendCompletionSms)
+                 .HasColumnName("AutoSendCompletionSms")
+                 .HasDefaultValue(false)
+                 .IsRequired();
+
             // Indexes
             builder.HasIndex(e => e.EventId)
                 .IsUnique()

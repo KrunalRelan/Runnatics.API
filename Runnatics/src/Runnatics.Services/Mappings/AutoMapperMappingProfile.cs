@@ -158,6 +158,7 @@ namespace Runnatics.Services.Mappings
                 .ForMember(dest => dest.ConfirmedEvent, opt => opt.MapFrom(src => src.ConfirmedEvent))
                 .ForMember(dest => dest.AllowNameCheck, opt => opt.MapFrom(src => src.AllowNameCheck))
                 .ForMember(dest => dest.AllowParticipantEdit, opt => opt.MapFrom(src => src.AllowParticipantEdit))
+                .ForMember(dest => dest.AutoSendCompletionSms, opt => opt.MapFrom(src => src.AutoSendCompletionSms))
                 .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => src.AuditProperties.CreatedDate))
                 .ForMember(dest => dest.UpdatedAt, opt => opt.MapFrom(src => src.AuditProperties.UpdatedDate));
 

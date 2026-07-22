@@ -27,6 +27,9 @@ namespace Runnatics.Models.Data.Entities
 
         public bool AllowParticipantEdit { get; set; }
 
+        // When true, a completion SMS auto-sends as each runner reaches Finished. Default false.
+        public bool AutoSendCompletionSms { get; set; }
+
         // Navigation Properties
         public virtual Event Event { get; set; } = null!;
 

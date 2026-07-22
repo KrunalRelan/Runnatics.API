@@ -254,6 +254,10 @@ builder.Services.AddScoped<IRaceNotificationService, RaceNotificationService>();
 builder.Services.AddSingleton<IBibSmsQueue, BibSmsQueue>();
 builder.Services.AddHostedService<BibSmsDispatcher>();
 
+// In-process queue + dispatcher for the manual "Send Results SMS" bulk completion send.
+builder.Services.AddSingleton<ICompletionSmsQueue, CompletionSmsQueue>();
+builder.Services.AddHostedService<CompletionSmsDispatcher>();
+
 // FluentValidation
 builder.Services.AddValidatorsFromAssemblyContaining<CreateBibMappingValidator>();
 

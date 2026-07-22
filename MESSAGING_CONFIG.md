@@ -20,6 +20,7 @@ Set the values below in **Azure App Service → Configuration → Application se
 | App Service setting | Purpose | Current state |
 |---|---|---|
 | `Notification__Msg91__CompletionTemplateId` | MSG91 Flow template for the **completion SMS**. | real id present in appsettings |
+| `Notification__Msg91__BibAssignedTemplateId` | MSG91 Flow template for the **BIB-assigned SMS** (tokens: name, bib, race, date, venue). | real id `6a5b4ff…` present in appsettings |
 | `Email__SmtpHost` | SMTP host. | `smtp.hostinger.com` |
 | `Email__SmtpPort` | SMTP port (465 = SSL-on-connect, which the code uses). | `465` |
 | `Email__SmtpUsername` / `Email__FromAddress` | SMTP login / From address. | `support@racetik.com` |
@@ -33,6 +34,7 @@ Set the values below in **Azure App Service → Configuration → Application se
 - **Completion SMS** — same `NotifyRaceCompletionAsync` path.
 - **Checkpoint SMS** — `OnlineTagIngestionService` → `NotifyCheckpointCrossingAsync` (fire-and-forget per crossing).
 - **Support-ticket email** — `SupportQueryService` → `NotifySupportTicketCreatedAsync`.
+- **BIB-assigned SMS** — `ParticipantImportService` → `NotifyBibAssignedAsync`. Fires inline on single **add** and on **edit when the bib changes** (phone required). Bulk **CSV import** only sends when the operator ticks the opt-in ("Send BIB SMS", default OFF, carried on `ProcessImportRequest.SendBibSms`); those route through the in-process `IBibSmsQueue` → `BibSmsDispatcher` (background). Dedupe: skipped if a successful `BibAssigned` NotificationLog already exists for that participant+race (edit-changed-bib bypasses via `force`). Date rendered in the event's timezone (IST); venue = VenueName→City→EventName→"-".
 
 ## Notes (no code change made)
 

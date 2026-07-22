@@ -24,13 +24,17 @@ namespace Runnatics.Services
         ILogger<ParticipantImportService> logger,
         IUserContextService userContext,
         IEncryptionService encryptionService,
-        ICategoryNormalizer categoryNormalizer) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
+        ICategoryNormalizer categoryNormalizer,
+        IRaceNotificationService raceNotificationService,
+        IBibSmsQueue bibSmsQueue) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), IParticipantImportService
     {
         protected readonly IMapper _mapper = mapper;
         private readonly ILogger<ParticipantImportService> _logger = logger;
         private readonly IUserContextService _userContext = userContext;
         private readonly IEncryptionService _encryptionService = encryptionService;
         private readonly ICategoryNormalizer _categoryNormalizer = categoryNormalizer;
+        private readonly IRaceNotificationService _raceNotificationService = raceNotificationService;
+        private readonly IBibSmsQueue _bibSmsQueue = bibSmsQueue;
 
         public async Task<ParticipantImportResponse> UploadParticipantsCsvAsync(string eventId, ParticipantImportRequest request)
         {
@@ -281,6 +285,7 @@ namespace Runnatics.Services
 
                 var successCount = 0;
                 var errorCount = 0;
+                var createdParticipants = new List<Models.Data.Entities.Participant>();
 
                 foreach (var record in stagingRecords)
                 {
@@ -332,6 +337,7 @@ namespace Runnatics.Services
 
                         record.ProcessingStatus = "Success";
                         successCount++;
+                        createdParticipants.Add(participant);
 
                         if (!string.IsNullOrWhiteSpace(record.Bib))
                             existingBibSet.Add(record.Bib);
@@ -362,6 +368,29 @@ namespace Runnatics.Services
                 await batchRepo.UpdateAsync(importBatch);
 
                 await _repository.SaveChangesAsync();
+
+                // Opt-in BIB SMS: queue one job per created participant that has a phone. Background
+                // send (import returns fast); dedupe runs in the dispatcher so a re-import never
+                // re-blasts. Rows without a phone are skipped and logged.
+                if (request.SendBibSms)
+                {
+                    var queued = 0;
+                    var skipped = 0;
+                    foreach (var p in createdParticipants)
+                    {
+                        if (string.IsNullOrWhiteSpace(p.Phone)) { skipped++; continue; }
+                        if (_bibSmsQueue.TryEnqueue(new BibSmsJob(p.Id, p.RaceId)))
+                            queued++;
+                        else
+                        {
+                            skipped++;
+                            _logger.LogWarning("BIB SMS queue full — skipped participant {ParticipantId}", p.Id);
+                        }
+                    }
+                    _logger.LogInformation(
+                        "BIB SMS opt-in: queued {Queued}, skipped {Skipped} (no phone or queue full) for ImportBatch {BatchId}",
+                        queued, skipped, decryptedImportBatchId);
+                }
 
                 response.SuccessCount = successCount;
                 response.ErrorCount = errorCount;
@@ -821,6 +850,19 @@ namespace Runnatics.Services
                 {
                     await participantRepo.AddAsync(participant);
                 });
+
+                // Inline BIB SMS (best-effort — a send failure never fails the add).
+                if (!string.IsNullOrWhiteSpace(participant.Phone))
+                {
+                    try
+                    {
+                        await _raceNotificationService.NotifyBibAssignedAsync(participant.Id, participant.RaceId, force: false);
+                    }
+                    catch (Exception smsEx)
+                    {
+                        _logger.LogError(smsEx, "BIB SMS (add) failed for participant {ParticipantId}", participant.Id);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -850,6 +892,9 @@ namespace Runnatics.Services
                     return;
                 }
 
+                // Capture the pre-edit bib so we only (re)notify when the bib actually changes.
+                var oldBib = existingParticipant.BibNumber;
+
                 _mapper.Map(editParticipant, existingParticipant);
                 existingParticipant.Gender = string.IsNullOrWhiteSpace(existingParticipant.Gender) ? "Unknown" : NormalizeGenderForWrite(existingParticipant.Gender);
                 existingParticipant.AgeCategory = await _categoryNormalizer.ResolveAgeCategoryAsync(existingParticipant.EventId, existingParticipant.AgeCategory);
@@ -878,6 +923,21 @@ namespace Runnatics.Services
                 {
                     await participantRepo.UpdateAsync(existingParticipant);
                 });
+
+                // Inline BIB SMS only when the bib ACTUALLY changed (force:true bypasses the once-per-race
+                // dedupe for a genuine correction). Editing name/other fields sends nothing. Best-effort.
+                var bibChanged = !string.Equals(oldBib, existingParticipant.BibNumber, StringComparison.OrdinalIgnoreCase);
+                if (bibChanged && !string.IsNullOrWhiteSpace(existingParticipant.Phone))
+                {
+                    try
+                    {
+                        await _raceNotificationService.NotifyBibAssignedAsync(existingParticipant.Id, existingParticipant.RaceId, force: true);
+                    }
+                    catch (Exception smsEx)
+                    {
+                        _logger.LogError(smsEx, "BIB SMS (edit) failed for participant {ParticipantId}", existingParticipant.Id);
+                    }
+                }
             }
             catch (Exception ex)
             {

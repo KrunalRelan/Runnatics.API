@@ -6,5 +6,6 @@ namespace Runnatics.Services.Config
         public string SenderId { get; set; } = "RACTIK";
         public string CompletionTemplateId { get; set; } = string.Empty;
         public string CheckpointTemplateId { get; set; } = string.Empty;
+        public string BibAssignedTemplateId { get; set; } = string.Empty;
     }
 }

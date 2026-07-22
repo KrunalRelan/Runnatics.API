@@ -250,6 +250,10 @@ builder.Services.Configure<Runnatics.Services.Config.Msg91Config>(
 builder.Services.AddHttpClient<INotificationSmsService, Msg91NotificationSmsService>();
 builder.Services.AddScoped<IRaceNotificationService, RaceNotificationService>();
 
+// In-process queue + background dispatcher for bulk "BIB assigned" SMS (no Azure Service Bus).
+builder.Services.AddSingleton<IBibSmsQueue, BibSmsQueue>();
+builder.Services.AddHostedService<BibSmsDispatcher>();
+
 // FluentValidation
 builder.Services.AddValidatorsFromAssemblyContaining<CreateBibMappingValidator>();
 

@@ -17,5 +17,12 @@ namespace Runnatics.Services.Interface
             string phone,
             Dictionary<string, string> variables,
             CancellationToken ct = default);
+
+        Task<NotificationResult> SendBibAssignedSmsAsync(
+            int participantId,
+            int raceId,
+            string phone,
+            Dictionary<string, string> variables,
+            CancellationToken ct = default);
     }
 }

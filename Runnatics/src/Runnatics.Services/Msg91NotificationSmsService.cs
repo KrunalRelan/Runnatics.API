@@ -26,6 +26,11 @@ namespace Runnatics.Services
             Dictionary<string, string> variables, CancellationToken ct = default)
             => SendAsync(_config.CompletionTemplateId, phone, variables, ct);
 
+        public Task<NotificationResult> SendBibAssignedSmsAsync(
+            int participantId, int raceId, string phone,
+            Dictionary<string, string> variables, CancellationToken ct = default)
+            => SendAsync(_config.BibAssignedTemplateId, phone, variables, ct);
+
         private async Task<NotificationResult> SendAsync(
             string templateId, string phone,
             Dictionary<string, string> variables, CancellationToken ct)

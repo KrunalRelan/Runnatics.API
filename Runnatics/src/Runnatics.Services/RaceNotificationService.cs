@@ -5,6 +5,7 @@ using Runnatics.Models.Client.Notifications;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
+using System.Globalization;
 
 namespace Runnatics.Services
 {
@@ -101,6 +102,57 @@ namespace Runnatics.Services
             }
         }
 
+        public async Task NotifyBibAssignedAsync(
+            int participantId, int raceId, bool force = false,
+            CancellationToken ct = default)
+        {
+            var participant = await LoadParticipantAsync(participantId, ct);
+            if (participant == null) return;
+
+            var phone = participant.Phone;
+            if (string.IsNullOrWhiteSpace(phone)) return;
+
+            // Dedup: a participant is notified about their BIB once per race. An edit that
+            // CHANGED the bib passes force=true to intentionally re-notify.
+            if (!force)
+            {
+                var alreadySent = await unitOfWork.GetRepository<NotificationLog>()
+                    .GetQuery()
+                    .AnyAsync(n =>
+                        n.Channel == "SMS" &&
+                        n.EventType == "BibAssigned" &&
+                        n.ParticipantId == participantId &&
+                        n.RaceId == raceId &&
+                        n.Success, ct);
+
+                if (alreadySent) return;
+            }
+
+            var evt = await unitOfWork.GetRepository<Event>()
+                .GetQuery(e => e.Id == participant.EventId)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(ct);
+
+            var race = await unitOfWork.GetRepository<Race>()
+                .GetQuery(r => r.Id == raceId)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(ct);
+
+            // Keys MUST match the MSG91 template's named tokens exactly: name, bib, race, date, venue.
+            var variables = new Dictionary<string, string>
+            {
+                ["name"] = $"{participant.FirstName} {participant.LastName}".Trim(),
+                ["bib"] = participant.BibNumber ?? string.Empty,
+                ["race"] = race?.Title ?? evt?.Name ?? string.Empty,
+                ["date"] = FormatEventLocalDate(evt?.EventDate, evt?.TimeZone),
+                // Never empty — the template renders "at {venue}", so a blank would dangle.
+                ["venue"] = FirstNonBlank(evt?.VenueName, evt?.City, evt?.Name) ?? "-"
+            };
+
+            var result = await smsService.SendBibAssignedSmsAsync(participantId, raceId, phone, variables, ct);
+            await LogAsync("SMS", "BibAssigned", participantId, raceId, phone, result, ct);
+        }
+
         public async Task NotifySupportTicketCreatedAsync(int queryId, CancellationToken ct = default)
         {
             var query = await unitOfWork.GetRepository<SupportQuery>()
@@ -175,5 +227,31 @@ namespace Runnatics.Services
             if (!ms.HasValue || ms.Value <= 0) return "--:--:--";
             return TimeSpan.FromMilliseconds(ms.Value).ToString(@"hh\:mm\:ss");
         }
+
+        // EventDate is stored UTC; render it in the event's timezone (default Asia/Kolkata)
+        // so the participant sees the correct calendar day in IST, e.g. "18 Jul 2026".
+        private static string FormatEventLocalDate(DateTime? utc, string? timeZoneId)
+        {
+            if (!utc.HasValue) return string.Empty;
+
+            TimeZoneInfo tz;
+            try
+            {
+                tz = TimeZoneInfo.FindSystemTimeZoneById(
+                    string.IsNullOrWhiteSpace(timeZoneId) ? "Asia/Kolkata" : timeZoneId);
+            }
+            catch
+            {
+                try { tz = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata"); }
+                catch { tz = TimeZoneInfo.Utc; }
+            }
+
+            var local = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(utc.Value, DateTimeKind.Utc), tz);
+            return local.ToString("dd MMM yyyy", CultureInfo.InvariantCulture);
+        }
+
+        private static string? FirstNonBlank(params string?[] values)
+            => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
     }
 }

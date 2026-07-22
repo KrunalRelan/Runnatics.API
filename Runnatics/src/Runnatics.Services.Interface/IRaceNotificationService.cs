@@ -4,6 +4,7 @@ namespace Runnatics.Services.Interface
     {
         Task NotifyCheckpointCrossingAsync(int participantId, int checkpointId, int raceId, CancellationToken ct = default);
         Task NotifyRaceCompletionAsync(int participantId, int raceId, CancellationToken ct = default);
+        Task NotifyBibAssignedAsync(int participantId, int raceId, bool force = false, CancellationToken ct = default);
         Task NotifySupportTicketCreatedAsync(int queryId, CancellationToken ct = default);
     }
 }

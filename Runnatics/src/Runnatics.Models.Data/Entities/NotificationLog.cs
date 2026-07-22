@@ -2,7 +2,7 @@ namespace Runnatics.Models.Data.Entities
 {
     public class NotificationLog
     {
-        public int Id { get; set; }
+        public long Id { get; set; }
         public string Channel { get; set; } = string.Empty;    // SMS, Email
         public string EventType { get; set; } = string.Empty;  // RaceCompletion, CheckpointCrossing, SupportTicket
         public int? ParticipantId { get; set; }

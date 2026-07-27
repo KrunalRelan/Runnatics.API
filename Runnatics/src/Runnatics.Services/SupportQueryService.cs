@@ -11,15 +11,14 @@ namespace Runnatics.Services
 {
     public class SupportQueryService(
         IUnitOfWork<RaceSyncDbContext> repository,
-        IEmailService emailService,
-        IEmailTemplateService emailTemplateService,
         ISmsService smsService,
         IRaceNotificationService raceNotificationService,
         IUserContextService userContext,
         ILogger<SupportQueryService> logger) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), ISupportQueryService
     {
-        private readonly IEmailService _emailService = emailService;
-        private readonly IEmailTemplateService _emailTemplateService = emailTemplateService;
+        // IEmailService / IEmailTemplateService are no longer injected: this service does
+        // not send email directly any more — everything goes via IRaceNotificationService
+        // so it lands in NotificationLogs.
         private readonly ISmsService _smsService = smsService;
         private readonly IRaceNotificationService _raceNotificationService = raceNotificationService;
         private readonly IUserContextService _userContext = userContext;
@@ -179,6 +178,93 @@ namespace Runnatics.Services
                 _logger.LogError(ex, "Error fetching support query counts");
                 ErrorMessage = "An error occurred while retrieving counts.";
                 return new SupportQueryCountsDto();
+            }
+        }
+
+        public async Task<List<SupportLookupDto>> GetStatusesAsync()
+        {
+            try
+            {
+                var statuses = await _repository.GetRepository<SupportQueryStatus>()
+                    .GetQuery()
+                    .AsNoTracking()
+                    .OrderBy(s => s.Id)
+                    .Select(s => new SupportLookupDto { Id = s.Id, Name = s.Name })
+                    .ToListAsync();
+
+                foreach (var dto in statuses) dto.DisplayName = ToDisplayName(dto.Name);
+                return statuses;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching support statuses");
+                ErrorMessage = "An error occurred while retrieving statuses.";
+                return [];
+            }
+        }
+
+        public async Task<List<SupportLookupDto>> GetQueryTypesAsync()
+        {
+            try
+            {
+                var types = await _repository.GetRepository<SupportQueryType>()
+                    .GetQuery()
+                    .AsNoTracking()
+                    .OrderBy(t => t.Name)
+                    .Select(t => new SupportLookupDto { Id = t.Id, Name = t.Name })
+                    .ToListAsync();
+
+                // Query types are admin-authored free text, so the raw name IS the label.
+                foreach (var dto in types) dto.DisplayName = dto.Name;
+                return types;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching support query types");
+                ErrorMessage = "An error occurred while retrieving query types.";
+                return [];
+            }
+        }
+
+        public async Task<List<SupportAssigneeDto>> GetAssigneesAsync()
+        {
+            try
+            {
+                // Only roles that can actually OPEN a ticket are assignable — assigning to
+                // someone the endpoint authorization would reject is a dead end.
+                var assignableRoles = new[] { "SuperAdmin", "Admin" };
+
+                var query = _repository.GetRepository<User>()
+                    .GetQuery(u => u.AuditProperties.IsActive && !u.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Where(u => assignableRoles.Contains(u.Role));
+
+                var tenantScope = CurrentTenantScope();
+                if (tenantScope is not null)
+                    query = query.Where(u => u.TenantId == tenantScope.Value);
+
+                var users = await query
+                    .OrderBy(u => u.FirstName).ThenBy(u => u.LastName)
+                    .Select(u => new SupportAssigneeDto
+                    {
+                        Id = u.Id,
+                        Email = u.Email,
+                        FullName = ((u.FirstName ?? string.Empty) + " " + (u.LastName ?? string.Empty)).Trim()
+                    })
+                    .ToListAsync();
+
+                // Fall back to the email when a user has no name recorded, so the dropdown
+                // never renders a blank row.
+                foreach (var u in users)
+                    if (string.IsNullOrWhiteSpace(u.FullName)) u.FullName = u.Email;
+
+                return users;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching support assignees");
+                ErrorMessage = "An error occurred while retrieving assignable users.";
+                return [];
             }
         }
 
@@ -352,10 +438,16 @@ namespace Runnatics.Services
 
                 if (dto.SendNotification)
                 {
-                    await SendCommentEmailInternalAsync(comment, query.SubmitterEmail);
-                    comment.NotificationSent = true;
-                    await commentRepo.UpdateAsync(comment);
-                    await _repository.SaveChangesAsync();
+                    // Only flag NotificationSent when the send actually succeeded — a failed
+                    // send used to be recorded as sent, hiding it from the operator and
+                    // disabling the "Send Email" retry button on that comment.
+                    var sent = await _raceNotificationService.NotifySupportCommentAsync(comment.Id);
+                    if (sent)
+                    {
+                        comment.NotificationSent = true;
+                        await commentRepo.UpdateAsync(comment);
+                        await _repository.SaveChangesAsync();
+                    }
                 }
 
                 // Reload with navigation for the response DTO
@@ -391,7 +483,12 @@ namespace Runnatics.Services
                     return;
                 }
 
-                await SendCommentEmailInternalAsync(comment, comment.SupportQuery.SubmitterEmail);
+                var sent = await _raceNotificationService.NotifySupportCommentAsync(comment.Id);
+                if (!sent)
+                {
+                    ErrorMessage = "The notification email could not be sent. Please try again.";
+                    return;
+                }
 
                 comment.NotificationSent = true;
                 await commentRepo.UpdateAsync(comment);
@@ -431,38 +528,11 @@ namespace Runnatics.Services
 
         // ── Private helpers ───────────────────────────────────────────────────
 
-        private async Task SendCommentEmailInternalAsync(SupportQueryComment comment, string recipientEmail)
-        {
-            try
-            {
-                var subject = "Update on your support query";
-                var htmlBody = _emailTemplateService.BuildSupportQueryReply(
-                    submitterName: recipientEmail,
-                    subject: subject,
-                    replyBody: comment.CommentText);
-                await _emailService.SendEmailAsync(recipientEmail, subject, htmlBody);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to send comment notification email to {Email}", recipientEmail);
-            }
-        }
-
-        private async Task SendSubmissionConfirmationAsync(string submitterEmail, string subject, int ticketId)
-        {
-            try
-            {
-                var htmlBody = _emailTemplateService.BuildSupportQueryConfirmation(
-                    submitterName: submitterEmail,
-                    subject: subject,
-                    ticketId: ticketId.ToString());
-                await _emailService.SendEmailAsync(submitterEmail, "We received your support query", htmlBody);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to send submission confirmation email to {Email}", submitterEmail);
-            }
-        }
+        // NOTE: comment emails now go through IRaceNotificationService.NotifySupportCommentAsync
+        // so they are written to NotificationLogs like every other outbound message. The old
+        // private SendCommentEmailInternalAsync (direct IEmailService, unlogged) and the dead
+        // SendSubmissionConfirmationAsync (a duplicate of NotifySupportTicketCreatedAsync that
+        // was never called) have both been removed.
 
         private static SupportQueryDetailDto MapToDetailDto(SupportQuery q) => new()
         {
@@ -498,6 +568,21 @@ namespace Runnatics.Services
                 ? $"{c.CreatedByUser.FirstName} {c.CreatedByUser.LastName}".Trim()
                 : null
         };
+
+        /// <summary>
+        /// Stored status name -> human label ("new_query" -> "New Query"). THE single
+        /// raw->display mapping; the UI no longer keeps its own copy. "wip" is special-cased
+        /// because generic title-casing would render it "Wip".
+        /// </summary>
+        private static string ToDisplayName(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+            if (string.Equals(raw, "wip", StringComparison.OrdinalIgnoreCase)) return "WIP";
+
+            return string.Join(' ', raw
+                .Split('_', StringSplitOptions.RemoveEmptyEntries)
+                .Select(w => char.ToUpperInvariant(w[0]) + w[1..].ToLowerInvariant()));
+        }
 
         private static string ToRelativeLabel(TimeSpan diff)
         {

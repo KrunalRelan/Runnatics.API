@@ -73,6 +73,63 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Ticket statuses from the DB lookup table (admin). Replaces the UI's hard-coded list.
+        /// </summary>
+        [HttpGet("statuses")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<List<SupportLookupDto>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetStatuses(CancellationToken cancellationToken)
+        {
+            var result = await _supportQueryService.GetStatusesAsync();
+
+            if (_supportQueryService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    new { error = _supportQueryService.ErrorMessage });
+
+            return Ok(new ResponseBase<List<SupportLookupDto>> { Message = result });
+        }
+
+        /// <summary>
+        /// Query types from the DB lookup table (admin). May legitimately be empty.
+        /// </summary>
+        [HttpGet("query-types")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<List<SupportLookupDto>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetQueryTypes(CancellationToken cancellationToken)
+        {
+            var result = await _supportQueryService.GetQueryTypesAsync();
+
+            if (_supportQueryService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    new { error = _supportQueryService.ErrorMessage });
+
+            return Ok(new ResponseBase<List<SupportLookupDto>> { Message = result });
+        }
+
+        /// <summary>
+        /// Users who can be assigned a ticket, scoped to the caller's tenant (admin).
+        /// </summary>
+        [HttpGet("assignees")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<List<SupportAssigneeDto>>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetAssignees(CancellationToken cancellationToken)
+        {
+            var result = await _supportQueryService.GetAssigneesAsync();
+
+            if (_supportQueryService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    new { error = _supportQueryService.ErrorMessage });
+
+            return Ok(new ResponseBase<List<SupportAssigneeDto>> { Message = result });
+        }
+
+        /// <summary>
         /// Get a paged, filtered list of support queries (admin)
         /// </summary>
         [HttpGet]

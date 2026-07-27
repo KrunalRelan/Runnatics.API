@@ -235,6 +235,35 @@ namespace Runnatics.Services
             await LogAsync("Email", "SupportTicket", null, null, email, result, ct);
         }
 
+        public async Task<bool> NotifySupportCommentAsync(int commentId, CancellationToken ct = default)
+        {
+            var comment = await unitOfWork.GetRepository<SupportQueryComment>()
+                .GetQuery(c => c.Id == commentId)
+                .Include(c => c.SupportQuery)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(ct);
+
+            if (comment?.SupportQuery == null)
+            {
+                logger.LogWarning("NotifySupportCommentAsync: comment {Id} not found", commentId);
+                return false;
+            }
+
+            var email = comment.SupportQuery.SubmitterEmail;
+            if (string.IsNullOrWhiteSpace(email)) return false;
+
+            const string subject = "Update on your support query";
+            var htmlBody = emailTemplateService.BuildSupportQueryReply(
+                submitterName: email,
+                subject: subject,
+                replyBody: comment.CommentText);
+
+            var sent = await emailService.SendAsync(email, subject, htmlBody);
+            var result = sent ? NotificationResult.Ok() : NotificationResult.Fail("SMTP send failed");
+            await LogAsync("Email", "SupportComment", null, null, email, result, ct);
+            return sent;
+        }
+
         private async Task<Participant?> LoadParticipantAsync(int participantId, CancellationToken ct)
         {
             var participant = await unitOfWork.GetRepository<Participant>()

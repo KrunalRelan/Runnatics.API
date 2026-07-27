@@ -44,6 +44,22 @@ namespace Runnatics.Services.Interface
         Task<SupportQueryCountsDto> GetCountsAsync();
 
         /// <summary>
+        /// All ticket statuses, from the DB lookup table. Replaces the UI's hard-coded list.
+        /// </summary>
+        Task<List<SupportLookupDto>> GetStatusesAsync();
+
+        /// <summary>
+        /// All query types, from the DB lookup table. May legitimately be empty.
+        /// </summary>
+        Task<List<SupportLookupDto>> GetQueryTypesAsync();
+
+        /// <summary>
+        /// Users who can be assigned a ticket, scoped to the caller's tenant
+        /// (SuperAdmin sees all). Only roles that can actually open a ticket are returned.
+        /// </summary>
+        Task<List<SupportAssigneeDto>> GetAssigneesAsync();
+
+        /// <summary>
         /// Returns a paged, filtered list of support queries
         /// </summary>
         Task<(List<SupportQueryListItemDto> Items, int TotalCount)> GetQueriesAsync(

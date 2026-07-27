@@ -1642,3 +1642,55 @@ Went to add the "missing" CREATE TABLE for NotificationLogs (flagged in H verifi
 **Decision (user): align TABLE to code** (minimal; background sends have no tenant context, so keeping the leaner entity is right). Ran idempotent `NotificationLogs_AlignToEntity_20260718.sql` — ADD Success BIT NOT NULL DEFAULT 0; relax ParticipantId/RaceId/TenantId/MessageBody/Status to NULL; DEFAULT constraints on CreatedAt(GETUTCDATE)/IsActive(1)/IsDeleted(0) so EF's INSERT (which omits them) succeeds. All widening/additive — no data loss. User ran it: "Added column: Success / NotificationLogs aligned to entity."
 **Code:** `NotificationLog.Id` int → long (table's bigint identity can't be altered in place; entity never sets Id, config HasKey type-agnostic — no other refs). API build 0 errors.
 **Status column left NULL** (LogAsync doesn't set it) — flagged option to have LogAsync write Sent/Failed later; not done (out of "align table to code" scope). Service Bus + Mailer91 remain parked as separate design tickets (nothing depends on them). Notifications go live once table (DONE) + 3 Azure secrets are set.
+
+---
+
+## 2026-07-26 — Support security, podium, EPC multi-tag, event dashboard
+
+**Item 0 — Support tenant isolation (SECURITY) + rate limit.** `SupportQuery` had no
+`TenantId` and all 7 admin endpoints were bare `[Authorize]`: any authenticated user of
+ANY tenant could read/edit/delete every ticket. Added nullable `TenantId` (nullable
+because `POST /support/contact` is `[AllowAnonymous]` — public submitters have no JWT;
+NULL = platform pool, SuperAdmin-only), scoped every read AND write path (comment paths
+scope through the PARENT ticket), `[Authorize(Roles="SuperAdmin,Admin")]` everywhere, and
+`[EnableRateLimiting("PublicWrite")]` on `/contact`. Out-of-tenant rows are FILTERED, not
+rejected, so callers return "not found" and never leak existence.
+SQL: `db/scripts/SupportQuery_AddTenantId_20260726.sql`. **MUST RUN BEFORE DEPLOY** —
+EF selects every mapped column, so support reads throw until the DDL lands.
+Backfill: infer from assignee → else from a SubmitterEmail resolving to exactly one user
+→ else NULL. Never guessed into a tenant it might not belong to.
+
+**Item 1 — Podium (UI).** `GlobalResultsPage.tsx`: initials avatar (code-point split, not
+`name[0]`, so non-Latin/surrogate names don't break; deepened rank tints so white initials
+clear WCAG AA), CHAMPION/RUNNER UP/THIRD PLACE footer bands, and removed the
+`-webkit-line-clamp:2` that was truncating long names on mobile.
+
+**Item 2 — EPC multi-tag (UI).** REVERSES the earlier "Item 2 — NO app code" decision.
+Two distinct EPCs inside the 2000ms window now roll the first mapping back via
+`clearMapping()` and only claim "nothing assigned" once that rollback is CONFIRMED; a
+failed rollback shows a DIFFERENT error naming the BIB still mapped. Distinct-concatenation
+guard applies only ABOVE `EPC_MAX_LEN` — a legitimate 24-char EPC-96 also splits into two
+"valid looking" 12-char halves, so splitting at/below the max would reject normal tags.
+
+**Item 3 — Event→races dashboard.** Pie chart removed. `EventDashboardStatsDto` gained
+`Totals` + `RaceStats[].Counts` (additive, same endpoint, still one call). Statuses from
+STORED `Results.Status` keyed by ParticipantId (never bib) and deduped; `notProcessed`
+DERIVED so buckets always sum to registered. No N+1 — one extra grouped ChipAssignment
+query, per-race numbers derived in memory.
+
+**Support first slice.** #2 totalCount was read off `message` (the bare array) instead of
+the ResponseBase envelope → always 0, pagination broken past page 1. #3/#4/#5 the UI
+called `users/admins` and `support/query-types`, neither of which existed, behind
+`catch{return []}`; real endpoints added (`/statuses`, `/query-types`, `/assignees` —
+assignees tenant-scoped) and `STATUS_OPTIONS` deleted. #6 status colour map de-duplicated
+into `statusVisuals.ts`. #8 comment emails now go through `IRaceNotificationService` so
+they reach `NotificationLogs`; `NotificationSent` only set when the send SUCCEEDED (it
+was set unconditionally, hiding failures and disabling the retry button).
+
+**DEFERRED pending workflow definition:** #7 (real submitter fields — name/phone are
+currently string-concatenated into Body), #9 (admin new-ticket alert), #10 (comment soft
+delete + internal notes), #11 (status history), #12 (attachments), #13 (submitter reply
+loop), #15 (AuditProperties/Fluent-API conversion for support entities).
+
+**Open, not fixed (reported only):** `SupportQueryService` still injects an unused
+`ISmsService` — dead before this session, left alone to stay in scope.

@@ -27,6 +27,9 @@ namespace Runnatics.Data.EF.Config
                 .HasMaxLength(255)
                 .IsRequired();
 
+            // Nullable — anonymous Contact Us submissions have no tenant (platform pool).
+            builder.Property(e => e.TenantId);
+
             builder.Property(e => e.StatusId)
                 .HasDefaultValue(1)
                 .IsRequired();
@@ -64,6 +67,8 @@ namespace Runnatics.Data.EF.Config
             builder.HasIndex(e => e.AssignedToUserId);
             builder.HasIndex(e => e.SubmitterEmail);
             builder.HasIndex(e => e.CreatedAt);
+            builder.HasIndex(e => new { e.TenantId, e.StatusId })
+                .HasDatabaseName("IX_SupportQueries_TenantId_StatusId");
         }
     }
 }

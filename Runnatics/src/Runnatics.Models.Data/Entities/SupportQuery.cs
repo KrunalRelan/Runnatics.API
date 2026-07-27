@@ -18,6 +18,13 @@ namespace Runnatics.Models.Data.Entities
         [MaxLength(255)]
         public string SubmitterEmail { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Owning tenant. NULLABLE by design: POST /api/support/contact is [AllowAnonymous],
+        /// so a public submitter has no JWT and therefore no tenant. NULL = platform-level
+        /// pool, visible to SuperAdmin only; an admin can claim it into their tenant later.
+        /// </summary>
+        public int? TenantId { get; set; }
+
         public int StatusId { get; set; }
 
         public int? QueryTypeId { get; set; }

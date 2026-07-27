@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Runnatics.Models.Client.Common;
 using Runnatics.Models.Client.Requests.Support;
@@ -23,6 +24,7 @@ namespace Runnatics.Api.Controller
         /// </summary>
         [HttpPost("contact")]
         [AllowAnonymous]
+        [EnableRateLimiting("PublicWrite")]
         [ProducesResponseType(typeof(ResponseBase<object>), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
@@ -55,7 +57,7 @@ namespace Runnatics.Api.Controller
         /// Get support query counts grouped by status (admin)
         /// </summary>
         [HttpGet("counts")]
-        [Authorize]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<SupportQueryCountsDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
@@ -74,7 +76,7 @@ namespace Runnatics.Api.Controller
         /// Get a paged, filtered list of support queries (admin)
         /// </summary>
         [HttpGet]
-        [Authorize]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<List<SupportQueryListItemDto>>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
@@ -105,7 +107,7 @@ namespace Runnatics.Api.Controller
         /// Get full detail for a single support query (admin)
         /// </summary>
         [HttpGet("{id:int}")]
-        [Authorize]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<SupportQueryDetailDto>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -130,7 +132,7 @@ namespace Runnatics.Api.Controller
         /// Update status, assignee, or type of a support query (admin)
         /// </summary>
         [HttpPut("{id:int}")]
-        [Authorize]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -159,7 +161,7 @@ namespace Runnatics.Api.Controller
         /// Add a comment to a support query (admin)
         /// </summary>
         [HttpPost("{id:int}/comments")]
-        [Authorize]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(typeof(ResponseBase<SupportQueryCommentDto>), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -204,7 +206,7 @@ namespace Runnatics.Api.Controller
         /// Send (or re-send) the notification email for a specific comment (admin)
         /// </summary>
         [HttpPost("comments/{commentId:int}/send-email")]
-        [Authorize]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -229,7 +231,7 @@ namespace Runnatics.Api.Controller
         /// Hard-delete a comment (admin)
         /// </summary>
         [HttpDelete("comments/{commentId:int}")]
-        [Authorize]
+        [Authorize(Roles = "SuperAdmin,Admin")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]

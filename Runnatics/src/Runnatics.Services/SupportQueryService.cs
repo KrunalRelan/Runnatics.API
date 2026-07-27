@@ -15,13 +15,50 @@ namespace Runnatics.Services
         IEmailTemplateService emailTemplateService,
         ISmsService smsService,
         IRaceNotificationService raceNotificationService,
+        IUserContextService userContext,
         ILogger<SupportQueryService> logger) : ServiceBase<IUnitOfWork<RaceSyncDbContext>>(repository), ISupportQueryService
     {
         private readonly IEmailService _emailService = emailService;
         private readonly IEmailTemplateService _emailTemplateService = emailTemplateService;
         private readonly ISmsService _smsService = smsService;
         private readonly IRaceNotificationService _raceNotificationService = raceNotificationService;
+        private readonly IUserContextService _userContext = userContext;
         private readonly ILogger<SupportQueryService> _logger = logger;
+
+        private const string SuperAdminRole = "SuperAdmin";
+
+        /// <summary>
+        /// Tenant restriction for the CURRENT caller. NULL means "no restriction" —
+        /// SuperAdmin sees every tenant plus the platform pool (TenantId IS NULL).
+        /// Any other role is pinned to its own tenant and can never see the platform pool.
+        /// Admin-only: never call this from the [AllowAnonymous] submit paths.
+        /// </summary>
+        private int? CurrentTenantScope() =>
+            string.Equals(_userContext.Role, SuperAdminRole, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : _userContext.TenantId;
+
+        /// <summary>
+        /// Applies <see cref="CurrentTenantScope"/> to a SupportQuery query. Out-of-tenant
+        /// rows are filtered out rather than rejected, so callers surface them as
+        /// "not found" and never leak the existence of another tenant's ticket.
+        /// </summary>
+        private static IQueryable<SupportQuery> ApplyTenantScope(IQueryable<SupportQuery> query, int? tenantScope) =>
+            tenantScope is null ? query : query.Where(q => q.TenantId == tenantScope.Value);
+
+        /// <summary>
+        /// Comment-side equivalent of <see cref="ApplyTenantScope"/>: scopes through the
+        /// PARENT ticket, so a raw comment id can never be used to reach across tenants.
+        /// Also eager-loads SupportQuery, which the email path needs.
+        /// </summary>
+        private IQueryable<SupportQueryComment> ScopedComments(IQueryable<SupportQueryComment> query)
+        {
+            var scoped = query.Include(c => c.SupportQuery).AsQueryable();
+            var tenantScope = CurrentTenantScope();
+            return tenantScope is null
+                ? scoped
+                : scoped.Where(c => c.SupportQuery.TenantId == tenantScope.Value);
+        }
 
         // ── Public (no auth) ──────────────────────────────────────────────────
 
@@ -118,7 +155,7 @@ namespace Runnatics.Services
             {
                 var repo = _repository.GetRepository<SupportQuery>();
 
-                var counts = await repo.GetQuery()
+                var counts = await ApplyTenantScope(repo.GetQuery(), CurrentTenantScope())
                     .GroupBy(q => q.Status.Name)
                     .Select(g => new { StatusName = g.Key, Count = g.Count() })
                     .ToListAsync();
@@ -157,7 +194,7 @@ namespace Runnatics.Services
             {
                 var repo = _repository.GetRepository<SupportQuery>();
 
-                var query = repo.GetQuery()
+                var query = ApplyTenantScope(repo.GetQuery(), CurrentTenantScope())
                     .Include(q => q.Status)
                     .Include(q => q.AssignedToUser)
                     .Include(q => q.Comments)
@@ -213,7 +250,7 @@ namespace Runnatics.Services
             {
                 var repo = _repository.GetRepository<SupportQuery>();
 
-                var query = await repo.GetQuery(q => q.Id == id)
+                var query = await ApplyTenantScope(repo.GetQuery(q => q.Id == id), CurrentTenantScope())
                     .Include(q => q.Status)
                     .Include(q => q.QueryType)
                     .Include(q => q.AssignedToUser)
@@ -245,7 +282,8 @@ namespace Runnatics.Services
             {
                 var repo = _repository.GetRepository<SupportQuery>();
 
-                var query = await repo.GetQuery(q => q.Id == id).FirstOrDefaultAsync();
+                var query = await ApplyTenantScope(repo.GetQuery(q => q.Id == id), CurrentTenantScope())
+                    .FirstOrDefaultAsync();
 
                 if (query == null)
                 {
@@ -285,7 +323,8 @@ namespace Runnatics.Services
                 var queryRepo = _repository.GetRepository<SupportQuery>();
                 var commentRepo = _repository.GetRepository<SupportQueryComment>();
 
-                var query = await queryRepo.GetQuery(q => q.Id == id).FirstOrDefaultAsync();
+                var query = await ApplyTenantScope(queryRepo.GetQuery(q => q.Id == id), CurrentTenantScope())
+                    .FirstOrDefaultAsync();
 
                 if (query == null)
                 {
@@ -341,8 +380,9 @@ namespace Runnatics.Services
             {
                 var commentRepo = _repository.GetRepository<SupportQueryComment>();
 
-                var comment = await commentRepo.GetQuery(c => c.Id == commentId)
-                    .Include(c => c.SupportQuery)
+                // Scope through the PARENT ticket — a comment id alone must not be a way
+                // around tenant isolation.
+                var comment = await ScopedComments(commentRepo.GetQuery(c => c.Id == commentId))
                     .FirstOrDefaultAsync();
 
                 if (comment == null)
@@ -370,7 +410,8 @@ namespace Runnatics.Services
             {
                 var commentRepo = _repository.GetRepository<SupportQueryComment>();
 
-                var comment = await commentRepo.GetQuery(c => c.Id == commentId).FirstOrDefaultAsync();
+                var comment = await ScopedComments(commentRepo.GetQuery(c => c.Id == commentId))
+                    .FirstOrDefaultAsync();
 
                 if (comment == null)
                 {

@@ -17,6 +17,13 @@ namespace Runnatics.Models.Client.Responses.Support
         /// bitten this codebase before.
         /// </summary>
         public string DisplayName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Badge colour, resolved server-side so cards, tabs, row badges and dropdowns
+        /// all agree. Derived (not stored) — no schema change needed; can be promoted to
+        /// a real column later if it should be admin-configurable.
+        /// </summary>
+        public string ColorHex { get; set; } = string.Empty;
     }
 
     /// <summary>A user who can be assigned a support ticket.</summary>

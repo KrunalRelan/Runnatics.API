@@ -154,31 +154,64 @@ namespace Runnatics.Services
             {
                 var repo = _repository.GetRepository<SupportQuery>();
 
-                var counts = await ApplyTenantScope(repo.GetQuery(), CurrentTenantScope())
-                    .GroupBy(q => q.Status.Name)
-                    .Select(g => new { StatusName = g.Key, Count = g.Count() })
+                // Group by STATUS ID. Grouping by name and matching hardcoded English labels
+                // is what produced "Total 14, every bucket 0" on a database whose lookup
+                // table held "Open"/"Resolved" instead of the seeded names.
+                var grouped = await ApplyTenantScope(repo.GetQuery(), CurrentTenantScope())
+                    .GroupBy(q => q.StatusId)
+                    .Select(g => new { StatusId = g.Key, Count = g.Count() })
                     .ToListAsync();
 
-                var total = counts.Sum(c => c.Count);
+                var statuses = await _repository.GetRepository<SupportQueryStatus>()
+                    .GetQuery()
+                    .AsNoTracking()
+                    .OrderBy(s => s.Id)
+                    .Select(s => new { s.Id, s.Name })
+                    .ToListAsync();
 
-                // Match on the NORMALISED label rather than the raw string: ToDisplayName is
-                // idempotent, so these resolve whether the lookup table holds "new_query" or
-                // "New Query". Matching the raw spelling directly would silently report 0 for
-                // every bucket if the stored casing ever changed.
-                int CountOf(string display) =>
-                    counts.FirstOrDefault(c => ToDisplayName(c.StatusName) == display)?.Count ?? 0;
+                var countById = grouped.ToDictionary(g => g.StatusId, g => g.Count);
 
-                return new SupportQueryCountsDto
+                // Every status in the lookup table gets a bucket, including empty ones, so
+                // the dashboard keeps a stable set of cards.
+                var buckets = statuses.Select(s =>
                 {
-                    Total        = total,
-                    NewQuery     = CountOf("New Query"),
-                    Wip          = CountOf("WIP"),
-                    Closed       = CountOf("Closed"),
-                    Pending      = CountOf("Pending"),
-                    NotYetStarted = CountOf("Not Yet Started"),
-                    Rejected     = CountOf("Rejected"),
-                    Duplicate    = CountOf("Duplicate")
-                };
+                    var display = ToDisplayName(s.Name);
+                    return new SupportStatusCountDto
+                    {
+                        StatusId = s.Id,
+                        Name = s.Name,
+                        DisplayName = display,
+                        ColorHex = ColorForStatus(s.Id, display),
+                        Count = countById.TryGetValue(s.Id, out var c) ? c : 0
+                    };
+                }).ToList();
+
+                // Any StatusId present in the DATA but missing from the lookup table still
+                // gets a bucket. Dropping it is precisely how tickets become invisible.
+                var knownIds = statuses.Select(s => s.Id).ToHashSet();
+                foreach (var orphan in grouped.Where(g => !knownIds.Contains(g.StatusId)).OrderBy(g => g.StatusId))
+                {
+                    buckets.Add(new SupportStatusCountDto
+                    {
+                        StatusId = orphan.StatusId,
+                        Name = $"status-{orphan.StatusId}",
+                        DisplayName = $"Unknown ({orphan.StatusId})",
+                        ColorHex = "#6B7280",
+                        Count = orphan.Count,
+                        IsUnknown = true
+                    });
+                }
+
+                // Total is the SUM of the buckets, not an independent aggregate — the old
+                // shape let them disagree, which is how the UI showed 14 alongside all zeros.
+                var total = buckets.Sum(b => b.Count);
+
+                var scanned = grouped.Sum(g => g.Count);
+                if (total != scanned)
+                    _logger.LogWarning(
+                        "Support counts failed to reconcile: buckets={Total} rows={Scanned}", total, scanned);
+
+                return new SupportQueryCountsDto { Total = total, Statuses = buckets };
             }
             catch (Exception ex)
             {
@@ -199,7 +232,11 @@ namespace Runnatics.Services
                     .Select(s => new SupportLookupDto { Id = s.Id, Name = s.Name })
                     .ToListAsync();
 
-                foreach (var dto in statuses) dto.DisplayName = ToDisplayName(dto.Name);
+                foreach (var dto in statuses)
+                {
+                    dto.DisplayName = ToDisplayName(dto.Name);
+                    dto.ColorHex = ColorForStatus(dto.Id, dto.DisplayName);
+                }
                 return statuses;
             }
             catch (Exception ex)
@@ -222,7 +259,11 @@ namespace Runnatics.Services
                     .ToListAsync();
 
                 // Query types are admin-authored free text, so the raw name IS the label.
-                foreach (var dto in types) dto.DisplayName = dto.Name;
+                foreach (var dto in types)
+                {
+                    dto.DisplayName = dto.Name;
+                    dto.ColorHex = ColorForStatus(dto.Id, dto.Name);
+                }
                 return types;
             }
             catch (Exception ex)
@@ -324,8 +365,9 @@ namespace Runnatics.Services
                     AssignedToName = q.AssignedToUser != null
                         ? $"{q.AssignedToUser.FirstName} {q.AssignedToUser.LastName}".Trim()
                         : null,
-                    // Display form ("New Query"), not the raw stored value ("new_query"):
-                    // the UI keys its status colours off this label.
+                    // StatusId is what the UI binds badges to; the label is DB-defined and
+                    // only ever used as a fallback.
+                    StatusId       = q.StatusId,
                     StatusName     = ToDisplayName(q.Status.Name)
                 }).ToList();
 
@@ -588,6 +630,33 @@ namespace Runnatics.Services
         /// raw->display mapping; the UI no longer keeps its own copy. "wip" is special-cased
         /// because generic title-casing would render it "Wip".
         /// </summary>
+        /// <summary>
+        /// Badge colour for a status, resolved SERVER-SIDE so cards, tabs, row badges and
+        /// dropdowns can never disagree. Keyed on the display label, with aliases for the
+        /// common synonyms real databases use ("Open" for new, "Resolved" for closed).
+        /// Anything unrecognised gets a stable colour picked by id, so a status the palette
+        /// has never seen still renders distinctly instead of falling back to grey.
+        /// Derived rather than stored — no schema change, no deploy-order trap.
+        /// </summary>
+        private static readonly Dictionary<string, string> StatusColors = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["New Query"] = "#1D4ED8", ["New"] = "#1D4ED8", ["Open"] = "#1D4ED8",
+            ["WIP"] = "#B45309", ["In Progress"] = "#B45309",
+            ["Closed"] = "#065F46", ["Resolved"] = "#065F46", ["Done"] = "#065F46",
+            ["Pending"] = "#5B21B6", ["On Hold"] = "#5B21B6",
+            ["Not Yet Started"] = "#374151", ["Backlog"] = "#374151",
+            ["Rejected"] = "#991B1B", ["Cancelled"] = "#991B1B",
+            ["Duplicate"] = "#9A3412",
+        };
+
+        private static readonly string[] StatusFallbackPalette =
+            ["#0F766E", "#7C3AED", "#B91C1C", "#0369A1", "#A16207", "#4D7C0F", "#BE185D"];
+
+        private static string ColorForStatus(int statusId, string displayName) =>
+            StatusColors.TryGetValue(displayName, out var hex)
+                ? hex
+                : StatusFallbackPalette[Math.Abs(statusId) % StatusFallbackPalette.Length];
+
         /// IDEMPOTENT: splits on BOTH '_' and ' ', so it yields the same label whether the
         /// row holds the seeded raw value ("new_query") or an already-humanised one
         /// ("New Query"). Splitting on '_' alone would turn "New Query" into "New query"

@@ -17,8 +17,13 @@
 -- Nothing is ever guessed into a tenant it might not belong to.
 -- =============================================
 
+-- Deliberately NO script-wide transaction: GO is a client-side batch separator, so a
+-- BEGIN TRAN here would stay open across batches and — because SSMS continues after a
+-- failed batch — could leave an open transaction holding a schema lock on SupportQueries.
+-- Every step below is independently idempotent instead, so a partial run is safe and
+-- simply re-running the script completes it.
 SET NOCOUNT ON;
-BEGIN TRANSACTION;
+SET XACT_ABORT ON;
 
 -- ── (1) Column ────────────────────────────────────────────────────────────────
 -- NULLABLE by design: POST /api/support/contact is [AllowAnonymous], so a public
@@ -85,9 +90,6 @@ UPDATE sq
  WHERE sq.TenantId IS NULL;
 
 PRINT CONCAT('Backfill step 2 (from submitter email): ', @@ROWCOUNT, ' row(s).');
-GO
-
-COMMIT;
 GO
 
 -- ── (5) Verification — review before trusting the result ──────────────────────

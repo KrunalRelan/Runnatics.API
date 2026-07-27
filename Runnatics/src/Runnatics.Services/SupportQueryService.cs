@@ -161,16 +161,23 @@ namespace Runnatics.Services
 
                 var total = counts.Sum(c => c.Count);
 
+                // Match on the NORMALISED label rather than the raw string: ToDisplayName is
+                // idempotent, so these resolve whether the lookup table holds "new_query" or
+                // "New Query". Matching the raw spelling directly would silently report 0 for
+                // every bucket if the stored casing ever changed.
+                int CountOf(string display) =>
+                    counts.FirstOrDefault(c => ToDisplayName(c.StatusName) == display)?.Count ?? 0;
+
                 return new SupportQueryCountsDto
                 {
                     Total        = total,
-                    NewQuery     = counts.FirstOrDefault(c => c.StatusName == "new_query")?.Count     ?? 0,
-                    Wip          = counts.FirstOrDefault(c => c.StatusName == "wip")?.Count          ?? 0,
-                    Closed       = counts.FirstOrDefault(c => c.StatusName == "closed")?.Count       ?? 0,
-                    Pending      = counts.FirstOrDefault(c => c.StatusName == "pending")?.Count      ?? 0,
-                    NotYetStarted = counts.FirstOrDefault(c => c.StatusName == "not_yet_started")?.Count ?? 0,
-                    Rejected     = counts.FirstOrDefault(c => c.StatusName == "rejected")?.Count     ?? 0,
-                    Duplicate    = counts.FirstOrDefault(c => c.StatusName == "duplicate")?.Count    ?? 0
+                    NewQuery     = CountOf("New Query"),
+                    Wip          = CountOf("WIP"),
+                    Closed       = CountOf("Closed"),
+                    Pending      = CountOf("Pending"),
+                    NotYetStarted = CountOf("Not Yet Started"),
+                    Rejected     = CountOf("Rejected"),
+                    Duplicate    = CountOf("Duplicate")
                 };
             }
             catch (Exception ex)
@@ -317,7 +324,9 @@ namespace Runnatics.Services
                     AssignedToName = q.AssignedToUser != null
                         ? $"{q.AssignedToUser.FirstName} {q.AssignedToUser.LastName}".Trim()
                         : null,
-                    StatusName     = q.Status.Name
+                    // Display form ("New Query"), not the raw stored value ("new_query"):
+                    // the UI keys its status colours off this label.
+                    StatusName     = ToDisplayName(q.Status.Name)
                 }).ToList();
 
                 return (items, totalCount);
@@ -430,7 +439,12 @@ namespace Runnatics.Services
 
                 await commentRepo.AddAsync(comment);
 
-                // Keep query UpdatedAt in sync
+                // MOVE THE TICKET. The comment form's "Ticket Status" field is REQUIRED and
+                // is how an admin transitions a ticket while replying ("reply + set WIP").
+                // Previously only the comment row recorded it and query.StatusId was left
+                // untouched, so the ticket never actually moved — which is why the status
+                // tabs and dashboard counts appeared not to update.
+                query.StatusId = dto.TicketStatusId;
                 query.UpdatedAt = DateTime.UtcNow;
                 await queryRepo.UpdateAsync(query);
 
@@ -541,7 +555,7 @@ namespace Runnatics.Services
             Body           = q.Body,
             SubmitterEmail = q.SubmitterEmail,
             StatusId       = q.StatusId,
-            StatusName     = q.Status?.Name ?? string.Empty,
+            StatusName     = ToDisplayName(q.Status?.Name ?? string.Empty),
             AssignedToUserId = q.AssignedToUserId,
             AssignedToName   = q.AssignedToUser != null
                 ? $"{q.AssignedToUser.FirstName} {q.AssignedToUser.LastName}".Trim()
@@ -561,7 +575,7 @@ namespace Runnatics.Services
             Id               = c.Id,
             CommentText      = c.CommentText,
             TicketStatusId   = c.TicketStatusId,
-            TicketStatusName = c.TicketStatus?.Name ?? string.Empty,
+            TicketStatusName = ToDisplayName(c.TicketStatus?.Name ?? string.Empty),
             NotificationSent = c.NotificationSent,
             CreatedAt        = c.CreatedAt,
             CreatedByName    = c.CreatedByUser != null
@@ -574,13 +588,17 @@ namespace Runnatics.Services
         /// raw->display mapping; the UI no longer keeps its own copy. "wip" is special-cased
         /// because generic title-casing would render it "Wip".
         /// </summary>
+        /// IDEMPOTENT: splits on BOTH '_' and ' ', so it yields the same label whether the
+        /// row holds the seeded raw value ("new_query") or an already-humanised one
+        /// ("New Query"). Splitting on '_' alone would turn "New Query" into "New query"
+        /// and silently break the UI's colour lookup.
         private static string ToDisplayName(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
-            if (string.Equals(raw, "wip", StringComparison.OrdinalIgnoreCase)) return "WIP";
+            if (string.Equals(raw.Trim(), "wip", StringComparison.OrdinalIgnoreCase)) return "WIP";
 
             return string.Join(' ', raw
-                .Split('_', StringSplitOptions.RemoveEmptyEntries)
+                .Split(['_', ' '], StringSplitOptions.RemoveEmptyEntries)
                 .Select(w => char.ToUpperInvariant(w[0]) + w[1..].ToLowerInvariant()));
         }
 

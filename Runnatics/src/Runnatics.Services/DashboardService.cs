@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Runnatics.Data.EF;
 using Runnatics.Models.Client.Responses.Dashboard;
+using Runnatics.Models.Data.Constants;
 using Runnatics.Models.Data.Entities;
 using Runnatics.Repositories.Interface;
 using Runnatics.Services.Interface;
@@ -107,7 +108,7 @@ namespace Runnatics.Services
                     p.AuditProperties.IsActive &&
                     !p.AuditProperties.IsDeleted)
                     .AsNoTracking()
-                    .Select(p => new { p.Gender, p.AgeCategory, p.RaceId })
+                    .Select(p => new { p.Id, p.Gender, p.AgeCategory, p.RaceId })
                     .ToListAsync(ct);
 
                 var resultsRepo = _repository.GetRepository<Results>();
@@ -118,7 +119,7 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .Include(r => r.Participant)
                     .Include(r => r.Race)
-                    .Select(r => new { r.Status, r.RaceId, r.Race.Title, r.Participant.Gender, r.Participant.AgeCategory })
+                    .Select(r => new { r.Status, r.RaceId, r.ParticipantId, r.Race.Title, r.Participant.Gender, r.Participant.AgeCategory })
                     .ToListAsync(ct);
 
                 var raceRepo = _repository.GetRepository<Race>();
@@ -156,26 +157,107 @@ namespace Runnatics.Services
                     .OrderBy(c => c.Category)
                     .ToList();
 
-                var raceStats = races.Select(race => new RaceStatItem
+                // EPC mapping = a LIVE chip assignment (UnassignedAt IS NULL, not deleted) —
+                // the same definition BibMappingService uses. ONE grouped query for the whole
+                // event; per-race counts are then derived in memory (no query per race).
+                var mappedParticipantIds = (await _repository.GetRepository<ChipAssignment>()
+                    .GetQuery(a => a.EventId == decryptedEventId &&
+                                   a.UnassignedAt == null &&
+                                   !a.AuditProperties.IsDeleted)
+                    .AsNoTracking()
+                    .Select(a => a.ParticipantId)
+                    .Distinct()
+                    .ToListAsync(ct))
+                    .ToHashSet();
+
+                // STORED Results.Status keyed by participant — the same source the grid,
+                // export and public site read. Keyed by ParticipantId (never by bib: bibs are
+                // reused across races) and deduped, so a stray second Results row for one
+                // runner cannot double-count.
+                var statusByParticipant = allResults
+                    .GroupBy(r => r.ParticipantId)
+                    .ToDictionary(g => g.Key, g => g.First().Status);
+
+                // Counts for one set of participants. Only participants in the ACTIVE
+                // participant list are considered, so results orphaned by a soft-deleted
+                // participant can't inflate the numbers past Registered.
+                EventRaceCountsDto CountsFor(IReadOnlyCollection<int> participantIds)
                 {
-                    RaceId = _encryptionService.Encrypt(race.Id.ToString()),
-                    RaceName = race.Title,
-                    Registered = allParticipants.Count(p => p.RaceId == race.Id),
-                    Finishers = allResults.Count(r => r.RaceId == race.Id && r.Status == "Finished"),
-                    Dnf = allResults.Count(r => r.RaceId == race.Id && r.Status == "DNF")
+                    var counts = new EventRaceCountsDto { Registered = participantIds.Count };
+
+                    foreach (var pid in participantIds)
+                    {
+                        if (mappedParticipantIds.Contains(pid))
+                            counts.EpcMapped++;
+
+                        if (!statusByParticipant.TryGetValue(pid, out var status))
+                            continue;
+
+                        if (status == ResultStatus.Finished) counts.FinishedOk++;
+                        else if (status == ResultStatus.DNF) counts.Dnf++;
+                        else if (status == ResultStatus.DNS) counts.Dns++;
+                        else if (ResultStatus.IsDsq(status)) counts.Dsq++;
+                    }
+
+                    counts.EpcNotMapped = counts.Registered - counts.EpcMapped;
+                    // Derived last so the buckets ALWAYS sum to Registered: this absorbs both
+                    // "no Results row yet" and any stray status outside the four known values.
+                    counts.NotProcessed = counts.Registered
+                        - (counts.FinishedOk + counts.Dnf + counts.Dns + counts.Dsq);
+
+                    return counts;
+                }
+
+                var participantIdsByRace = allParticipants
+                    .GroupBy(p => p.RaceId)
+                    .ToDictionary(g => g.Key, g => g.Select(p => p.Id).ToList());
+
+                // Driven by the RACES list, not by the participants — a race with zero
+                // participants still gets a tile showing zeros rather than disappearing.
+                var raceStats = races.Select(race =>
+                {
+                    var ids = participantIdsByRace.TryGetValue(race.Id, out var list)
+                        ? list
+                        : new List<int>();
+                    var counts = CountsFor(ids);
+
+                    return new RaceStatItem
+                    {
+                        RaceId = _encryptionService.Encrypt(race.Id.ToString()),
+                        RaceName = race.Title,
+                        Registered = counts.Registered,
+                        Finishers = counts.FinishedOk,
+                        Dnf = counts.Dnf,
+                        Counts = counts
+                    };
                 }).ToList();
+
+                // Event totals = the exact sum of the tiles, so the headline row can never
+                // disagree with the per-race numbers beneath it.
+                var totals = new EventRaceCountsDto
+                {
+                    Registered   = raceStats.Sum(r => r.Counts.Registered),
+                    EpcMapped    = raceStats.Sum(r => r.Counts.EpcMapped),
+                    EpcNotMapped = raceStats.Sum(r => r.Counts.EpcNotMapped),
+                    FinishedOk   = raceStats.Sum(r => r.Counts.FinishedOk),
+                    Dnf          = raceStats.Sum(r => r.Counts.Dnf),
+                    Dns          = raceStats.Sum(r => r.Counts.Dns),
+                    Dsq          = raceStats.Sum(r => r.Counts.Dsq),
+                    NotProcessed = raceStats.Sum(r => r.Counts.NotProcessed)
+                };
 
                 return new EventDashboardStatsDto
                 {
                     EventId = eventId,
                     EventName = eventEntity.Name,
                     TotalRegistered = allParticipants.Count,
-                    TotalFinishers = allResults.Count(r => r.Status == "Finished"),
-                    TotalDnf = allResults.Count(r => r.Status == "DNF"),
-                    TotalDns = allResults.Count(r => r.Status == "DNS"),
+                    TotalFinishers = totals.FinishedOk,
+                    TotalDnf = totals.Dnf,
+                    TotalDns = totals.Dns,
                     GenderBreakdown = genderBreakdown,
                     CategoryBreakdown = categoryBreakdown,
-                    RaceStats = raceStats
+                    RaceStats = raceStats,
+                    Totals = totals
                 };
             }
             catch (Exception ex)

@@ -1745,3 +1745,40 @@ split.
 three-case check could not be run from here: create an event dated 1h ago → PAST; 1h ahead
 → UPCOMING; earlier today with start time passed → PAST. Check on all four surfaces: home
 upcoming carousel, home past tiles, results landing, admin events list. Nothing pushed.
+
+---
+
+## 2026-07-30 (later) — Editable About page (mini-CMS): SiteContents + Founders
+
+Client wants to self-edit the public About page. Built a small CMS:
+
+**DB (script `db/scripts/AboutContent_CreateTables_20260730.sql`, NOT yet run):**
+`SiteContents` key-value copy store (keys `About.WhoWeAre` / `About.Mission` /
+`About.StoryImage`; future editable sections = new rows, not new tables) and
+`Founders` (Name/Role/Bio/PhotoBase64/DisplayOrder + audit columns). Seeds the
+copy rows with the previously hardcoded site text; seed is per-key idempotent so
+re-running never clobbers an admin edit. No cross-batch transaction.
+
+**API:** `SiteContent` + `Founder` entities/configs/DbSets; `IAboutContentService`
+/`AboutContentService` (upsert copy, founder CRUD soft-delete, encrypted founder
+ids, ~1MB server-side base64 cap); `GET api/public/about` on PublicController
+(anonymous, ResponseCache 120s — admin edits appear within ~2min); new
+`AboutContentController` `api/aboutcontent` **[Authorize(Roles="SuperAdmin")]**
+(GET, PUT copy, POST/PUT/DELETE founders). Mapper: `Founder→FounderDto` via
+IdEncryptor. DI registered.
+
+**UI admin:** `/site/about` route + "About Page" sidebar entry, BOTH gated
+SuperAdmin (route via ProtectedRoute allowedRoles, menu via roles field).
+`AboutPageEditor` — story textareas, story-image upload (500KB client cap, bare
+base64 like event banners), founders list with add/edit/delete + up/down reorder
+(reorder swaps DisplayOrder on both rows via two PUTs).
+
+**UI public:** `AboutPage` fetches `/api/public/about` once; `OurStory` takes
+props with built-in fallback copy (mirrors the DB seed — page never blank on
+error/first load); `OurServices.tsx` DELETED, replaced by `Founders.tsx` (same
+tile style, photo/name/role/bio, hidden when zero founders). Hero text remains
+hardcoded by client decision. `/services` page untouched.
+
+**DEPLOY ORDER: run the SQL BEFORE pushing the API** — the entities are mapped,
+so any query touching SiteContents/Founders 500s until the tables exist. Commits
+are local; nothing pushed yet pending Kunal running the script.

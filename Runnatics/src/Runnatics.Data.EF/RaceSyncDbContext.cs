@@ -51,6 +51,10 @@ namespace Runnatics.Data.EF
         // Notification Logs (race SMS/Email — separate from in-app Notifications)
         public DbSet<NotificationLog> NotificationLogs { get; set; }
 
+        // Editable public-site content (About page CMS)
+        public DbSet<SiteContent> SiteContents { get; set; }
+        public DbSet<Founder> Founders { get; set; }
+
         // public DbSet<AuditLog> AuditLogs { get; set; }
 
         #endregion
@@ -97,6 +101,10 @@ namespace Runnatics.Data.EF
 
             // Notification Log
             modelBuilder.ApplyConfiguration(new NotificationLogConfiguration());
+
+            // Public-site content (About page CMS)
+            modelBuilder.ApplyConfiguration(new SiteContentConfiguration());
+            modelBuilder.ApplyConfiguration(new FounderConfiguration());
             
             //modelBuilder.DefaultFilters();
 

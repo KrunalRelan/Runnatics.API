@@ -654,6 +654,13 @@ namespace Runnatics.Services.Mappings
                 }));
 
             #endregion BibMapping mappings
+
+            #region About content mappings
+
+            CreateMap<Founder, Runnatics.Models.Client.Responses.About.FounderDto>()
+                .ForMember(dest => dest.Id, opt => opt.ConvertUsing<IdEncryptor, int>(src => src.Id));
+
+            #endregion About content mappings
         }
     }
 }

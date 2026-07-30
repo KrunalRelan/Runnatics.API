@@ -23,11 +23,13 @@ namespace Runnatics.Api.Controller
     public class PublicController(
         IEventsService eventsService,
         IPublicResultsService publicResultsService,
-        ISupportQueryService supportQueryService) : ControllerBase
+        ISupportQueryService supportQueryService,
+        IAboutContentService aboutContentService) : ControllerBase
     {
         private readonly IEventsService _eventsService = eventsService;
         private readonly IPublicResultsService _resultsService = publicResultsService;
         private readonly ISupportQueryService _supportQueryService = supportQueryService;
+        private readonly IAboutContentService _aboutContentService = aboutContentService;
 
         #region Events
 
@@ -364,6 +366,31 @@ namespace Runnatics.Api.Controller
                     CreateErrorResponse<PublicStatsDto>(_eventsService.ErrorMessage));
 
             return Ok(new ResponseBase<PublicStatsDto> { Message = dto });
+        }
+
+        #endregion
+
+        #region About page
+
+        /// <summary>
+        /// Editable About page content: story copy + founders tiles.
+        /// Short response cache — content changes rarely, but an admin edit should
+        /// show up within a couple of minutes without a redeploy.
+        /// </summary>
+        [HttpGet("about")]
+        [EnableRateLimiting("PublicRead")]
+        [ResponseCache(Duration = 120)]
+        [ProducesResponseType(typeof(ResponseBase<PublicAboutDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetAbout(CancellationToken cancellationToken = default)
+        {
+            var dto = await _aboutContentService.GetPublicAboutAsync(cancellationToken);
+
+            if (_aboutContentService.HasError)
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    CreateErrorResponse<PublicAboutDto>(_aboutContentService.ErrorMessage));
+
+            return Ok(new ResponseBase<PublicAboutDto> { Message = dto });
         }
 
         #endregion

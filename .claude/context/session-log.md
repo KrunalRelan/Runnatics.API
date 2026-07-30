@@ -1694,3 +1694,54 @@ loop), #15 (AuditProperties/Fluent-API conversion for support entities).
 
 **Open, not fixed (reported only):** `SupportQueryService` still injects an unused
 `ISmsService` — dead before this session, left alone to stay in scope.
+
+---
+
+## 2026-07-30 — Past-events pagination, podium gender tab, email logo, event-date split
+
+**Item 1 — results landing showed only 5 past events.** Two caps, not one:
+`ResultsLandingPage` sliced to 5 AND `getPastEvents` sent `take:10`, so lifting the UI
+cap alone would have surfaced nothing more. Landing now uses the already-existing
+`getEventsPaged` with server-side pagination, 12/page (chosen over infinite scroll for
+predictability), most recent first, publish gate untouched. Also fixed
+`GetPublicEventsAsync` reporting `PageSize` when `Take` had overridden it — `TotalPages`
+/`HasNext` were computed off a page size the caller never received.
+
+**Item 2 — podium REVERSAL.** The client reversed the earlier "both genders side by side,
+do NOT adopt the toggle" decision. `GlobalResultsPage` now renders ONE `GenderBlock`
+behind a segmented MALE/FEMALE tab (default MALE, full tablist semantics + arrow keys);
+`.lb-grid` and the per-block gender heading are gone. Base badge restored as
+"● PROVISIONAL RESULTS" (client renamed from LIVE RESULTS), same publish gate as the
+confetti. Cards widened to ~3:4, confetti moved to the reference's multi-colour palette.
+Reference art lives at `Runnatics.Ui/docs/design/podium-reference.jpeg` — it was briefly
+in `public/images/`, which would have served it from the live site.
+
+**Item 3 — logo in outbound email.** All four templates already shared ONE partial,
+`EmailTemplateService.WrapInLayout`, so the logo went in once there. Hosted absolute URL
+`https://racetik.com/images/racetik-logo.png` (verified live, `image/png`), overridable
+via `Email:LogoUrl`; no CID, no relative path. Header band flipped navy→white — the logo
+is dark navy artwork and was invisible on the old navy fill. Width attribute AND inline
+style (Outlook honours the attribute), alt text, real `<img>` not a CSS background.
+
+**Item 4 — new events always UPCOMING. Root cause was the ADMIN path, not the public one.**
+`BuildSearchExpression` and `ExecuteEventDateSortedSearchAsync` compared against
+`DateTime.UtcNow.Date` — date-only — so an event whose start TIME had passed stayed
+Future for the rest of that calendar day, flipping to Past only at today−1. Exactly the
+symptom. The public split was already correct. Both admin sites now use full
+`DateTime.UtcNow`: past = `EventDate <= now`, upcoming = `EventDate > now`.
+
+The client was ALSO classifying independently: `normaliseEvent` derived `isPast` from
+`new Date(e.eventDate) < new Date()`. `eventDate` serialises WITHOUT a Z, so the browser
+parsed a UTC instant as browser-local — the serialisation gotcha in
+`timezone-datetime.md`, here as a second predicate that gates "View Leaderboard" on every
+tile. Removed; `PublicEventSummaryDto.IsPast` is now the single server-side source.
+
+**Deliberately NOT touched (different concepts, reported not fixed):**
+`DashboardService` today/tomorrow buckets and `PiDeviceService`'s device window still use
+`.Date`. Those are "events happening today" / device-scope windows, not the upcoming/past
+split.
+
+**NOT VERIFIED AT RUNTIME — needs Kunal.** Both solutions build clean (0 errors), but the
+three-case check could not be run from here: create an event dated 1h ago → PAST; 1h ahead
+→ UPCOMING; earlier today with start time passed → PAST. Check on all four surfaces: home
+upcoming carousel, home past tiles, results landing, admin events list. Nothing pushed.

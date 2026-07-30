@@ -1,12 +1,20 @@
+using Microsoft.Extensions.Configuration;
 using Runnatics.Services.Interface;
 
 namespace Runnatics.Services
 {
-    public class EmailTemplateService : IEmailTemplateService
+    public class EmailTemplateService(IConfiguration configuration) : IEmailTemplateService
     {
         private const string Navy = "#1b2d5a";
         private const string Maroon = "#5a1a35";
         private const string Green = "#2d8e3f";
+
+        // Hosted absolute URL, never a relative path or a local file: mail clients
+        // resolve nothing relative to the API. Configurable so the asset can move
+        // without a redeploy of this template.
+        private const string DefaultLogoUrl = "https://racetik.com/images/racetik-logo.png";
+
+        private string LogoUrl => configuration["Email:LogoUrl"] ?? DefaultLogoUrl;
 
         public string BuildSupportQueryConfirmation(string submitterName, string subject, string ticketId)
         {
@@ -98,7 +106,15 @@ namespace Runnatics.Services
             return WrapInLayout("Your Race Results", body);
         }
 
-        private static string WrapInLayout(string title, string bodyContent)
+        // The ONE header partial. Every outbound template routes through it, so the
+        // logo is added here once rather than per-template.
+        //
+        // Header band is WHITE: the logo is dark navy artwork and would be invisible
+        // on the navy fill the old text wordmark sat on. The logo is a real <img>
+        // with a width ATTRIBUTE as well as the inline style (Outlook honours the
+        // attribute, not the style) and alt text for image-blocking clients — never
+        // a CSS background, which Gmail and Outlook both strip.
+        private string WrapInLayout(string title, string bodyContent)
         {
             return $@"<!DOCTYPE html>
 <html lang=""en"">
@@ -115,8 +131,9 @@ namespace Runnatics.Services
 
           <!-- Header -->
           <tr>
-            <td style=""background-color:{Navy};padding:24px 32px;text-align:center;"">
-              <span style=""color:#ffffff;font-size:26px;font-weight:bold;letter-spacing:2px;"">RACETIK</span>
+            <td style=""background-color:#ffffff;padding:24px 32px;text-align:center;border-bottom:3px solid {Navy};"">
+              <img src=""{LogoUrl}"" width=""200"" alt=""Racetik""
+                   style=""display:block;margin:0 auto;width:200px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;"" />
             </td>
           </tr>
 

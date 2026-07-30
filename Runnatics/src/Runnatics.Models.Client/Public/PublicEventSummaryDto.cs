@@ -42,5 +42,14 @@ namespace Runnatics.Models.Client.Public
         /// Used to conditionally show the "View Result →" button on public event tiles.
         /// </summary>
         public bool HasPublishedResults { get; set; }
+
+        /// <summary>
+        /// True when the event's start instant has passed (EventDate &lt;= UtcNow).
+        /// The SINGLE source of the upcoming/past decision — the client must not
+        /// re-derive this from EventDate. EventDate serialises without a Z, so
+        /// JavaScript would parse a UTC instant as browser-local and could disagree
+        /// with the server about which bucket the event is in.
+        /// </summary>
+        public bool IsPast { get; set; }
     }
 }

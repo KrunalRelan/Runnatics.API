@@ -395,14 +395,20 @@ namespace Runnatics.Services
         /// </summary>
         private static Expression<Func<Event, bool>> BuildSearchExpression(EventSearchRequest request, int tenantId, EventTimeFilter timeFilter = EventTimeFilter.All)
         {
-            var today = DateTime.UtcNow.Date;
+            // Full DATETIME in UTC, NOT DateTime.UtcNow.Date. A date-only comparison
+            // kept every event "future" for its whole calendar day even after its
+            // start time had passed, so a newly created event only fell into Past
+            // once it was dated yesterday. Matches the public split exactly:
+            // upcoming = EventDate > now, past = EventDate <= now. EventDate is UTC;
+            // Event.TimeZone is display metadata and is never used here.
+            var now = DateTime.UtcNow;
 
             return e =>
                 e.TenantId == tenantId &&
                 // Time filter conditions
                 (timeFilter == EventTimeFilter.All ||
-                 (timeFilter == EventTimeFilter.Past && e.EventDate < today) ||
-                 (timeFilter == EventTimeFilter.Future && e.EventDate >= today)) &&
+                 (timeFilter == EventTimeFilter.Past && e.EventDate <= now) ||
+                 (timeFilter == EventTimeFilter.Future && e.EventDate > now)) &&
                 // Existing conditions
                 (string.IsNullOrEmpty(request.Name) || e.Name.Contains(request.Name)) &&
                 (!request.Status.HasValue || (int)e.Status == (int)request.Status.Value) &&
@@ -464,20 +470,23 @@ namespace Runnatics.Services
 
         /// <summary>
         /// Applies upcoming-first, past-last ordering on EventDate:
-        ///   1. Upcoming (EventDate >= today) ordered by nearest date ascending
-        ///   2. Past (EventDate < today) ordered by most recent date first
+        ///   1. Upcoming (EventDate > now) ordered by nearest date ascending
+        ///   2. Past (EventDate &lt;= now) ordered by most recent date first
+        /// Uses the same full-UTC-datetime predicate as BuildSearchExpression, so a
+        /// filtered list and a sorted list can never disagree about which bucket an
+        /// event belongs to.
         /// </summary>
         private static async Task<Models.Data.Common.PagingList<Event>> ExecuteEventDateSortedSearchAsync(
             IGenericRepository<Event> eventRepo,
             Expression<Func<Event, bool>> filter,
             EventSearchRequest request)
         {
-            var today = DateTime.UtcNow.Date;
+            var now = DateTime.UtcNow;
 
             var query = eventRepo.GetQuery(filter)
-                .OrderByDescending(e => e.EventDate >= today ? 1 : 0)
-                .ThenBy(e => e.EventDate >= today ? e.EventDate : DateTime.MaxValue)
-                .ThenByDescending(e => e.EventDate < today ? e.EventDate : DateTime.MinValue);
+                .OrderByDescending(e => e.EventDate > now ? 1 : 0)
+                .ThenBy(e => e.EventDate > now ? e.EventDate : DateTime.MaxValue)
+                .ThenByDescending(e => e.EventDate <= now ? e.EventDate : DateTime.MinValue);
 
             var totalCount = await query.CountAsync();
 
@@ -1002,7 +1011,7 @@ namespace Runnatics.Services
                         .ThenInclude(r => r.RaceSettings)
                     .AsNoTracking();
 
-                // Upcoming events display regardless of publish state (EventDate >= today,
+                // Upcoming events display regardless of publish state (EventDate > now,
                 // active, not deleted). Past/all still require a published-or-confirmed event
                 // so drafts never surface publicly.
                 IQueryable<Event> orderedQuery;
@@ -1164,8 +1173,12 @@ namespace Runnatics.Services
 
             var hasPublishedResults = e.EventSettings?.Published ?? false;
 
+            // Same predicate as the upcoming/past query split — full UTC datetime.
+            var isPast = e.EventDate <= DateTime.UtcNow;
+
             return new PublicEventSummaryDto
             {
+                IsPast = isPast,
                 EncryptedId = _encryptionService.Encrypt(e.Id.ToString()),
                 Slug = e.Slug,
                 Name = e.Name,

@@ -1037,7 +1037,9 @@ namespace Runnatics.Services
                 {
                     Items = items.Select(MapToEventSummaryDto).ToList(),
                     Page = page,
-                    PageSize = pageSize,
+                    // Report the size actually applied (Take overrides PageSize), otherwise
+                    // TotalPages/HasNext are computed off a page size the caller never got.
+                    PageSize = effectiveSize,
                     TotalCount = totalCount
                 };
             }

@@ -984,6 +984,12 @@ namespace Runnatics.Services
 
         private const int MaxPublicPageSize = 100;
 
+        // Public-visibility gate, written once: an event appears on the public site
+        // only when the "Publish Event" toggle (EventSettings.Published) is ON.
+        // ConfirmedEvent is an internal/admin flag and is deliberately NOT consulted.
+        private static readonly Expression<Func<Event, bool>> PubliclyVisible =
+            e => e.EventSettings != null && e.EventSettings.Published;
+
         public async Task<PublicPagedResultDto<PublicEventSummaryDto>> GetPublicEventsAsync(
             GetPublicEventsRequest request, CancellationToken ct = default)
         {
@@ -1009,11 +1015,10 @@ namespace Runnatics.Services
                     .Include(e => e.EventSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
                         .ThenInclude(r => r.RaceSettings)
-                    .AsNoTracking();
+                    .AsNoTracking()
+                    // Upcoming included: every public listing respects the publish toggle.
+                    .Where(PubliclyVisible);
 
-                // Upcoming events display regardless of publish state (EventDate > now,
-                // active, not deleted). Past/all still require a published-or-confirmed event
-                // so drafts never surface publicly.
                 IQueryable<Event> orderedQuery;
                 if (normalizedStatus == "upcoming")
                     orderedQuery = query
@@ -1021,14 +1026,10 @@ namespace Runnatics.Services
                         .OrderBy(e => e.EventDate);
                 else if (normalizedStatus == "past")
                     orderedQuery = query
-                        .Where(e => e.EventDate <= now
-                            && e.EventSettings != null
-                            && (e.EventSettings.Published || e.EventSettings.ConfirmedEvent))
+                        .Where(e => e.EventDate <= now)
                         .OrderByDescending(e => e.EventDate);
                 else
                     orderedQuery = query
-                        .Where(e => e.EventSettings != null
-                            && (e.EventSettings.Published || e.EventSettings.ConfirmedEvent))
                         .OrderByDescending(e => e.EventDate);
 
                 var totalCount = await orderedQuery.CountAsync(ct);
@@ -1070,9 +1071,8 @@ namespace Runnatics.Services
                 var eventEntity = await eventRepo.GetQuery(e =>
                     e.Id == decryptedId &&
                     e.AuditProperties.IsActive &&
-                    !e.AuditProperties.IsDeleted &&
-                    e.EventSettings != null &&
-                    (e.EventSettings.Published || e.EventSettings.ConfirmedEvent))
+                    !e.AuditProperties.IsDeleted)
+                    .Where(PubliclyVisible)
                     .Include(e => e.EventSettings)
                     .Include(e => e.LeaderboardSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
@@ -1128,9 +1128,8 @@ namespace Runnatics.Services
                 var eventRepo = _repository.GetRepository<Event>();
                 var baseQuery = eventRepo.GetQuery(e =>
                     e.AuditProperties.IsActive &&
-                    !e.AuditProperties.IsDeleted &&
-                    e.EventSettings != null &&
-                    (e.EventSettings.Published || e.EventSettings.ConfirmedEvent));
+                    !e.AuditProperties.IsDeleted)
+                    .Where(PubliclyVisible);
 
                 int upcoming = await baseQuery.Where(e => e.EventDate > now).CountAsync(ct);
                 int past = await baseQuery.Where(e => e.EventDate <= now).CountAsync(ct);

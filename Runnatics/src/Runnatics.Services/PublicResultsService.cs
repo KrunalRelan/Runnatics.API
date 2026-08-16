@@ -183,7 +183,7 @@ namespace Runnatics.Services
         {
             try
             {
-                var search   = request.Search;
+                var search   = request.Search?.Trim();
                 var gender   = request.Gender;
                 var category = request.Category;
                 var showAll  = request.ShowAll;
@@ -290,11 +290,15 @@ namespace Runnatics.Services
                     .Include(r => r.Participant)
                     .AsNoTracking();
 
+                // Bib matches are EXACT (substring matching made partial digits light up the whole
+                // field — every 50K bib contains "5"); names are substring, matched against the
+                // CONCATENATED full name so "chandeep singh" works when the DB splits (or doesn't
+                // split) the name across FirstName/LastName. Case-insensitivity comes from the
+                // column collation (SQL_Latin1_General_CP1_CI_AS) — no ToLower(), it defeats indexes.
                 if (!string.IsNullOrWhiteSpace(search))
                     filteredQuery = filteredQuery.Where(r =>
-                        (r.Participant.BibNumber != null && r.Participant.BibNumber.Contains(search)) ||
-                        (r.Participant.FirstName != null && r.Participant.FirstName.Contains(search)) ||
-                        (r.Participant.LastName  != null && r.Participant.LastName.Contains(search)));
+                        r.Participant.BibNumber == search ||
+                        ((r.Participant.FirstName ?? "") + " " + (r.Participant.LastName ?? "")).Contains(search));
 
                 if (!string.IsNullOrWhiteSpace(gender))
                 {

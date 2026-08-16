@@ -13,6 +13,7 @@ namespace Runnatics.Services.Interface
         Task<PublicResultDto?> GetPublicResultByBibAsync(
             string encryptedEventId,
             string bib,
+            string? encryptedRaceId = null,
             CancellationToken ct = default);
 
         Task<PublicGroupedLeaderboardDto?> GetPublicGroupedLeaderboardAsync(

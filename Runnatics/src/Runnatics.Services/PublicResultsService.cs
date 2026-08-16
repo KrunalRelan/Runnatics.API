@@ -41,13 +41,15 @@ namespace Runnatics.Services
                 var gender = request.Gender;
 
                 var eventRepo = _repository.GetRepository<Event>();
+                // Published is NOT part of this lookup: unpublished events must still resolve so the
+                // isEventPublished gate below can answer with the friendly "not yet published" stub
+                // instead of a 404. (An inverted !Published here used to make published events 404.)
                 var eventEntity = await eventRepo.GetQuery(e =>
                     e.Id == decryptedEventId &&
                     e.AuditProperties.IsActive &&
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
-                    e.EventSettings.ConfirmedEvent &&
-                    !e.EventSettings.Published)
+                    e.EventSettings.ConfirmedEvent)
                     .Include(e => e.EventSettings)
                     .Include(e => e.Races.Where(r => r.AuditProperties.IsActive && !r.AuditProperties.IsDeleted))
                         .ThenInclude(r => r.RaceSettings)
@@ -141,7 +143,7 @@ namespace Runnatics.Services
         }
 
         public async Task<PublicResultDto?> GetPublicResultByBibAsync(
-            string encryptedEventId, string bib, CancellationToken ct = default)
+            string encryptedEventId, string bib, string? encryptedRaceId = null, CancellationToken ct = default)
         {
             try
             {
@@ -153,15 +155,20 @@ namespace Runnatics.Services
                     !e.AuditProperties.IsDeleted &&
                     e.EventSettings != null &&
                     e.EventSettings.ConfirmedEvent &&
-                    !e.EventSettings.Published)
+                    e.EventSettings.Published)
                     .AsNoTracking()
                     .FirstOrDefaultAsync(ct);
 
                 if (eventEntity == null)
                     return null;
 
+                // Optional race scope: a bib reused across an event's races is ambiguous without it.
+                int? decryptedRaceId = string.IsNullOrWhiteSpace(encryptedRaceId)
+                    ? null
+                    : Convert.ToInt32(_encryptionService.Decrypt(encryptedRaceId));
+
                 var results = await GetPublicResultsAsync(
-                    eventEntity.Id, raceId: null, searchQuery: bib, gender: null, page: 1, pageSize: 10);
+                    eventEntity.Id, raceId: decryptedRaceId, searchQuery: bib, gender: null, page: 1, pageSize: 10);
 
                 var match = results.FirstOrDefault(r =>
                     r.Participant?.BibNumber != null &&

@@ -125,9 +125,10 @@ namespace Runnatics.Api.Controller
         public async Task<IActionResult> GetResultByBib(
             string eventId,
             string bib,
+            [FromQuery] string? raceId = null,
             CancellationToken cancellationToken = default)
         {
-            var dto = await _resultsService.GetPublicResultByBibAsync(eventId, bib, cancellationToken);
+            var dto = await _resultsService.GetPublicResultByBibAsync(eventId, bib, raceId, cancellationToken);
 
             if (_resultsService.HasError)
                 return StatusCode((int)HttpStatusCode.InternalServerError,

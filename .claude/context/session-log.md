@@ -2,6 +2,20 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-08-17 — Dual-basis ranks (Net*/Gun*) + shared competition numbering — Fable, NOT committed
+
+**Bug:** public participant page showed identical rank badges in the Chip and Gun timing sections — only ONE stored rank set existed (configured basis via RankOnNet/per-view); the other basis was never computed.
+
+**Client decisions (approved):** explicit pairs `NetOverallRank/NetGenderRank/NetCategoryRank` + `Gun*` on Results; SHARED competition numbering (1,2,2,4) everywhere INCLUDING legacy columns (Twin Lake 14.5K: 9 gun tie groups/21 runners, 2 net groups/4 runners); DNS/DNF/DSQ stay excluded from ranks and denominators; chip section reads Net*, gun reads Gun*; backfill Twin Lake 14.5 Km only.
+
+**Changes:** SQL `db/scripts/Add_DualBasisRanks_To_Results_20260817.sql` (idempotent, 6 INT NULL cols — run manually). `Results.cs` + `ResultConfiguration.cs` 6 new props. `RankCalculator.AssignRanks` computes both explicit sets with shared numbering + copies configured basis into legacy cols (nulls never share a rank). `PublicResultsService` participant detail: per-basis ranks with legacy fallback pre-backfill; denominators now count only the ranked population (M/F for gender, real category) — null total when numerator null (`PublicTimeDetailDto.TotalGender/TotalCategory` → int?; UI already hides null). Determinism guard: ThenBy(NetTime,GunTime,ParticipantId) on podium query + overall/category display sorts (podium is positional — cannot show two 1sts, but tie order was unstable). `TECH_DEBT.md` created: legacy 3 columns redundant, retire once all consumers (leaderboard/podium/admin/export/certificates/SMS) read explicit pairs.
+
+**Tests:** 2 old strict-tiebreak tests rewritten to shared-numbering spec + 2 new (1,2,2,4 skip; null-times-never-share; dual-set/legacy-copy). Full Services suite 171/171 green (needs DOTNET_ROLL_FORWARD=LatestMajor — only .NET 10 runtime installed, tests target net8.0). API build 0 errors.
+
+**Certificates note:** `Results.CertificateGenerated` is never set true; PDFs generate on demand, downloads untracked — issued-cert count for Twin Lake is unknowable from the DB.
+
+**Open:** backfill = trigger a re-rank on Twin Lake 14.5 Km only (leaderboard-settings save or manual-edit path both funnel to ApplyStoredRanksAsync). Other events re-rank (and tied runners' numbers change) whenever next reprocessed — heads-up query given to user.
+
 ### 2026-08-17 — Edit Event: banner replaceable (was write-once) — Fable, NOT committed
 
 **Bug:** once an event had a banner, Edit Event could not replace it. Three independent gates: (1) UI hid the file picker when `existingBannerBase64` was set ("It cannot be changed"); (2) UI payload spread `!existingBannerBase64 && bannerBase64` dropped the field; (3) server `UpdateEventEntity` only wrote `BannerImage` when the column was empty. Thumbnail was already replaceable at all three layers.

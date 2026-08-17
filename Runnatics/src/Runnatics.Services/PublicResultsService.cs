@@ -276,7 +276,12 @@ namespace Runnatics.Services
                                    !r.AuditProperties.IsDeleted)
                     .Include(r => r.Participant)
                     .AsNoTracking()
+                    // Shared-rank ties make OverallRank alone non-deterministic; the secondary
+                    // keys pin which tied runner fills each podium slot stably across requests.
                     .OrderBy(r => r.OverallRank ?? int.MaxValue)
+                    .ThenBy(r => r.NetTime)
+                    .ThenBy(r => r.GunTime)
+                    .ThenBy(r => r.ParticipantId)
                     .Take(3)
                     .ToListAsync(ct);
 
@@ -351,7 +356,13 @@ namespace Runnatics.Services
                             {
                                 // Order by the STORED CategoryRank (category basis) — same ranks every
                                 // surface reads; display the stored rank as the number.
-                                var sorted = catGroup.OrderBy(r => r.CategoryRank ?? int.MaxValue).ToList();
+                                var sorted = catGroup
+                                    .OrderBy(r => r.CategoryRank ?? int.MaxValue)
+                                    // Deterministic order within shared-rank tie groups.
+                                    .ThenBy(r => r.NetTime ?? long.MaxValue)
+                                    .ThenBy(r => r.GunTime ?? long.MaxValue)
+                                    .ThenBy(r => r.ParticipantId)
+                                    .ToList();
 
                                 var participants = sorted
                                     .Select((r, idx) => new PublicLeaderboardEntryDto
@@ -391,6 +402,10 @@ namespace Runnatics.Services
                 // displayed rank number (which already reads r.OverallRank below).
                 var overallSorted = allFinishers
                     .OrderBy(r => r.OverallRank ?? int.MaxValue)
+                    // Deterministic order within shared-rank tie groups.
+                    .ThenBy(r => r.NetTime ?? long.MaxValue)
+                    .ThenBy(r => r.GunTime ?? long.MaxValue)
+                    .ThenBy(r => r.ParticipantId)
                     .ToList();
 
                 // BUG-24: when a NumberOfResultsToShowOverall cap is configured, return the top N
@@ -514,7 +529,12 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .CountAsync(ct);
 
-                int totalGender = await resultsRepo
+                // Denominators must count the SAME population the numerator is ranked within:
+                // gender ranks exist only for canonical "M"/"F", category ranks only for a real
+                // (non-Unknown) category — a participant outside those populations has a null rank,
+                // so their denominator is null too (the badge hides its "of N" line).
+                bool genderRanked = participant.Gender == "M" || participant.Gender == "F";
+                int? totalGender = !genderRanked ? null : await resultsRepo
                     .GetQuery(r => r.RaceId == raceId &&
                                    r.Status == "Finished" &&
                                    r.AuditProperties.IsActive &&
@@ -523,7 +543,9 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .CountAsync(r => r.Participant.Gender == participant.Gender, ct);
 
-                int totalCategory = await resultsRepo
+                bool categoryRanked = !string.IsNullOrWhiteSpace(participant.AgeCategory) &&
+                                      !string.Equals(participant.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase);
+                int? totalCategory = !categoryRanked ? null : await resultsRepo
                     .GetQuery(r => r.RaceId == raceId &&
                                    r.Status == "Finished" &&
                                    r.AuditProperties.IsActive &&
@@ -561,15 +583,18 @@ namespace Runnatics.Services
                         avgPace = FormatPace(paceMinKm);
                     }
 
+                    // Chip section reads the explicit NET set. Legacy fallback covers races not
+                    // yet re-ranked since the dual-basis columns were added (pre-backfill they
+                    // are null; the legacy value reproduces the old behavior until a re-rank).
                     chipTimeDto = new PublicTimeDetailDto
                     {
                         Time          = FormatMs(result.NetTime.Value),
                         AveragePace   = avgPace,
-                        OverallRank   = result.OverallRank,
+                        OverallRank   = result.NetOverallRank ?? result.OverallRank,
                         TotalOverall  = totalFinished,
-                        GenderRank    = result.GenderRank,
+                        GenderRank    = result.NetGenderRank ?? result.GenderRank,
                         TotalGender   = totalGender,
-                        CategoryRank  = result.CategoryRank,
+                        CategoryRank  = result.NetCategoryRank ?? result.CategoryRank,
                         TotalCategory = totalCategory
                     };
                 }
@@ -584,15 +609,16 @@ namespace Runnatics.Services
                         avgPace = FormatPace(paceMinKm);
                     }
 
+                    // Gun section reads the explicit GUN set (legacy fallback pre-backfill, as above).
                     gunTimeDto = new PublicTimeDetailDto
                     {
                         Time          = FormatMs(result.GunTime.Value),
                         AveragePace   = avgPace,
-                        OverallRank   = result.OverallRank,
+                        OverallRank   = result.GunOverallRank ?? result.OverallRank,
                         TotalOverall  = totalFinished,
-                        GenderRank    = result.GenderRank,
+                        GenderRank    = result.GunGenderRank ?? result.GenderRank,
                         TotalGender   = totalGender,
-                        CategoryRank  = result.CategoryRank,
+                        CategoryRank  = result.GunCategoryRank ?? result.CategoryRank,
                         TotalCategory = totalCategory
                     };
                 }

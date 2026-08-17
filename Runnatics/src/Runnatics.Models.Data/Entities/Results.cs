@@ -14,9 +14,18 @@ namespace Runnatics.Models.Data.Entities
         public long? FinishTime { get; set; } // Total race time in milliseconds
         public long? GunTime { get; set; } // Time from gun start
         public long? NetTime { get; set; } // Time from participant crossing start line
+        // Legacy single-basis set — populated with the configured basis (RankOnNet / per-view
+        // settings). Redundant with one of the explicit pairs below; see TECH_DEBT.md.
         public int? OverallRank { get; set; }
         public int? GenderRank { get; set; }
         public int? CategoryRank { get; set; }
+        // Explicit dual-basis rank sets — shared competition numbering (1,2,2,4).
+        public int? NetOverallRank { get; set; }
+        public int? NetGenderRank { get; set; }
+        public int? NetCategoryRank { get; set; }
+        public int? GunOverallRank { get; set; }
+        public int? GunGenderRank { get; set; }
+        public int? GunCategoryRank { get; set; }
         public string Status { get; set; } = "Finished"; // Finished, DNF, DQ, DNS
         public string? DisqualificationReason { get; set; }
         public long? ManualFinishTimeMs { get; set; } // Admin-entered finish time override (milliseconds)

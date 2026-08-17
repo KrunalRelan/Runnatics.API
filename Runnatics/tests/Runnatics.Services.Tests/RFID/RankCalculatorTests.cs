@@ -71,30 +71,71 @@ namespace Runnatics.Services.Tests.RFID
             Assert.AreEqual(1, b.CategoryRank);
         }
 
-        // ─── 6c: ties — primary → other time → ParticipantId; stable across runs ───
+        // ─── 6c: ties — SHARED competition numbering (1,2,2,4; 2026-08 client decision).
+        //     Equal primary times share a rank; the next distinct time resumes at its ordinal. ───
 
         [TestMethod]
-        public void Tie_PrimaryEqual_OtherTimeBreaks()
+        public void Tie_PrimaryEqual_SharesRank()
         {
             var a = R(1, net: 100, gun: 150);
-            var b = R(2, net: 100, gun: 140);   // same net, faster gun → wins
+            var b = R(2, net: 100, gun: 140);   // same net → same chip rank, gun times differ
 
             RankCalculator.AssignRanks(new[] { a, b }, overallBasis: true, categoryBasis: true);
 
+            Assert.AreEqual(1, a.OverallRank, "equal primary time shares rank 1");
             Assert.AreEqual(1, b.OverallRank);
-            Assert.AreEqual(2, a.OverallRank);
+            Assert.AreEqual(1, b.GunOverallRank, "gun basis is NOT tied — faster gun ranks 1");
+            Assert.AreEqual(2, a.GunOverallRank);
         }
 
         [TestMethod]
-        public void Tie_FullyEqual_ParticipantIdBreaks_NeverBib()
+        public void Tie_FullyEqual_SharesRank_CompetitionNumberingSkips()
         {
-            var a = R(7, net: 100, gun: 100);
-            var b = R(3, net: 100, gun: 100);   // lower ParticipantId → wins
+            // 1,2,2,4: tied pair shares rank 2; next runner resumes at ordinal 4.
+            var first = R(1, net: 100, gun: 100);
+            var tied1 = R(7, net: 200, gun: 200);
+            var tied2 = R(3, net: 200, gun: 200);
+            var next  = R(5, net: 300, gun: 300);
+
+            RankCalculator.AssignRanks(new[] { first, tied1, tied2, next }, overallBasis: true, categoryBasis: true);
+
+            Assert.AreEqual(1, first.OverallRank);
+            Assert.AreEqual(2, tied1.OverallRank, "fully equal times share the rank");
+            Assert.AreEqual(2, tied2.OverallRank);
+            Assert.AreEqual(4, next.OverallRank, "competition numbering skips the absorbed ordinal");
+        }
+
+        [TestMethod]
+        public void Tie_NullTimes_NeverShareARank()
+        {
+            var a = R(1, net: null, gun: null);
+            var b = R(2, net: null, gun: null);
+            var c = R(3, net: 100, gun: 100);
+
+            RankCalculator.AssignRanks(new[] { a, b, c }, overallBasis: true, categoryBasis: true);
+
+            Assert.AreEqual(1, c.OverallRank);
+            CollectionAssert.AreEquivalent(new int?[] { 2, 3 },
+                new[] { a.OverallRank, b.OverallRank },
+                "null times sort last with distinct ordinals — absent data is not a tie");
+        }
+
+        [TestMethod]
+        public void DualSets_BothBasesPopulated_LegacyCopiesConfiguredBasis()
+        {
+            // Net order a,b — gun order b,a. Legacy follows the configured basis (net here).
+            var a = R(1, net: 100, gun: 300);
+            var b = R(2, net: 200, gun: 100);
 
             RankCalculator.AssignRanks(new[] { a, b }, overallBasis: true, categoryBasis: true);
 
-            Assert.AreEqual(1, b.OverallRank);
-            Assert.AreEqual(2, a.OverallRank);
+            Assert.AreEqual(1, a.NetOverallRank);
+            Assert.AreEqual(2, b.NetOverallRank);
+            Assert.AreEqual(2, a.GunOverallRank);
+            Assert.AreEqual(1, b.GunOverallRank);
+            Assert.AreEqual(a.NetOverallRank, a.OverallRank, "legacy = configured (net) basis");
+            Assert.AreEqual(a.NetGenderRank, a.GenderRank);
+            Assert.AreEqual(a.NetCategoryRank, a.CategoryRank);
         }
 
         [TestMethod]

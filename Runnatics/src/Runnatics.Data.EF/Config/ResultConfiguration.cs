@@ -49,6 +49,24 @@ namespace Runnatics.Data.EF.Config
             builder.Property(e => e.CategoryRank)
                 .HasColumnName("CategoryRank");
 
+            builder.Property(e => e.NetOverallRank)
+                .HasColumnName("NetOverallRank");
+
+            builder.Property(e => e.NetGenderRank)
+                .HasColumnName("NetGenderRank");
+
+            builder.Property(e => e.NetCategoryRank)
+                .HasColumnName("NetCategoryRank");
+
+            builder.Property(e => e.GunOverallRank)
+                .HasColumnName("GunOverallRank");
+
+            builder.Property(e => e.GunGenderRank)
+                .HasColumnName("GunGenderRank");
+
+            builder.Property(e => e.GunCategoryRank)
+                .HasColumnName("GunCategoryRank");
+
             builder.Property(e => e.Status)
                 .HasColumnName("Status")
                 .HasMaxLength(20)

@@ -16,7 +16,11 @@ namespace Runnatics.Services
     ///
     ///   overallBasis / categoryBasis: true = rank by CHIP (net) time, false = GUN time.
     ///   GenderRank follows the overall basis.
-    ///   Tiebreak (deterministic + stable across reprocess): primary time -> other time -> ParticipantId.
+    ///   Every run populates BOTH explicit sets (Net* / Gun*) plus the legacy columns
+    ///   (configured basis). Numbering is SHARED-COMPETITION (1,2,2,4): equal primary times share
+    ///   a rank; the next distinct time resumes at its ordinal position (2026-08 client decision).
+    ///   Within a tie group the storage/display order stays deterministic:
+    ///   primary time -> other time -> ParticipantId.
     ///   (ParticipantId, not Bib: bibs are reused/non-unique and are strings — see project_bib_not_unique.)
     /// </summary>
     public static class RankCalculator
@@ -83,34 +87,67 @@ namespace Runnatics.Services
 
         public static void AssignRanks(IReadOnlyCollection<Results> finished, bool overallBasis, bool categoryBasis)
         {
-            // Overall — by the overall basis.
-            var overall = OrderByBasis(finished, overallBasis).ToList();
-            for (int i = 0; i < overall.Count; i++)
-                overall[i].OverallRank = i + 1;
+            // Explicit dual-basis sets — every rank run populates all six columns so both bases
+            // are always available regardless of the configured basis.
+            AssignBasisSet(finished, net: true,
+                (r, v) => r.NetOverallRank = v, (r, v) => r.NetGenderRank = v, (r, v) => r.NetCategoryRank = v);
+            AssignBasisSet(finished, net: false,
+                (r, v) => r.GunOverallRank = v, (r, v) => r.GunGenderRank = v, (r, v) => r.GunCategoryRank = v);
 
-            // Gender — by the overall basis, ONLY for canonical "M"/"F". Any other / stray / empty
-            // gender value gets a NULL GenderRank (still ranked Overall + Category) so a typo or a
-            // non-M/F string can't form a phantom rank-of-1 group. A legitimate third gender that
-            // should rank is a deliberate decision — add it here explicitly, don't auto-include.
+            // Legacy single-basis columns — copy from the explicit set matching the configured
+            // basis, so every current consumer (leaderboard, podium, export, certificates, SMS)
+            // keeps reading the basis it always has. Numbering is now shared-competition (1,2,2,4)
+            // per the 2026-08 client decision. See TECH_DEBT.md: retire these once all consumers
+            // read the explicit pairs.
             foreach (var r in finished)
-                r.GenderRank = null;
-            foreach (var gender in new[] { "M", "F" })
             {
-                var rank = 1;
-                foreach (var r in OrderByBasis(overall.Where(x => x.Participant?.Gender == gender), overallBasis))
-                    r.GenderRank = rank++;
+                r.OverallRank  = overallBasis  ? r.NetOverallRank  : r.GunOverallRank;
+                r.GenderRank   = overallBasis  ? r.NetGenderRank   : r.GunGenderRank;
+                r.CategoryRank = categoryBasis ? r.NetCategoryRank : r.GunCategoryRank;
             }
+        }
 
-            // Category — by the category basis. Uncategorized / "Unknown" -> null rank (BUG-12).
+        // Computes one full basis set (overall / gender / category) with shared competition
+        // numbering: runners with an identical primary time share a rank, and the next distinct
+        // time resumes at its ordinal position (1,2,2,4).
+        private static void AssignBasisSet(
+            IReadOnlyCollection<Results> finished, bool net,
+            Action<Results, int?> setOverall, Action<Results, int?> setGender, Action<Results, int?> setCategory)
+        {
+            AssignSharedRanks(finished, net, setOverall);
+
+            // Gender — ONLY for canonical "M"/"F". Any other / stray / empty gender value gets a
+            // NULL rank (still ranked Overall + Category) so a typo or a non-M/F string can't form
+            // a phantom rank-of-1 group. A legitimate third gender that should rank is a deliberate
+            // decision — add it here explicitly, don't auto-include.
             foreach (var r in finished)
-                r.CategoryRank = null;
+                setGender(r, null);
+            foreach (var gender in new[] { "M", "F" })
+                AssignSharedRanks(finished.Where(x => x.Participant?.Gender == gender), net, setGender);
+
+            // Category — uncategorized / "Unknown" -> null rank (BUG-12).
+            foreach (var r in finished)
+                setCategory(r, null);
             foreach (var categoryGroup in finished
                          .Where(r => HasCategory(r.Participant?.AgeCategory))
                          .GroupBy(r => r.Participant!.AgeCategory!))
+                AssignSharedRanks(categoryGroup, net, setCategory);
+        }
+
+        // Shared competition numbering over one ordered population: equal primary times share the
+        // first tied position's rank; a NULL primary time never shares (each gets its own ordinal).
+        private static void AssignSharedRanks(IEnumerable<Results> items, bool net, Action<Results, int?> set)
+        {
+            var ordered = OrderByBasis(items, net).ToList();
+            long? prevKey = null;
+            int rank = 0;
+            for (int i = 0; i < ordered.Count; i++)
             {
-                var rank = 1;
-                foreach (var r in OrderByBasis(categoryGroup, categoryBasis))
-                    r.CategoryRank = rank++;
+                var key = net ? ordered[i].NetTime : ordered[i].GunTime;
+                if (i == 0 || key == null || key != prevKey)
+                    rank = i + 1;
+                set(ordered[i], rank);
+                prevKey = key;
             }
         }
 

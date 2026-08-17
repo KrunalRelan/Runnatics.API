@@ -2,6 +2,16 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-08-17 — Edit Event: banner replaceable (was write-once) — Fable, NOT committed
+
+**Bug:** once an event had a banner, Edit Event could not replace it. Three independent gates: (1) UI hid the file picker when `existingBannerBase64` was set ("It cannot be changed"); (2) UI payload spread `!existingBannerBase64 && bannerBase64` dropped the field; (3) server `UpdateEventEntity` only wrote `BannerImage` when the column was empty. Thumbnail was already replaceable at all three layers.
+
+**API:** `EventsService.cs` `UpdateEventEntity` — banner now overwrites whenever `request.BannerBase64` is supplied (mirrors thumbnail). `EventRequest.cs` comment updated. No mapper/DB changes (BannerImage is `opt.Ignore()` in the profile; stored in-row `nvarchar(max)`, so replacement overwrites — no orphaned blobs).
+
+**UI:** `EditEvent.tsx` — banner picker always visible ("Replace Event Banner Image" when one exists), preview shows new-file-else-saved (base64 data URI from state, so no cache-busting needed), payload includes `bannerBase64` whenever picked, `FileReader.onerror` now surfaces read failures for banner + thumbnail (new `errors.thumbnailImage` helper line), and banner helper text added: "Recommended: 3600 x 900 px (4:1), JPG or WebP, under 500 KB…".
+
+**Verify:** `dotnet build` Runnatics.Services ✅ 0 errors; `npm run build` ✅. Live upload-A/save/upload-B cycle not run (only prod is deployed). Known pre-existing gaps left alone: no size/MIME validation anywhere; `BannerContentType`/`ThumbnailContentType` never populated.
+
 ### 2026-07-14 — Public results (GlobalResultsPage `/results`): Overall + Category views, per-gender N counts — Opus, NOT committed
 
 **Scope:** public site `GlobalResultsPage.tsx` reworked into Overall (default) + Category-dropdown views; small additive API change to surface the count settings.
@@ -1782,3 +1792,83 @@ hardcoded by client decision. `/services` page untouched.
 **DEPLOY ORDER: run the SQL BEFORE pushing the API** — the entities are mapped,
 so any query touching SiteContents/Founders 500s until the tables exist. Commits
 are local; nothing pushed yet pending Kunal running the script.
+
+---
+
+## 2026-08-07 — Public site: About "Founders"→"Team" horizontal cards; card-podium responsive rebuild (UI repo)
+
+**About page (Task A+B).** The "Founders" heading was HARDCODED JSX, not SiteContent
+(keys are only About.WhoWeAre/Mission/StoryImage) — so no SQL needed. Renamed
+`components/public/about/Founders.tsx` → `TeamSection.tsx` (component `TeamSection`,
+prop `members`, type `PublicAboutFounder` → `PublicTeamMember`). The API JSON field
+`founders` and the admin editor (`FounderDto`, AboutContentService, AboutPageEditor)
+are UNTOUCHED — contract + admin scope. No other "Founders" copy exists on Home/footer.
+Tile rebuilt in Tailwind (v4 utilities are active on the public site): ≥sm horizontal
+row — avatar left `clamp(96px,12vw,140px)` round, text right `flex-1 min-w-0` left-
+aligned (name → role → bio); <sm stacks back to centered column. One member →
+`max-w-3xl mx-auto`; several → `grid lg:grid-cols-2 gap-6`. Person's role label on the
+card still comes from the DB `role` field ("Founder") — deliberately unchanged.
+
+**Card podium (GlobalResultsPage `/results/:eventId` ONLY).** It is NOT shared:
+EventResultsPage (/e/), LeaderboardPage (/c/…/l) and components/public/Podium.tsx
+(ResultsPage) each have their own simpler bar podiums — untouched. The Male/Female
+tab stays (current behaviour). "2nd/3rd missing finished time" was CLIPPING
+(fixed sizes + panel overflow:hidden), not a render condition.
+
+Rebuild: `.podium-row` is `grid grid-template-columns:1fr 1fr 1fr; align-items:end`
+— three across at EVERY width incl. 320, `min-width:0` on cols/frames/panels. ALL
+sizes are custom props interpolated FROM THE HEIGHT BUDGET
+`--budget: clamp(240px,42vw,400px)` (e.g. `--medal: calc(40px + (var(--budget)-240px)*0.30)`)
+— the user-spec'd vw clamps overflowed the cap at mid widths because vw slopes and the
+42vw cap disagree; deriving from the budget keeps natural height ≤ cap everywhere while
+preserving the spec'd min/max endpoints. Panel overflow:hidden REMOVED (band carries its
+own bottom radius); confetti keeps its own clipped pointer-events-none layer. Confetti +
+base drum + header laurels hidden <640px; Provisional badge moved OUT of PodiumBase to a
+stage-level child (z-index 4) so the champion card can't hide it — in flow below the
+cards on mobile. Name = 2-line clamp + break-word; time = mono/tabular/nowrap.
+Also fixed: `.lb-selectbar` now flex-wraps (real 3px viewport overflow at 320).
+
+Headless-Chrome-verified (exact-CSS harness, scratchpad) at 320/360/390/414/768/1024/
+1280/1920: 0 horizontal overflow, 0 card overlap, all three times visible, stage ≤400px
+(240 at phone widths). 1920×1080: headband top → first table row ≈ 787px; table header
+lands ~841px from page top → visible without scrolling, so the race-title line was NOT
+collapsed. Both `npm run build` and API untouched; `npx tsc` has ~100s of PRE-EXISTING
+strict errors project-wide (none in changed files) — vite build is the gate.
+
+---
+
+## 2026-08-13 — Public visibility gate, SCOPED: event listings only (API 49c62d5, UI 281071a)
+
+**Rule shipped:** an event appears on the public site only when EventSettings.Published
+("Publish Event") is ON. ConfirmedEvent still exists (column + admin toggle) but is no
+longer read by ANY public listing predicate. Implemented as ONE shared
+`PubliclyVisible` expression in EventsService, reused at: events/search upcoming
+(previously un-gated BY DESIGN — now gated deliberately), past, all; events/{id};
+stats. UI: CreateEvent now defaults published:false (was true — every event was born
+published); API maps Published from the request untouched, so no coercion.
+
+**A broader gate was built and then REVERTED at Kunal's instruction** (shared
+IQueryable extensions gating leaderboard/participant/certificate/compare/filters/
+banner + the inverted `ConfirmedEvent && !Published` fix on events/{id}/results).
+Explicitly OUT OF SCOPE now; the research stands (this session's gate-inventory
+report): grouped leaderboard, /p/{id}, certificate, compare, race/bracket filters,
+banner remain UNGATED direct-URL leaks, and events/{id}/results still has the
+inverted predicate that makes it a dead endpoint.
+
+**Deploy consequence, verified against live API before deploy:** of 7 events
+visible on prod (2026-08-13), only 2 have Published=ON ("Demo event race",
+"Test event 12"). Deploying hides the other 5 — including the ONLY upcoming event
+(Twin Lake Utra-Edition 2) and the verification target "Demo Run Testing
+12-08-2026" (fEUrBoKhtfLXpPnVxEzH-A, Confirmed ON / Publish OFF). Post-deploy
+check: that event gone from home carousel/upcoming/past/results-landing//events;
+flip Publish ON in admin → reappears everywhere. Both builds green. Nothing pushed.
+
+## 2026-08-16 — Public BIB/name search fix + result panel + Published-gate un-inversion
+**Research findings (verified against prod):** DB/server/column collation = SQL_Latin1_General_CP1_CI_AS (CI — no ToLower needed). Participants.Bib: 32,367 rows, 0 NULL, 0 with whitespace, 10,091 alphanumeric ("A100"-style), 1 leading-zero → exact equality (not digit-branching) is the right bib rule. 29,530/32,367 rows have EMPTY LastName (full name lives in FirstName) → separate-field name matching missed "chandeep singh"; concat match required.
+**API commit `b768433` (branch `fix/public-results-published-gate`, do FIRST):** `!e.EventSettings.Published` was inverted at PublicResultsService lines 50 (GetPublicEventResultsAsync) and 156 (GetPublicResultByBibAsync) — both public results endpoints 404'd for every published event (no draft leak occurred: the shared GetPublicResultsAsync helper independently requires Published). By-bib now requires Published==true + optional encrypted `raceId` query param for bib-reuse disambiguation; event-results drops the condition so the isEventPublished gate serves the friendly stub. Only those 2 inverted occurrences exist in the solution.
+**API commit `41c7d68` (master):** grouped-leaderboard search = trimmed term, `Bib == term OR (FirstName+' '+LastName) CONTAINS term`. "531" no longer matches 5310; " 5310 " and "chandeep singh" now match.
+**UI commits `41d591e` + `22ce421` (master):** GlobalResultsPage leaderboard fetch never carries the search term (podium/table byte-identical during search — Playwright-verified); a second search-only fetch feeds a Tailwind panel under the search box (1 match = hyperlinked name + BIB + time; max 10 rows; empty state names the race). NOTE: the app loads Tailwind v4 utilities WITHOUT the default theme (`public.css` imports "tailwindcss/utilities" only) — theme-scale classes (p-4, gap-x-3, text-gray-500) silently no-op app-wide; use arbitrary values. TeamSection.tsx already carries dead scale classes.
+**Open:** merge/deploy order — API commit 41c7d68 must deploy with/before UI 22ce421 (panel relies on exact-bib semantics); branch fix/public-results-published-gate awaits review/merge.
+
+## 2026-08-16 — Commit 0: search input text invisible (dark mode) — UI `477378c`
+Symptom: typing in the results search box showed nothing until text was selected. NOT a state bug — input was already controlled on raw `search` with per-keystroke onChange. Root cause (reproduced on racetik.com via Playwright): app-wide MUI `<CssBaseline enableColorScheme />` stamps `color-scheme: dark` on :root when `localStorage["app-theme-mode"]="dark"` (preference shared with the ADMIN dashboard); GlobalResultsPage's input pinned backgroundColor #fff but not color → computed WHITE text + WHITE caret on the white field. Fix: pin `color`/`caretColor` to var(--color-text) + `colorScheme:'light'` on the control. Verified char-by-char typing in dark+light, desktop/380px/Pixel-7 emulation; value survives fetches; backspace + select-all-delete OK. LATENT SIBLINGS (reported, not fixed): EventResultsPage input has color #111827 but NO background (dark-on-dark under dark scheme); LeaderboardPage + ContactPage inputs pin neither color nor background. Any public control that pins one of color/background must pin both (or colorScheme).

@@ -869,8 +869,8 @@ namespace Runnatics.Services
             // Update main event properties
             _mapper.Map(request, eventEntity);
 
-            // Only save banner if one does not already exist
-            if (!string.IsNullOrEmpty(request.BannerBase64) && string.IsNullOrEmpty(eventEntity.BannerImage))
+            // Banner is replaceable on update — overwrite whenever a new one is supplied
+            if (!string.IsNullOrEmpty(request.BannerBase64))
             {
                 eventEntity.BannerImage = request.BannerBase64;
             }

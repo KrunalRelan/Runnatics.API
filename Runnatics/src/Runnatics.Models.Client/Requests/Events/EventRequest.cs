@@ -40,7 +40,7 @@ namespace Runnatics.Models.Client.Requests.Events
         public decimal? VenueLatitude { get; set; }
         public decimal? VenueLongitude { get; set; }
 
-        // Banner — base64 encoded. On create: saved as-is. On update: only saved if no banner exists.
+        // Banner — base64 encoded. Optional; replaceable on update.
         public string? BannerBase64 { get; set; }
 
         // Thumbnail — base64 encoded. Optional; used for event tiles. Replaceable on update.

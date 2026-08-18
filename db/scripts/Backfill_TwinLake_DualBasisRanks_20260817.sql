@@ -1,3 +1,13 @@
+-- ############################################################################
+-- SUPERSEDED — DO NOT RUN.
+-- This script predates the gender-scoped category decision: it partitions
+-- category ranks by AgeCategory alone and will write MIXED-GENDER category
+-- ranks. Use Backfill_DualBasisRanks_GenderScopedCategory_20260818.sql.
+-- The guard below makes this script refuse to execute.
+-- ############################################################################
+RAISERROR('SUPERSEDED: use Backfill_DualBasisRanks_GenderScopedCategory_20260818.sql', 16, 1);
+RETURN;
+
 -- One-off backfill: dual-basis rank sets for Twin Lake Ultra Edition 2, 14.5 Km.
 -- Reproduces RankCalculator.AssignRanks exactly:
 --   * shared competition numbering (RANK() = 1,2,2,4)

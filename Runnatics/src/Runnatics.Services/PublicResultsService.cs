@@ -628,6 +628,40 @@ namespace Runnatics.Services
                     };
                 }
 
+                // Guard: a rank numerator can never exceed its denominator. If it does, the
+                // stored rank predates the current scoping rules (e.g. a mixed-gender category
+                // rank against a gender-scoped total — "16 of 3") and the race needs a re-rank.
+                // Show neither value rather than an impossible pair, and log so it's found.
+                void GuardRankPairs(PublicTimeDetailDto? dto, string basis)
+                {
+                    if (dto == null) return;
+                    if (dto.OverallRank > dto.TotalOverall)
+                    {
+                        _logger.LogWarning(
+                            "Stale {Basis} overall rank {Rank} exceeds total {Total} for participant {ParticipantId} — race needs re-rank",
+                            basis, dto.OverallRank, dto.TotalOverall, decryptedParticipantId);
+                        dto.OverallRank = null;
+                    }
+                    if (dto.GenderRank > dto.TotalGender)
+                    {
+                        _logger.LogWarning(
+                            "Stale {Basis} gender rank {Rank} exceeds total {Total} for participant {ParticipantId} — race needs re-rank",
+                            basis, dto.GenderRank, dto.TotalGender, decryptedParticipantId);
+                        dto.GenderRank = null;
+                        dto.TotalGender = null;
+                    }
+                    if (dto.CategoryRank > dto.TotalCategory)
+                    {
+                        _logger.LogWarning(
+                            "Stale {Basis} category rank {Rank} exceeds total {Total} for participant {ParticipantId} — race needs re-rank",
+                            basis, dto.CategoryRank, dto.TotalCategory, decryptedParticipantId);
+                        dto.CategoryRank = null;
+                        dto.TotalCategory = null;
+                    }
+                }
+                GuardRankPairs(chipTimeDto, "chip");
+                GuardRankPairs(gunTimeDto, "gun");
+
                 // NET baseline (SplitBaseline): cumulative "race time" is measured from the
                 // runner's own VALID start crossing, not the gun (stored SplitTimeMs is
                 // gun-based). Gun fallback for a late-only placeholder / missing start row —

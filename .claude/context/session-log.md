@@ -2,6 +2,12 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-08-18 (b) — "16 of 3" incident: stale re-rank vehicle + impossible-pair guard — Fable, NOT committed
+
+**Incident:** after deploying caaedf6, race 102 bib 1005 showed "16 of 3" — gender-scoped denominator (new code) against mixed-gender stored ranks. Root cause: RankCalculator WAS correct and deployed (denominator+calculator ship in the same assembly/commit — can't have one without the other); the re-rank was done with the SUPERSEDED 20260817 SQL script whose category partition is AgeCategory-only. Correct vehicle: Backfill_DualBasisRanks_GenderScopedCategory_20260818.sql or an admin-triggered re-rank.
+
+**Hardening:** (1) 20260817 script now refuses to run (RAISERROR+RETURN guard, SUPERSEDED banner). (2) PublicResultsService participant detail: GuardRankPairs — any rank numerator exceeding its denominator is logged ("race needs re-rank") and the pair suppressed, on all three badges × both bases. (3) New invariant test: no rank in any of the six columns may exceed its population size (messy roster with strays/ties/nulls). 174/174 green.
+
 ### 2026-08-18 — Category rank scoped to (Gender, AgeCategory) — Fable, NOT committed
 
 **Client decision:** category rank = gender + age bracket; men and women rank separately within each bracket. Applied to ALL sets including legacy CategoryRank (legacy is a copy of the configured-basis explicit set — keeping it mixed would need a third computation and would make public leaderboard/certs/export disagree with the participant page).

@@ -249,6 +249,43 @@ namespace Runnatics.Services.Tests.RFID
             Assert.IsNotNull(stray.OverallRank, "still ranked overall");
         }
 
+        // ─── Invariant: a rank can never exceed the size of the population it is ranked
+        //     within ("16 of 3" must be impossible). Checked on all six columns. ───
+
+        [TestMethod]
+        public void Invariant_NoRankExceedsItsPopulation()
+        {
+            // Messy roster: both genders, strays, several brackets, ties, null times.
+            var roster = new[]
+            {
+                R(1, 100, 100, "M", "18-29"), R(2, 100, 100, "M", "18-29"),
+                R(3, 110, 120, "F", "18-29"), R(4, 110, 120, "F", "18-29"),
+                R(5, 130, 110, "F", "30-39"), R(6, 140, 140, "M", "30-39"),
+                R(7, 150, 150, "Male", "18-29"), R(8, null, 160, "F", null),
+                R(9, 170, null, "M", "Unknown"), R(10, 180, 180, null, "40-49"),
+            };
+
+            RankCalculator.AssignRanks(roster, overallBasis: true, categoryBasis: false);
+
+            foreach (var r in roster)
+            {
+                Assert.IsTrue((r.NetOverallRank ?? 0) <= roster.Length);
+                Assert.IsTrue((r.GunOverallRank ?? 0) <= roster.Length);
+
+                var genderCount = roster.Count(x => x.Participant.Gender == r.Participant.Gender);
+                Assert.IsTrue((r.NetGenderRank ?? 0) <= genderCount,
+                    $"pid {r.ParticipantId}: net gender rank {r.NetGenderRank} > population {genderCount}");
+                Assert.IsTrue((r.GunGenderRank ?? 0) <= genderCount);
+
+                var bracketCount = roster.Count(x => x.Participant.Gender == r.Participant.Gender &&
+                                                     x.Participant.AgeCategory == r.Participant.AgeCategory);
+                Assert.IsTrue((r.NetCategoryRank ?? 0) <= bracketCount,
+                    $"pid {r.ParticipantId}: net category rank {r.NetCategoryRank} > gender-scoped population {bracketCount}");
+                Assert.IsTrue((r.GunCategoryRank ?? 0) <= bracketCount,
+                    $"pid {r.ParticipantId}: gun category rank {r.GunCategoryRank} > gender-scoped population {bracketCount}");
+            }
+        }
+
         // ─── UN-DSQ: a restored finisher re-enters the set; everyone below steps back down ───
 
         [TestMethod]

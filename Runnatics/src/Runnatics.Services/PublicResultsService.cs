@@ -543,7 +543,11 @@ namespace Runnatics.Services
                     .AsNoTracking()
                     .CountAsync(r => r.Participant.Gender == participant.Gender, ct);
 
-                bool categoryRanked = !string.IsNullOrWhiteSpace(participant.AgeCategory) &&
+                // Category ranks are scoped to (Gender, AgeCategory) — the denominator is the
+                // same-gender finishers in the bracket, and it needs BOTH a canonical gender and
+                // a real category (a stray-gender or uncategorized participant has a null rank).
+                bool categoryRanked = genderRanked &&
+                                      !string.IsNullOrWhiteSpace(participant.AgeCategory) &&
                                       !string.Equals(participant.AgeCategory, "Unknown", StringComparison.OrdinalIgnoreCase);
                 int? totalCategory = !categoryRanked ? null : await resultsRepo
                     .GetQuery(r => r.RaceId == raceId &&
@@ -552,7 +556,8 @@ namespace Runnatics.Services
                                    !r.AuditProperties.IsDeleted)
                     .Include(r => r.Participant)
                     .AsNoTracking()
-                    .CountAsync(r => r.Participant.AgeCategory == participant.AgeCategory, ct);
+                    .CountAsync(r => r.Participant.AgeCategory == participant.AgeCategory &&
+                                     r.Participant.Gender == participant.Gender, ct);
 
                 // Check certificate availability for this participant's race
                 bool certAvailable = await _repository.GetRepository<CertificateTemplate>()

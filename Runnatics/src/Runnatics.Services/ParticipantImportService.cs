@@ -1797,11 +1797,14 @@ namespace Runnatics.Services
                     r.Participant.Gender == participant.Gender &&
                     !r.AuditProperties.IsDeleted);
 
+                // Category ranks are scoped to (Gender, AgeCategory) — denominator counts only
+                // same-gender finishers in the bracket, matching the stored CategoryRank population.
                 var totalInCategory = await resultRepo.CountAsync(r =>
                     r.EventId == decryptedEventId &&
                     r.RaceId == decryptedRaceId &&
                     r.Status == "Finished" &&
                     r.Participant.AgeCategory == participant.AgeCategory &&
+                    r.Participant.Gender == participant.Gender &&
                     !r.AuditProperties.IsDeleted);
 
                 // Build response using helper

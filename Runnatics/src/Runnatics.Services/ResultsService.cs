@@ -1031,8 +1031,10 @@ namespace Runnatics.Services
                         .CountAsync(r => r.Participant.Gender == participant.Gender);
                 }
 
+                // Category ranks are scoped to (Gender, AgeCategory) — denominator counts only
+                // same-gender finishers in the bracket, matching the stored CategoryRank population.
                 int totalInCategory = 0;
-                if (!string.IsNullOrEmpty(participant.AgeCategory))
+                if (!string.IsNullOrEmpty(participant.AgeCategory) && !string.IsNullOrEmpty(participant.Gender))
                 {
                     totalInCategory = await resultsRepo.GetQuery(r =>
                         r.RaceId == decryptedRaceId &&
@@ -1040,7 +1042,8 @@ namespace Runnatics.Services
                         r.AuditProperties.IsActive &&
                         !r.AuditProperties.IsDeleted)
                         .Include(r => r.Participant)
-                        .CountAsync(r => r.Participant.AgeCategory == participant.AgeCategory);
+                        .CountAsync(r => r.Participant.AgeCategory == participant.AgeCategory &&
+                                         r.Participant.Gender == participant.Gender);
                 }
 
                 // 4. Build base response using existing builder

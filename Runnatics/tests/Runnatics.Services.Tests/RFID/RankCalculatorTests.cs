@@ -217,6 +217,38 @@ namespace Runnatics.Services.Tests.RFID
             Assert.IsNull(none.CategoryRank);
         }
 
+        // ─── Category is scoped to (Gender, AgeCategory): per-gender ranking within a bracket ───
+
+        [TestMethod]
+        public void Category_GenderScoped_MenAndWomenRankSeparately()
+        {
+            // Same bracket, interleaved times: each gender ranks 1..N independently.
+            var m1 = R(1, 100, 100, "M", "18-29");
+            var f1 = R(2, 110, 110, "F", "18-29");
+            var m2 = R(3, 120, 120, "M", "18-29");
+            var f2 = R(4, 130, 130, "F", "18-29");
+
+            RankCalculator.AssignRanks(new[] { m1, f1, m2, f2 }, overallBasis: true, categoryBasis: true);
+
+            Assert.AreEqual(1, m1.CategoryRank);
+            Assert.AreEqual(1, f1.CategoryRank, "fastest female is category 1 despite slower time than m1");
+            Assert.AreEqual(2, m2.CategoryRank);
+            Assert.AreEqual(2, f2.CategoryRank);
+        }
+
+        [TestMethod]
+        public void Category_StrayGender_GetsNullCategoryRank()
+        {
+            var m = R(1, 100, 100, "M", "18-29");
+            var stray = R(2, 110, 110, "Male", "18-29");   // real category, stray gender → no scope
+
+            RankCalculator.AssignRanks(new[] { m, stray }, overallBasis: true, categoryBasis: true);
+
+            Assert.AreEqual(1, m.CategoryRank);
+            Assert.IsNull(stray.CategoryRank, "gender-scoped category needs a canonical M/F gender");
+            Assert.IsNotNull(stray.OverallRank, "still ranked overall");
+        }
+
         // ─── UN-DSQ: a restored finisher re-enters the set; everyone below steps back down ───
 
         [TestMethod]

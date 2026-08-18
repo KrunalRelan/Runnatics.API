@@ -16,6 +16,8 @@ namespace Runnatics.Services
     ///
     ///   overallBasis / categoryBasis: true = rank by CHIP (net) time, false = GUN time.
     ///   GenderRank follows the overall basis.
+    ///   CategoryRank is scoped to (Gender, AgeCategory) — men and women rank separately within
+    ///   each age bracket (2026-08 client decision); requires canonical M/F gender.
     ///   Every run populates BOTH explicit sets (Net* / Gun*) plus the legacy columns
     ///   (configured basis). Numbering is SHARED-COMPETITION (1,2,2,4): equal primary times share
     ///   a rank; the next distinct time resumes at its ordinal position (2026-08 client decision).
@@ -125,12 +127,16 @@ namespace Runnatics.Services
             foreach (var gender in new[] { "M", "F" })
                 AssignSharedRanks(finished.Where(x => x.Participant?.Gender == gender), net, setGender);
 
-            // Category — uncategorized / "Unknown" -> null rank (BUG-12).
+            // Category — scoped to (Gender, AgeCategory): men and women rank separately within
+            // each age bracket (2026-08 client decision). Requires a canonical M/F gender AND a
+            // real category; strays / uncategorized / "Unknown" -> null rank (BUG-12), still
+            // ranked Overall.
             foreach (var r in finished)
                 setCategory(r, null);
             foreach (var categoryGroup in finished
-                         .Where(r => HasCategory(r.Participant?.AgeCategory))
-                         .GroupBy(r => r.Participant!.AgeCategory!))
+                         .Where(r => (r.Participant?.Gender == "M" || r.Participant?.Gender == "F") &&
+                                     HasCategory(r.Participant?.AgeCategory))
+                         .GroupBy(r => new { r.Participant!.Gender, r.Participant.AgeCategory }))
                 AssignSharedRanks(categoryGroup, net, setCategory);
         }
 

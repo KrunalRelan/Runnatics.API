@@ -2,6 +2,12 @@
 
 _Use this section to log what each agent built during the current session._
 
+### 2026-08-18 — Category rank scoped to (Gender, AgeCategory) — Fable, NOT committed
+
+**Client decision:** category rank = gender + age bracket; men and women rank separately within each bracket. Applied to ALL sets including legacy CategoryRank (legacy is a copy of the configured-basis explicit set — keeping it mixed would need a third computation and would make public leaderboard/certs/export disagree with the participant page).
+
+**Changes:** `RankCalculator.AssignBasisSet` category grouping → requires canonical M/F gender AND real category, GroupBy (Gender, AgeCategory); strays keep null CategoryRank (still ranked Overall). Denominators now count same-gender finishers in the bracket: `PublicResultsService` participant detail (null total when unranked), `ResultsService` admin detail (~1034), `ParticipantImportService` (~1800). Certificates print legacy CategoryRank (now gender-scoped); SMS uses OverallRank only — unaffected. Public leaderboard + export already group gender→category, so their lists now read 1,2,3 with no structural change. New backfill: `db/scripts/Backfill_DualBasisRanks_GenderScopedCategory_20260818.sql` (races 100/101/102, cursor per race, gender-scoped partitions, verification selects; supersedes the 20260817 Twin Lake script). Backup table Results_RankBackup_TwinLake_20260817 keyed ParticipantId+RaceId (ParticipantId unique on Results → restore joins on it). Tests: +2 (gender-scoped split, stray-gender null); 173/173 green. Note: SplitTimes.CategoryRank (per-checkpoint, ResultsService ~1642) still mixed-gender — separate surface, not changed.
+
 ### 2026-08-17 — Dual-basis ranks (Net*/Gun*) + shared competition numbering — Fable, NOT committed
 
 **Bug:** public participant page showed identical rank badges in the Chip and Gun timing sections — only ONE stored rank set existed (configured basis via RankOnNet/per-view); the other basis was never computed.

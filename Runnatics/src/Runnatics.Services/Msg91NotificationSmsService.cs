@@ -73,23 +73,101 @@ namespace Runnatics.Services
                     return NotificationResult.Fail(body);
                 }
 
-                string? requestId = null;
-                try
-                {
-                    using var doc = JsonDocument.Parse(body);
-                    doc.RootElement.TryGetProperty("request_id", out var idProp);
-                    requestId = idProp.GetString();
-                }
-                catch { }
+                var parsed = ParseFlowResponse(body);
 
-                logger.LogInformation("SMS sent to {Phone} via template {TemplateId}", maskedPhone, templateId);
-                return NotificationResult.Ok(requestId);
+                // Flow signals rejection in the payload, not the status code — a rejected send
+                // arrives as HTTP 200 with type="error". Treating that as success is how a
+                // failure becomes an indistinguishable Success=true row in NotificationLogs.
+                if (!parsed.Accepted)
+                {
+                    logger.LogWarning(
+                        "MSG91 rejected the send for {Phone} on template {TemplateId} (HTTP 200, type={Type}): {Body}",
+                        maskedPhone, templateId, parsed.Type ?? "(none)", body);
+                    return NotificationResult.Fail(parsed.Error ?? body);
+                }
+
+                if (parsed.RequestId is null)
+                {
+                    logger.LogWarning(
+                        "MSG91 accepted the send for {Phone} but no request id was found — "
+                        + "NotificationLogs.ProviderMessageId will be null and the message cannot be "
+                        + "correlated to the MSG91 dashboard. Body: {Body}",
+                        maskedPhone, body);
+                }
+
+                logger.LogInformation("SMS sent to {Phone} via template {TemplateId}, request {RequestId}",
+                    maskedPhone, templateId, parsed.RequestId ?? "(none)");
+                return NotificationResult.Ok(parsed.RequestId);
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to send SMS to {Phone}", maskedPhone);
                 return NotificationResult.Fail(ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Outcome of an MSG91 Flow v5 response body.
+        /// </summary>
+        /// <param name="Accepted">False only when the payload explicitly says type="error".</param>
+        /// <param name="RequestId">The provider's id for the send, or null if none was present.</param>
+        /// <param name="Type">The raw "type" field, for logging.</param>
+        /// <param name="Error">Error text when rejected.</param>
+        public readonly record struct Msg91FlowResponse(
+            bool Accepted, string? RequestId, string? Type, string? Error);
+
+        /// <summary>
+        /// Reads an MSG91 Flow v5 response body.
+        ///
+        /// Flow returns <c>{"message":"&lt;request id&gt;","type":"success"}</c> on acceptance and
+        /// <c>{"message":"&lt;error text&gt;","type":"error"}</c> on rejection — so "message" is the
+        /// request id ONLY when the send was accepted. "request_id" is the older v2 sendsms key and
+        /// is preferred when present, since a body carrying it is unambiguous.
+        ///
+        /// An unparseable or unrecognised body is treated as ACCEPTED with no request id: the
+        /// provider returned 2xx, so the message may well have gone out, and failing it here would
+        /// invite a duplicate send on the next attempt. The caller logs the body in that case.
+        /// </summary>
+        public static Msg91FlowResponse ParseFlowResponse(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body))
+                return new Msg91FlowResponse(true, null, null, null);
+
+            JsonElement root;
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                root = doc.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                return new Msg91FlowResponse(true, null, null, null);
+            }
+
+            if (root.ValueKind != JsonValueKind.Object)
+                return new Msg91FlowResponse(true, null, null, null);
+
+            var type = root.TryGetProperty("type", out var typeProp)
+                    && typeProp.ValueKind == JsonValueKind.String
+                ? typeProp.GetString()
+                : null;
+
+            var isError = string.Equals(type, "error", StringComparison.OrdinalIgnoreCase);
+
+            var message = root.TryGetProperty("message", out var msgProp)
+                ? (msgProp.ValueKind == JsonValueKind.String ? msgProp.GetString() : msgProp.ToString())
+                : null;
+
+            if (isError)
+                return new Msg91FlowResponse(false, null, type, string.IsNullOrWhiteSpace(message) ? body : message);
+
+            // Accepted: prefer an explicit request_id, else fall back to "message".
+            var requestId =
+                root.TryGetProperty("request_id", out var idProp) && idProp.ValueKind == JsonValueKind.String
+                    ? idProp.GetString()
+                    : message;
+
+            return new Msg91FlowResponse(true, string.IsNullOrWhiteSpace(requestId) ? null : requestId, type, null);
         }
 
         private static string FormatPhone(string phone)

@@ -107,6 +107,54 @@ namespace Runnatics.Api.Controller
         }
 
         /// <summary>
+        /// Send ONE test completion SMS for a single participant, to verify message content and
+        /// provider correlation without messaging a whole race. Logged as "RaceCompletionTest",
+        /// so it does not suppress that participant's real results SMS. Supply overridePhone in
+        /// the body to send to your own handset instead of the participant's number.
+        /// </summary>
+        [HttpPost("{eventId}/{raceId}/participants/{participantId}/send-test-sms")]
+        [Authorize(Roles = "SuperAdmin,Admin")]
+        [ProducesResponseType(typeof(ResponseBase<SendTestResultsSmsResponse>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> SendTestResultsSms(
+            string eventId, string raceId, string participantId,
+            [FromBody] SendTestResultsSmsRequest? request = null)
+        {
+            if (string.IsNullOrEmpty(eventId) || string.IsNullOrEmpty(raceId) || string.IsNullOrEmpty(participantId))
+            {
+                return BadRequest(new { error = "Event ID, Race ID and Participant ID are required." });
+            }
+
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new
+                {
+                    error = "Validation failed",
+                    details = ModelState.Values.SelectMany(v => v.Errors).Select(e => e.ErrorMessage).ToList()
+                });
+            }
+
+            var response = new ResponseBase<SendTestResultsSmsResponse>();
+            var result = await _service.SendTestResultsSmsAsync(
+                eventId, raceId, participantId, request?.OverridePhone);
+
+            if (_service.HasError)
+            {
+                response.Error = new ResponseBase<SendTestResultsSmsResponse>.ErrorData
+                {
+                    Message = _service.ErrorMessage
+                };
+                return BadRequest(response);
+            }
+
+            response.Message = result;
+            return Ok(response);
+        }
+
+        /// <summary>
         /// Calculate final results, rankings, and identify finishers
         /// </summary>
         [HttpPost("{eventId}/{raceId}/calculate-results")]

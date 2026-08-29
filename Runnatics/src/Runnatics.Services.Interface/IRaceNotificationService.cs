@@ -6,6 +6,16 @@ namespace Runnatics.Services.Interface
         Task NotifyRaceCompletionAsync(int participantId, int raceId, CancellationToken ct = default);
         Task NotifyCompletionSmsAsync(int participantId, int raceId, bool force = false, CancellationToken ct = default);
         Task NotifyBibAssignedAsync(int participantId, int raceId, bool force = false, CancellationToken ct = default);
+
+        /// <summary>
+        /// Sends one completion SMS for a single participant, for verification. Composes the
+        /// variables through the same production code path, but never consults or writes the
+        /// "RaceCompletion" dedupe record — it logs as "RaceCompletionTest" so a test cannot
+        /// suppress the participant's real results SMS. Supply <paramref name="overridePhone"/>
+        /// to send to an operator's own handset instead of the participant's number.
+        /// </summary>
+        Task<TestCompletionSmsResult> SendCompletionSmsTestAsync(
+            int participantId, int raceId, string? overridePhone = null, CancellationToken ct = default);
         Task NotifySupportTicketCreatedAsync(int queryId, CancellationToken ct = default);
 
         /// <summary>

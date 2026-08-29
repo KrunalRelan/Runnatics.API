@@ -23,6 +23,14 @@ namespace Runnatics.Services.Interface
         Task<SendResultsSmsResponse> SendResultsSmsAsync(string eventId, string raceId);
 
         /// <summary>
+        /// Sends one test completion SMS for a single participant. Logs as "RaceCompletionTest",
+        /// so it never suppresses that participant's real results SMS. Pass overridePhone to send
+        /// to an operator's handset instead of the participant's number.
+        /// </summary>
+        Task<SendTestResultsSmsResponse?> SendTestResultsSmsAsync(
+            string eventId, string raceId, string participantId, string? overridePhone);
+
+        /// <summary>
         /// Gets leaderboard with filtering and pagination
         /// </summary>
         Task<LeaderboardResponse> GetLeaderboardAsync(GetLeaderboardRequest request);

@@ -164,6 +164,64 @@ namespace Runnatics.Services
             await LogAsync("SMS", "RaceCompletion", participant.Id, raceId, participant.Phone, smsResult, ct);
         }
 
+        // Single-participant test send. Deliberately NOT a variant of the production path:
+        //  - no dedupe check and no dedupe write. It logs under EventType "RaceCompletionTest"
+        //    so a test can never satisfy the "RaceCompletion" + Success guard in
+        //    SendCompletionSmsCoreAsync and silently rob the participant of their real SMS.
+        //  - an optional override phone lets an operator send the real message shape to their
+        //    own handset instead of messaging a runner.
+        // The variables are built by the same FormatNameWithBib/FormatMs used in production, so
+        // what this sends is what a real completion SMS would say.
+        public async Task<TestCompletionSmsResult> SendCompletionSmsTestAsync(
+            int participantId, int raceId, string? overridePhone = null,
+            CancellationToken ct = default)
+        {
+            var participant = await LoadParticipantAsync(participantId, ct);
+            if (participant == null)
+                return TestCompletionSmsResult.Fail("Participant not found.");
+
+            var raceResult = await unitOfWork.GetRepository<Results>()
+                .GetQuery(r => r.ParticipantId == participantId && r.RaceId == raceId)
+                .AsNoTracking()
+                .Include(r => r.Race)
+                .FirstOrDefaultAsync(ct);
+
+            if (raceResult == null)
+                return TestCompletionSmsResult.Fail("No result for this participant in this race.");
+
+            var usedOverride = !string.IsNullOrWhiteSpace(overridePhone);
+            var phone = usedOverride ? overridePhone!.Trim() : participant.Phone;
+
+            if (string.IsNullOrWhiteSpace(phone))
+                return TestCompletionSmsResult.Fail("Participant has no phone number and no override was supplied.");
+
+            var smsVars = new Dictionary<string, string>
+            {
+                ["var1"] = FormatNameWithBib(participant),
+                ["var2"] = FormatMs(raceResult.FinishTime),
+                ["var3"] = raceResult.Race?.Title ?? string.Empty
+            };
+
+            logger.LogInformation(
+                "Test results SMS for participant {ParticipantId} race {RaceId} (override phone: {UsedOverride})",
+                participantId, raceId, usedOverride);
+
+            var smsResult = await smsService.SendCompletionSmsAsync(participantId, raceId, phone, smsVars, ct);
+            await LogAsync("SMS", "RaceCompletionTest", participantId, raceId, phone, smsResult, ct);
+
+            return new TestCompletionSmsResult
+            {
+                Success           = smsResult.Success,
+                ProviderMessageId = smsResult.ProviderMessageId,
+                ErrorMessage      = smsResult.ErrorMessage,
+                Recipient         = MaskPhone(phone),
+                UsedOverridePhone = usedOverride,
+                NameWithBib       = smsVars["var1"],
+                FinishTime        = smsVars["var2"],
+                RaceTitle         = smsVars["var3"]
+            };
+        }
+
         public async Task NotifyBibAssignedAsync(
             int participantId, int raceId, bool force = false,
             CancellationToken ct = default)
@@ -311,6 +369,14 @@ namespace Runnatics.Services
             {
                 logger.LogError(ex, "Failed to log notification ({Channel}/{EventType})", channel, eventType);
             }
+        }
+
+        // Phone is echoed back to the admin UI masked — a test send should not turn the
+        // participants grid into a way to read runners' phone numbers.
+        private static string MaskPhone(string phone)
+        {
+            if (string.IsNullOrEmpty(phone)) return "****";
+            return phone.Length <= 4 ? "****" : new string('*', phone.Length - 4) + phone[^4..];
         }
 
         // "Deepender[1244]" — the bib in square brackets after the name. A participant with no

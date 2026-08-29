@@ -106,6 +106,56 @@ namespace Runnatics.Services
             }
         }
 
+        /// <summary>
+        /// Single-participant test send, for verifying message content and provider correlation
+        /// without messaging a whole race. Runs on its own DI scope for the same reason the
+        /// completion notification does — IRaceNotificationService shares this request's DbContext.
+        /// </summary>
+        public async Task<SendTestResultsSmsResponse?> SendTestResultsSmsAsync(
+            string eventId, string raceId, string participantId, string? overridePhone)
+        {
+            try
+            {
+                var decryptedRaceId        = Convert.ToInt32(_encryptionService.Decrypt(raceId));
+                var decryptedParticipantId = Convert.ToInt32(_encryptionService.Decrypt(participantId));
+
+                using var scope = _scopeFactory.CreateScope();
+                var notifier = scope.ServiceProvider.GetRequiredService<IRaceNotificationService>();
+
+                var result = await notifier.SendCompletionSmsTestAsync(
+                    decryptedParticipantId, decryptedRaceId, overridePhone);
+
+                if (!result.Success && string.IsNullOrEmpty(result.ProviderMessageId)
+                    && !string.IsNullOrEmpty(result.ErrorMessage)
+                    && string.IsNullOrEmpty(result.NameWithBib))
+                {
+                    // Nothing was attempted (participant/result missing, no phone) — surface as an error
+                    ErrorMessage = result.ErrorMessage;
+                    return null;
+                }
+
+                return new SendTestResultsSmsResponse
+                {
+                    Recipient         = result.Recipient,
+                    UsedOverridePhone = result.UsedOverridePhone,
+                    Success           = result.Success,
+                    ProviderMessageId = result.ProviderMessageId,
+                    ErrorMessage      = result.ErrorMessage,
+                    NameWithBib       = result.NameWithBib,
+                    FinishTime        = result.FinishTime,
+                    RaceTitle         = result.RaceTitle
+                };
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = $"Error sending test results SMS: {ex.Message}";
+                _logger.LogError(ex,
+                    "Error in SendTestResultsSmsAsync for Race {RaceId} Participant {ParticipantId}",
+                    raceId, participantId);
+                return null;
+            }
+        }
+
         public async Task<SplitTimeCalculationResponse> CalculateSplitTimesAsync(CalculateSplitTimesRequest request)
         {
             var userId = _userContext.UserId;

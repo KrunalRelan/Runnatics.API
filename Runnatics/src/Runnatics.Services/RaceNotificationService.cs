@@ -151,9 +151,11 @@ namespace Runnatics.Services
             }
 
             // MSG91 template 69e08448 is positional: var1=name, var2=time, var3=race.
+            // var1 carries the bib alongside the name — "Deepender[1244]" — so a participant
+            // can tell their own result SMS apart when several runners share a phone.
             var smsVars = new Dictionary<string, string>
             {
-                ["var1"] = $"{participant.FirstName} {participant.LastName}".Trim(),
+                ["var1"] = FormatNameWithBib(participant),
                 ["var2"] = FormatMs(raceResult.FinishTime),
                 ["var3"] = raceResult.Race?.Title ?? string.Empty
             };
@@ -309,6 +311,16 @@ namespace Runnatics.Services
             {
                 logger.LogError(ex, "Failed to log notification ({Channel}/{EventType})", channel, eventType);
             }
+        }
+
+        // "Deepender[1244]" — the bib in square brackets after the name. A participant with no
+        // bib yields the bare name rather than a dangling "[]".
+        private static string FormatNameWithBib(Participant participant)
+        {
+            var name = $"{participant.FirstName} {participant.LastName}".Trim();
+            return string.IsNullOrWhiteSpace(participant.BibNumber)
+                ? name
+                : $"{name}[{participant.BibNumber.Trim()}]";
         }
 
         private static string FormatMs(long? ms)

@@ -558,7 +558,10 @@ namespace Runnatics.Services
 
         /// <summary>
         /// Renders the certificate template to a PNG using SkiaSharp.
-        /// Each field's (XCoordinate, YCoordinate) is treated as the text baseline origin.
+        /// YCoordinate is the text baseline. A field with a Width is treated as a box spanning
+        /// [XCoordinate, XCoordinate + Width]: the text is anchored inside it per Alignment and
+        /// fitted to it (see <see cref="FitTextToWidth"/>) so it can never overrun the box. A field
+        /// with no Width keeps the legacy behaviour — XCoordinate is the anchor, nothing is fitted.
         /// The Photo field type is skipped — the Participant entity has no photo property.
         /// </summary>
         private static byte[] RenderToPng(
@@ -624,12 +627,75 @@ namespace Runnatics.Services
                 };
 #pragma warning restore CS0618
 
-                canvas.DrawText(text, field.XCoordinate, field.YCoordinate, paint);
+                // A field with a Width is a BOX: XCoordinate is its left edge and the text is
+                // anchored inside [X, X+Width] per Alignment, then fitted to that width so a
+                // long value can never run past the box. A field without a Width keeps the
+                // legacy behaviour exactly — XCoordinate is the anchor and nothing is fitted.
+                var drawX = (float)field.XCoordinate;
+
+                if (field.Width is > 0)
+                {
+                    var boxWidth = (float)field.Width.Value;
+
+                    drawX = textAlign switch
+                    {
+                        SKTextAlign.Center => field.XCoordinate + boxWidth / 2f,
+                        SKTextAlign.Right  => field.XCoordinate + boxWidth,
+                        _                  => field.XCoordinate
+                    };
+
+                    text = FitTextToWidth(paint, text, boxWidth);
+                }
+
+                canvas.DrawText(text, drawX, field.YCoordinate, paint);
             }
 
             using var image   = SKImage.FromBitmap(bitmap);
             using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
             return encoded.ToArray();
+        }
+
+        /// <summary>
+        /// Smallest fraction of the configured font size that auto-shrink may fall back to.
+        /// A participant's name should stay whole on their own certificate, so we shrink well
+        /// before we ever consider cutting characters.
+        /// </summary>
+        private const float MinAutoShrinkScale = 0.6f;
+
+        private const string Ellipsis = "…";
+
+        /// <summary>
+        /// Fits <paramref name="text"/> into <paramref name="maxWidth"/>: shrinks the font down to
+        /// <see cref="MinAutoShrinkScale"/> of its configured size first, and only ellipsis-truncates
+        /// if the text still does not fit at that floor. Mutates <paramref name="paint"/>.TextSize.
+        /// Returns the string to draw.
+        /// </summary>
+        private static string FitTextToWidth(SKPaint paint, string text, float maxWidth)
+        {
+            if (maxWidth <= 0 || string.IsNullOrEmpty(text)) return text;
+
+            var configuredSize = paint.TextSize;
+            var measured = paint.MeasureText(text);
+            if (measured <= maxWidth) return text;
+
+            // Glyph advances scale linearly with TextSize, so one ratio gets us essentially there.
+            var floor = configuredSize * MinAutoShrinkScale;
+            paint.TextSize = Math.Max(configuredSize * (maxWidth / measured), floor);
+
+            // Hinting can round a pixel or two the wrong way — nudge down until it truly fits.
+            while (paint.MeasureText(text) > maxWidth && paint.TextSize > floor)
+                paint.TextSize = Math.Max(paint.TextSize - 0.5f, floor);
+
+            if (paint.MeasureText(text) <= maxWidth) return text;
+
+            // Still over at the shrink floor: trim characters and mark the cut.
+            for (var len = text.Length - 1; len > 0; len--)
+            {
+                var candidate = text[..len].TrimEnd() + Ellipsis;
+                if (paint.MeasureText(candidate) <= maxWidth) return candidate;
+            }
+
+            return Ellipsis;
         }
 
         private static string FormatTimeSpan(TimeSpan ts) =>

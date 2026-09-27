@@ -527,8 +527,11 @@ namespace Runnatics.Services
             Race race,
             Event evt)
         {
-            var chipTime = result?.FinishTime.HasValue == true
-                ? TimeSpan.FromMilliseconds(result.FinishTime.Value)
+            // Chip time = NetTime (from the runner's own start-mat crossing). FinishTime is
+            // written from the gun time on import, so it is only a fallback when NetTime is missing.
+            var chipTimeMs = result?.NetTime ?? result?.FinishTime;
+            var chipTime = chipTimeMs.HasValue
+                ? TimeSpan.FromMilliseconds(chipTimeMs.Value)
                 : (TimeSpan?)null;
 
             var gunTime = result?.GunTime.HasValue == true

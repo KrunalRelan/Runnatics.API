@@ -156,7 +156,7 @@ namespace Runnatics.Services
             var smsVars = new Dictionary<string, string>
             {
                 ["var1"] = FormatNameWithBib(participant),
-                ["var2"] = FormatMs(raceResult.FinishTime),
+                ["var2"] = FormatMs(ChipTimeMs(raceResult)),
                 ["var3"] = raceResult.Race?.Title ?? string.Empty
             };
 
@@ -198,7 +198,7 @@ namespace Runnatics.Services
             var smsVars = new Dictionary<string, string>
             {
                 ["var1"] = FormatNameWithBib(participant),
-                ["var2"] = FormatMs(raceResult.FinishTime),
+                ["var2"] = FormatMs(ChipTimeMs(raceResult)),
                 ["var3"] = raceResult.Race?.Title ?? string.Empty
             };
 
@@ -388,6 +388,10 @@ namespace Runnatics.Services
                 ? name
                 : $"{name}[{participant.BibNumber.Trim()}]";
         }
+
+        // Results SMS reports chip (net) time. FinishTime is written from the gun time on
+        // import, so it is only a fallback when NetTime is missing.
+        private static long? ChipTimeMs(Results result) => result.NetTime ?? result.FinishTime;
 
         private static string FormatMs(long? ms)
         {
